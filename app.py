@@ -131,9 +131,9 @@ class TrulyCompleteAMIOptimizationSystem:
         
         # Client-Specific AMI Distribution Strategies - Maximum 60% weighted average
         self.AMI_STRATEGIES = {
-            'closest_to_60': {'40': 0.20, '60': 0.80, '80': 0.00, '100': 0.00},  # 56.0% weighted avg, 20% at 40% AMI
-            'floor_optimized': {'40': 0.25, '60': 0.70, '80': 0.05, '100': 0.00},  # 57.5% weighted avg, 25% at 40% AMI  
-            'size_optimized': {'40': 0.30, '60': 0.50, '80': 0.20, '100': 0.00},  # 58.0% weighted avg, 30% at 40% AMI
+            'closest_to_60': {'40': 0.20, '60': 0.80, '80': 0.00, '100': 0.00},  # Exactly 20% at 40% AMI, 56.0% weighted avg
+            'floor_optimized': {'40': 0.20, '60': 0.75, '80': 0.05, '100': 0.00},  # Exactly 20% at 40% AMI, 57.0% weighted avg  
+            'size_optimized': {'40': 0.20, '60': 0.65, '80': 0.15, '100': 0.00},  # Exactly 20% at 40% AMI, 59.0% weighted avg
         }
 
     def _enhanced_data_validation_and_cleaning(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -2582,7 +2582,6 @@ def index():
                             <th>Total SF</th>
                             <th>Weighted AMI</th>
                             <th>40% AMI Coverage</th>
-                            <th>2BR+ Mix</th>
                             <th>Compliance</th>
                             <th>Download</th>
                         </tr>
@@ -2607,7 +2606,6 @@ def index():
                         <td>${option.total_sf.toLocaleString()} SF</td>
                         <td><strong>${(compliance.weighted_average_ami * 100).toFixed(1)}%</strong></td>
                         <td>${(compliance.ami_40_percentage * 100).toFixed(1)}%</td>
-                        <td>${(compliance.bedroom_mix_percentage * 100).toFixed(1)}%</td>
                         <td><span class="compliance-badge ${gradeClass}">${compliance.compliance_grade}</span></td>
                         <td>
                             ${filename ? `<a href="/download/${filename}" class="download-btn-small" target="_blank">📥 Excel</a>` : ''}
