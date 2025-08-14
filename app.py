@@ -131,9 +131,9 @@ class TrulyCompleteAMIOptimizationSystem:
         
         # Client-Specific AMI Distribution Strategies - Maximum 60% weighted average
         self.AMI_STRATEGIES = {
-            'closest_to_60': {'40': 0.20, '60': 0.80, '80': 0.00, '100': 0.00},  # Exactly 20% at 40% AMI, 56.0% weighted avg
-            'floor_optimized': {'40': 0.20, '60': 0.75, '80': 0.05, '100': 0.00},  # Exactly 20% at 40% AMI, 57.0% weighted avg  
-            'size_optimized': {'40': 0.20, '60': 0.65, '80': 0.15, '100': 0.00},  # Exactly 20% at 40% AMI, 59.0% weighted avg
+            'closest_to_60': {'40': 0.20, '60': 0.65, '80': 0.15, '100': 0.00},  # 20% at 40% AMI, 59.0% weighted avg
+            'floor_optimized': {'40': 0.22, '60': 0.58, '80': 0.20, '100': 0.00},  # 22% at 40% AMI, 59.6% weighted avg  
+            'size_optimized': {'40': 0.25, '60': 0.55, '80': 0.20, '100': 0.00},  # 25% at 40% AMI, 59.0% weighted avg
         }
 
     def _enhanced_data_validation_and_cleaning(self, df: pd.DataFrame) -> pd.DataFrame:
