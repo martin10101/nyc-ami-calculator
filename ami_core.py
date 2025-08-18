@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 
 # ----------------------------
 # Header normalization + select
@@ -13,11 +13,13 @@ FLEX_HEADERS = {
     "APT": {"apt","apartment","unit","unit #","apt#","apt no","apartment #","apartment"},
     "BED": {"bed","beds","bedroom","br","bedrooms"},
     "AFF": {"aff","affordable","selected","ami_selected","is_affordable","target_ami"},
+    # Some client files have this:
+    "SIGNED_AMI": {"signed_ami","signedami","assigned_ami","assignedami"},
 }
 
 def _coerce_percent(x):
-    """Turn things like 0.6 / 60 / '60%' / 'x' / 'yes' into a float 0..1 or NaN.
-       We do NOT trust the value for assignment; it only helps selection if needed."""
+    """Normalize things like 0.6 / 60 / '60%' / 'x' / 'yes' => float in [0,1] or NaN.
+       We do NOT trust this for assignment; it's just for selection if needed."""
     if pd.isna(x): return np.nan
     if isinstance(x,(int,float)):
         v=float(x); return v/100.0 if v>1.0 else v
@@ -39,8 +41,7 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
         for c in d.columns:
             if lc[c] in variants: ren[c]=target
     if ren: d = d.rename(columns=ren)
-
-    # keep original AMI cell for selection, overwrite AMI with normalized numeric (optional)
+    # keep original AMI cell for selection
     if "AMI" in d.columns: d["AMI_RAW"] = d["AMI"]
     if "NET SF" in d.columns: d["NET SF"] = pd.to_numeric(d["NET SF"], errors="coerce")
     if "FLOOR" in d.columns: d["FLOOR"] = pd.to_numeric(d["FLOOR"], errors="coerce")
@@ -50,33 +51,28 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
 
 def _selected_for_ami_mask(d: pd.DataFrame) -> pd.Series:
     """
-    Priority for detecting which rows are PRESELECTED for AMI:
-      1) If a dedicated flag exists (Affordable/Selected/etc): use Yes/True/1/✓/✔/X.
-      2) If a 'signed_AMI' style column exists: any non-empty value => selected.
-      3) Otherwise use the visible AMI column *strictly*:
-         - 'x'/'✓'/'✔'/'yes'/'y'/'1' => selected
-         - numeric in a narrow band around 0.60 (0.55–0.65) => selected  (typical placeholder)
-         - everything else (blank, 1.0, random text) => not selected
-    We always require NET SF to be present.
+    Which rows are PRESELECTED by the client?
+    Priority:
+      1) Dedicated flag column (Affordable/Selected/etc) → Yes/True/1/✓/✔/X.
+      2) 'SIGNED_AMI' style column → any non-empty cell.
+      3) AMI column → treat only X/✓/✔/YES/Y/1 or numeric near 0.6 (0.55–0.65) as 'selected'.
+    Always require NET SF present.
     """
-    # 1) explicit flag column?
+    # 1) explicit flag
     for c in d.columns:
-        key = str(c).strip().lower()
+        key=str(c).strip().lower()
         if key in {"aff","affordable","selected","ami_selected","is_affordable","target_ami"}:
             return d[c].astype(str).str.strip().str.lower().isin(
                 {"1","true","yes","y","✓","✔","x"}
             ) & d["NET SF"].notna()
-
-    # 2) 'signed_AMI' style columns commonly seen in client files
+    # 2) signed_ami style
     for c in d.columns:
-        if str(c).strip().lower() in {"signed_ami","signedami","assigned_ami","assignedami"}:
+        if str(c).strip().lower() in FLEX_HEADERS["SIGNED_AMI"]:
             return d[c].astype(str).str.strip().ne("").fillna(False) & d["NET SF"].notna()
-
-    # 3) strict AMI column rule
+    # 3) AMI RAW near 0.6 or explicit ticks
     if "AMI_RAW" in d.columns:
         raw = d["AMI_RAW"].astype(str).str.strip()
         yesish = raw.str.upper().isin({"X","✓","✔","YES","Y","1"})
-        # numeric close to 0.6 => selected (typical placeholder the client uses)
         def _num_is_06(s):
             try:
                 v = float(str(s).upper().replace("%","").replace("AMI","").replace("AIME","").strip())
@@ -86,10 +82,8 @@ def _selected_for_ami_mask(d: pd.DataFrame) -> pd.Series:
                 return False
         near06 = raw.apply(_num_is_06)
         return (yesish | near06) & d["NET SF"].notna()
-
-    # fallback: nothing selected
+    # fallback
     return pd.Series(False, index=d.index)
-
 
 # ----------------------------
 # Math helpers
@@ -98,7 +92,8 @@ def _selected_for_ami_mask(d: pd.DataFrame) -> pd.Series:
 def _sf_avg(ami: np.ndarray, sf: np.ndarray) -> float:
     return float(np.dot(ami, sf)/sf.sum()) if sf.sum()>0 else 0.0
 
-# 40% picker (MITM for small N, greedy+swaps for large)
+# --- 40% selectors (MITM for small n; greedy+swaps for large) ---
+
 def _choose_40_mitm(sf: np.ndarray, low_share=0.20, high_share=0.21) -> np.ndarray:
     import bisect
     n=len(sf); total=float(sf.sum()); lo=total*low_share; hi=total*high_share
@@ -128,7 +123,7 @@ def _choose_40_mitm(sf: np.ndarray, low_share=0.20, high_share=0.21) -> np.ndarr
             for i in range(len(B)):
                 if m_b & (1<<i): mask[B[i]] = True
             return mask
-    # closest to middle
+    # closest to mid
     best=None; mid_target=(lo+hi)/2
     for s_a, m_a in sums_a:
         pos=bisect.bisect_left(bvals, mid_target - s_a)
@@ -155,7 +150,6 @@ def _choose_40_large(sf: np.ndarray, low_share=0.20, high_share=0.21) -> np.ndar
         if s < lo:
             chosen.append(i); s += float(sf[i])
     not_chosen=[i for i in order if i not in chosen]
-    # pairwise swaps to pull back if s > hi
     improved=True
     while s>hi and improved:
         improved=False
@@ -177,7 +171,7 @@ def choose_40pct_subset_by_sf(sf: np.ndarray, floors: np.ndarray, low_share=0.20
     else:
         mask=_choose_40_large(sf, low_share, high_share)
 
-    # optional bias: push 40% toward higher floors while staying inside band
+    # Optional bias: push 40% set toward higher floors while staying inside band
     total=float(sf.sum()); lo=total*low_share; hi=total*high_share
     if prefer_high and floors is not None and not np.all(np.isnan(floors)):
         cur=float(sf[mask].sum())
@@ -207,7 +201,7 @@ def ensure_band(mask40: np.ndarray, sf: np.ndarray, low_share: float, high_share
             m[j] = True; s = cand
             if s >= lo - 1e-9: break
 
-    # Too high → try swaps, then trim largest while staying ≥ lo
+    # Too high → swaps/trim
     if s > hi + 1e-9:
         chosen = [i for i in np.where(m)[0]]
         outsiders = [i for i in np.where(~m)[0]]
@@ -237,41 +231,72 @@ def ensure_band(mask40: np.ndarray, sf: np.ndarray, low_share: float, high_share
         raise RuntimeError(f"40% share out of band after repair ({final/total*100.0:.3f}%).")
     return m
 
+# ----------------------------
+# Assignment (averages)
+# ----------------------------
+
+def _order_for_raise(floors: np.ndarray, sf: np.ndarray) -> List[int]:
+    if floors is not None and not np.all(np.isnan(floors)):
+        return sorted(range(len(sf)), key=lambda i: ((floors[i] if not np.isnan(floors[i]) else 1e9), -sf[i]))
+    return sorted(range(len(sf)), key=lambda i: -sf[i])
+
 def balance_average(
     sf: np.ndarray,
     floors: np.ndarray,
     mask40: np.ndarray,
     avg_low=0.59, avg_high=0.60,
     prefer_bottom: bool=True,
-    target: Optional[float]=None
+    target: Optional[float]=None,
+    max_tier: float=1.0,
+    preseed: Optional[List[Tuple[float,float]]] = None,   # [(tier, share_of_non40_sf), ...]
 ) -> np.ndarray:
-    """Assign 60→70→80→90→100 on non-40% units to reach avg in [avg_low, avg_high]."""
+    """
+    Assign 60→70→80→90→100 on non-40% units to reach avg in [avg_low, avg_high].
+    - max_tier caps the highest AMI allowed on non-40% units (e.g., 0.7 for strict).
+    - preseed lets us force a small share of non-40 SF to 0.8/0.9/1.0 up front for relaxed variants.
+    """
     assigned=np.full(len(sf),0.60,dtype=float)
     assigned[mask40]=0.40
+    non40_idx = np.where(~mask40)[0]
+
+    # optional preseed for relaxed scenarios
+    if preseed:
+        # sort by developer preference: higher floors first, then larger SF
+        order = sorted(non40_idx, key=lambda i: (-(floors[i] if floors is not None and not np.isnan(floors[i]) else -1), -sf[i]))
+        non40_sf_total = float(sf[non40_idx].sum())
+        used = set()
+        for tier, share in preseed:
+            target_sf = non40_sf_total * max(0.0, min(share, 1.0))
+            acc = 0.0
+            for i in order:
+                if i in used: continue
+                # do not exceed requested max_tier
+                if tier > max_tier: continue
+                assigned[i] = tier
+                used.add(i)
+                acc += float(sf[i])
+                if acc >= target_sf - 1e-9: break
+
     tgt = (target if target is not None else (avg_high-1e-6))
+
     def cur(): return _sf_avg(assigned, sf)
+    idx = _order_for_raise(floors, sf)  # raise on lower floors first (dev preference)
 
-    idx=np.where(~mask40)[0].tolist()
-    if floors is not None:
-        # prefer bottom floors (and bigger SF) for higher AMI to favor revenue
-        idx.sort(key=lambda i: ((floors[i] if not np.isnan(floors[i]) else 1e9), -sf[i]))
-    else:
-        idx.sort(key=lambda i: -sf[i])
-
-    while cur() < tgt:
+    # raise in 0.1 steps but never above max_tier
+    while cur() < tgt - 1e-12:
         progressed=False
         for i in idx:
-            if cur() >= tgt: break
-            if assigned[i] < 1.0 - 1e-12:
-                assigned[i]=round(assigned[i]+0.1,1); progressed=True
+            if cur() >= tgt - 1e-12: break
+            if assigned[i] < max_tier - 1e-12 and assigned[i] < 1.0 - 1e-12 and (not mask40[i]):
+                assigned[i] = round(min(assigned[i]+0.1, max_tier), 1); progressed=True
         if not progressed: break
 
-    # If we overshot, gently lower the smallest-SF ones first
+    # If overshot, gently lower the smallest-SF raised ones first
     if cur() > avg_high + 1e-12:
-        raised=[i for i in idx if assigned[i]>0.60]
+        raised=[i for i in idx if (assigned[i] > 0.60 and not mask40[i])]
         raised.sort(key=lambda i: sf[i])
         for i in raised:
-            old=assigned[i]; assigned[i]=round(assigned[i]-0.1,1)
+            old=assigned[i]; assigned[i]=round(max(0.60, assigned[i]-0.1),1)
             if avg_low <= cur() <= avg_high: break
             assigned[i]=old
 
@@ -280,7 +305,7 @@ def balance_average(
     return assigned
 
 # ----------------------------
-# Scenarios + public API
+# Scenarios (S1–S3 strict, R1–R3 relaxed)
 # ----------------------------
 
 def generate_scenarios(
@@ -324,25 +349,13 @@ def generate_scenarios(
                         m[victim]=False; m[j]=True; s=cand; changed=True; break
         return m
 
-    def pack(mask40, assigned):
-        sf40=float(sf[mask40].sum())
-        return {
-            "mask40": mask40,
-            "assigned": assigned,
-            "metrics": {
-                "aff_sf_total": total,
-                "sf_at_40": sf40,
-                "pct40": (sf40/total*100.0) if total else 0.0,
-                "wavg": _sf_avg(assigned, sf)*100.0
-            }
-        }
-
-    def build(prefer_high_for_40: bool, shallow_extra: bool, protect_top: int, need_family: bool):
-        hi_share = min(high_share + (0.002 if shallow_extra else 0.0), 0.22)
-
-        # 1) pick a 40% set
-        m40 = choose_40pct_subset_by_sf(sf, floors, low_share, hi_share, prefer_high_for_40)
-
+    def build(mask_pref_high: bool, hi_adj: float, need_family: bool, protect_top: int,
+              strict_cap_70: bool = False,
+              relaxed_seed: Optional[List[Tuple[float,float]]] = None,
+              spread_cap: Optional[int] = None):
+        hi_share = min(high_share + hi_adj, 0.22)
+        # 1) base 40% set
+        m40 = choose_40pct_subset_by_sf(sf, floors, low_share, hi_share, mask_pref_high)
         # 2) require ≥1 family (2BR+) at 40% if requested
         if need_family and not np.any(m40 & (beds >= 2)):
             fam_idx = np.where(beds >= 2)[0]
@@ -356,8 +369,7 @@ def generate_scenarios(
                         cand = float(sf[m40].sum()) - float(sf[drop]) + float(sf[fam])
                         if lo <= cand <= hi:
                             m40[drop]=False; m40[fam]=True
-
-        # 3) protect top floors (best effort)
+        # 3) protect top floors
         if protect_top and not np.all(np.isnan(floors)):
             top_cut = np.nanmax(floors) - protect_top + 1
             if not np.isnan(top_cut):
@@ -371,24 +383,47 @@ def generate_scenarios(
                         cand = s - float(sf[a]) + float(sf[b])
                         if lo <= cand <= hi:
                             m40[a]=False; m40[b]=True; s=cand; break
-
-        # 4) **repair** back into band (critical fix)
+        # 4) repair into band
         m40 = ensure_band(m40, sf, low_share, hi_share)
+        # 5) spread cap per floor
+        m40 = postprocess_spread(m40, spread_cap, hi_share)
+        # 6) balance average with caps & seeds
+        assigned = balance_average(
+            sf, floors, m40, avg_low, avg_high,
+            True, avg_high-1e-6,
+            max_tier=(0.70 if strict_cap_70 else 1.00),
+            preseed=relaxed_seed
+        )
+        sf40=float(sf[m40].sum())
+        return {
+            "mask40": m40,
+            "assigned": assigned,
+            "metrics": {
+                "aff_sf_total": total,
+                "sf_at_40": sf40,
+                "pct40": (sf40/total*100.0) if total else 0.0,
+                "wavg": _sf_avg(assigned, sf)*100.0
+            }
+        }
 
-        # 5) optional spread cap; stays in-band by using hi_share inside
-        m40 = postprocess_spread(m40, spread_40_max_per_floor, hi_share)
+    # STRICT set (S1–S3): cap non-40 at 70% AMI to keep solutions tight/near-identical
+    S1 = build(mask_pref_high=True,  hi_adj=0.000, need_family=False,                protect_top=0, strict_cap_70=True)
+    S2 = build(mask_pref_high=True,  hi_adj=0.000, need_family=True,                 protect_top=0, strict_cap_70=True)
+    S3 = build(mask_pref_high=False, hi_adj=0.000, need_family=False,                protect_top=max(exempt_top_k_floors,0),
+               strict_cap_70=True, spread_cap=spread_40_max_per_floor)
 
-        # 6) balance to 59–60%
-        assigned = balance_average(sf, floors, m40, avg_low, avg_high, True, avg_high-1e-6)
-        return pack(m40, assigned)
+    # RELAXED set (R1–R3): seed some high tiers on premium units, then rebalance
+    # shares are of non-40% SF; tune to your taste
+    R1 = build(mask_pref_high=True,  hi_adj=0.001, need_family=False, protect_top=0,
+               strict_cap_70=False, relaxed_seed=[(0.80, 0.06)])
+    R2 = build(mask_pref_high=True,  hi_adj=0.002, need_family=False, protect_top=0,
+               strict_cap_70=False, relaxed_seed=[(0.90, 0.03),(0.80,0.05)])
+    R3 = build(mask_pref_high=True,  hi_adj=0.002, need_family=False, protect_top=0,
+               strict_cap_70=False, relaxed_seed=[(1.00, 0.02),(0.90,0.03),(0.80,0.05)])
 
-    A = build(prefer_high_for_40=True,  shallow_extra=False, protect_top=0,                          need_family=False)
-    B = build(prefer_high_for_40=True,  shallow_extra=False, protect_top=0,                          need_family=require_family_at_40)
-    C = build(prefer_high_for_40=False, shallow_extra=False, protect_top=max(exempt_top_k_floors,0), need_family=False)
+    out = {"S1": S1, "S2": S2, "S3": S3, "R1": R1, "R2": R2, "R3": R3}
 
-    out = {"A": A, "B": B, "C": C}
-
-    # hard guardrails
+    # guardrails
     for k,v in out.items():
         m=v["metrics"]
         if not (20.0 - 1e-6 <= m["pct40"] <= 21.0 + 1e-6):
@@ -397,6 +432,10 @@ def generate_scenarios(
             raise RuntimeError(f"Scenario {k}: Weighted average out of band ({m['wavg']:.3f}%).")
     return out
 
+# ----------------------------
+# Public entry: return 6 scenarios + mirror
+# ----------------------------
+
 def allocate_with_scenarios(
     df: pd.DataFrame,
     low_share=0.20, high_share=0.21, avg_low=0.59, avg_high=0.60,
@@ -404,17 +443,15 @@ def allocate_with_scenarios(
     spread_40_max_per_floor: Optional[int] = None,
     exempt_top_k_floors: int = 0,
 ):
-    """Main entry: normalize, select affordable rows, build scenarios, and return
-       (full-table assignments, affordable breakdown, metrics, mirror_of_original, best_label)."""
-    df = _normalize_headers(df)
-    if "NET SF" not in df.columns:
+    d = _normalize_headers(df)
+    if "NET SF" not in d.columns:
         raise ValueError("Missing NET SF column after normalization.")
 
-    sel = _selected_for_ami_mask(df)
+    sel = _selected_for_ami_mask(d)
     if not sel.any():
         raise ValueError("No AMI-selected rows detected. Put ANY value in the AMI column for selected rows (e.g., 0.6, x, ✓).")
 
-    aff = df.loc[sel].copy()
+    aff = d.loc[sel].copy()
     scen = generate_scenarios(
         aff,
         low_share=low_share, high_share=high_share, avg_low=avg_low, avg_high=avg_high,
@@ -423,29 +460,30 @@ def allocate_with_scenarios(
         exempt_top_k_floors=exempt_top_k_floors,
     )
 
-    # Attach scenario assignments to the full table (A/B/C columns)
-    full = df.copy()
-    for label in ["A","B","C"]:
+    # Attach scenario assignments to the full table (S1..R3)
+    full = d.copy()
+    labels = list(scen.keys())
+    for label in labels:
         full[f"Assigned_AMI_{label}"] = np.nan
         full.loc[sel, f"Assigned_AMI_{label}"] = scen[label]["assigned"]
 
-    # Affordable-only breakdown
-    base_cols = [c for c in ["FLOOR","APT","BED","NET SF","AMI_RAW"] if c in df.columns]
-    aff_br = df.loc[sel, base_cols].copy()
-    for label in ["A","B","C"]:
+    # Affordable-only breakdown (one wide table)
+    base_cols = [c for c in ["FLOOR","APT","BED","NET SF","AMI_RAW"] if c in d.columns]
+    aff_br = d.loc[sel, base_cols].copy()
+    for label in labels:
         aff_br[f"Assigned_AMI_{label}"] = scen[label]["assigned"]
 
-    # Pick best scenario (closest to 20% and 60%)
+    # Choose the “best” scenario to mirror back into the original AMI column:
     def score(m):
-        wavg = min(m["wavg"], 60.0)
-        pct  = max(min(m["pct40"], 21.0), 20.0)
-        return 1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0
+        # prioritize compliance tightness, then higher overall AMI (developer revenue proxy)
+        closeness = 1000.0 - abs(60.0 - m["wavg"])*50.0 - abs(20.0 - m["pct40"])*100.0
+        return closeness + m["wavg"]*0.01  # tiny tie-breaker toward higher revenue
     metrics = {k:v["metrics"] for k,v in scen.items()}
-    best_label = max(["A","B","C"], key=lambda k: score(metrics[k]))
+    best_label = max(labels, key=lambda k: score(metrics[k]))
     best_assigned = scen[best_label]["assigned"]
 
-    # Mirror of original: overwrite AMI for selected rows; append totals block
-    mirror = df.copy()
+    # Mirror of original: overwrite AMI for selected rows; append totals
+    mirror = d.copy()
     target_col = "AMI" if "AMI" in mirror.columns else "AMI"
     mirror[target_col] = mirror.get(target_col, np.nan)
     mirror.loc[sel, target_col] = best_assigned
