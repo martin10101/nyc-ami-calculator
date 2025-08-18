@@ -220,6 +220,8 @@ async def preview(
         "C": buckets("C"),
     }
 
+# --- REPLACE ONLY the allocate() handler body return in app.py ---
+
 @app.post("/allocate")
 async def allocate(
     file: UploadFile = File(...),
@@ -232,7 +234,7 @@ async def allocate(
     content = await file.read()
     try:
         df = load_any_table(content, file.filename, sheet=sheet)
-        full, aff_br, metrics = allocate_with_scenarios(
+        full, aff_br, metrics, mirror_out, best_label = allocate_with_scenarios(
             df,
             require_family_at_40=bool(require_family_at_40),
             spread_40_max_per_floor=spread_40_max_per_floor,
@@ -246,12 +248,21 @@ async def allocate(
     try: log_run(base, metrics)
     except Exception: pass
 
-    xlsx = make_excel(full, aff_br, metrics)
+    # Decide output structure
+    mirror_sheet_name = sheet or "Sheet1"
+    xlsx = make_excel(
+        full, aff_br, metrics,
+        mirror=mirror_out if write_back == "same" else None,
+        mirror_sheet_name=mirror_sheet_name,
+        write_back_mode=write_back
+    )
+
     out_name = (f"{base}.xlsx" if write_back=="same" else f"{base} - AMI Scenarios (A,B,C).xlsx")
     return StreamingResponse(io.BytesIO(xlsx),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename=\"{out_name}\"'}
     )
+
 
 @app.get("/export_master")
 def export_master():
