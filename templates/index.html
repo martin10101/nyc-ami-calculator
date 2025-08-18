@@ -3,190 +3,172 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>NYC AMI Allocator — Scenarios A/B/C</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>NYC AMI Allocator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#0e1116;--card:#171b22;--muted:#8b93a7;--text:#e7eaf1;--accent:#635bff;--accent2:#1f8efa;
+      --ok:#19c37d;--warn:#f5a524;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:1200px;margin:32px auto;padding:0 16px}
+    h1{font-size:28px;margin:0 0 12px}
+    p.sub{color:var(--muted);margin:0 0 24px}
+    .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 4px 30px rgba(0,0,0,.25)}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+    .controls{grid-column:1/-1}
+    .btn{background:var(--accent);color:#fff;border:0;padding:12px 16px;border-radius:12px;font-weight:700;cursor:pointer}
+    .btn.secondary{background:#242a35}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input[type="text"],select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #2a2f3a;background:#0f131a;color:var(--text)}
+    .two{grid-column:span 6}
+    .three{grid-column:span 4}
+    .cols-6{grid-column:span 12}
+    .scens{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:18px}
+    .scen{background:#121720;border-radius:14px;padding:14px}
+    .scen h3{margin:0 0 8px}
+    .meta{font-size:13px;color:var(--muted);margin-bottom:8px}
+    details{background:#0f141c;border-radius:10px;padding:8px 10px;margin:6px 0}
+    summary{cursor:pointer;font-weight:600}
+    .tag{display:inline-block;background:#0e1420;border:1px solid #283048;color:#b9c2d2;border-radius:999px;padding:2px 8px;margin:2px;font-size:12px}
+  </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
-  <div class="max-w-6xl mx-auto p-6">
-    <header class="mb-6">
-      <h1 class="text-3xl font-semibold">NYC AMI Allocator</h1>
-      <p class="text-slate-600 mt-1">
-        Upload your schedule (.xlsx/.xlsm/.xls/.xlsb/.csv/.docx). We’ll detect the
-        predesignated affordable units and generate three compliant, profit-oriented scenarios.
-      </p>
-    </header>
+<body>
+  <div class="wrap">
+    <h1>NYC AMI Allocator</h1>
+    <p class="sub">Upload your schedule (.xlsx/.xlsm/.xls/.xlsb/.csv/.docx). We’ll detect the predesignated affordable units and generate <b>six</b> compliant strategies (S1–S3 strict; R1–R3 relaxed).</p>
 
-    <section class="bg-white rounded-2xl shadow p-6">
-      <form id="form" class="grid gap-5" onsubmit="return false;">
-        <div class="grid md:grid-cols-3 gap-4">
-          <div class="md:col-span-2">
-            <label class="block text-sm font-medium mb-1">File</label>
-            <input id="file" type="file" class="w-full rounded-lg border border-slate-300 p-2"
-                   accept=".xlsx,.xlsm,.xls,.xlsb,.csv,.docx" />
-            <p class="text-xs text-slate-500 mt-1">We parse fuzzy headers like AIME/AMI, SQ FT/SF/NET SF.</p>
+    <div class="grid">
+      <div class="card controls">
+        <div class="grid">
+          <div class="cols-6 three">
+            <label>File</label>
+            <input id="file" type="file"/>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;">We parse fuzzy headers like AIME/AMI, SQ FT/SF/NET SF.</div>
           </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Sheet (optional)</label>
-            <input id="sheet" type="text" placeholder="Sheet1"
-                   class="w-full rounded-lg border border-slate-300 p-2"/>
+          <div class="three">
+            <label>Sheet (optional)</label>
+            <input id="sheet" type="text" placeholder="Sheet1"/>
           </div>
-        </div>
-
-        <div class="grid md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-sm font-medium mb-1">Write mode</label>
-            <select id="write_back" class="w-full rounded-lg border border-slate-300 p-2">
-              <option value="new">Create new result name</option>
+          <div class="three">
+            <label>Write mode</label>
+            <select id="write">
               <option value="same">Write back to same name</option>
+              <option value="new">Create new result name</option>
             </select>
           </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Require ≥1 family unit (2BR+) at 40%</label>
-            <select id="require_family" class="w-full rounded-lg border border-slate-300 p-2">
-              <option value="0">No</option>
-              <option value="1">Yes</option>
-            </select>
+          <div class="three">
+            <label>Require ≥1 family unit (2BR+) at 40%</label>
+            <select id="fam"><option value="0">No</option><option value="1">Yes</option></select>
           </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Max 40% units per floor (optional)</label>
-            <input id="cap_per_floor" type="number" min="1" placeholder="e.g., 2"
-                   class="w-full rounded-lg border border-slate-300 p-2"/>
+          <div class="three">
+            <label>Max 40% units per floor (optional)</label>
+            <input id="spread" type="text" placeholder="e.g., 12"/>
+          </div>
+          <div class="three">
+            <label>Exempt top K floors from 40% (optional)</label>
+            <input id="exempt" type="text" placeholder="e.g., 2"/>
+          </div>
+          <div class="two">
+            <button class="btn" id="preview">Preview scenarios</button>
+          </div>
+          <div class="two">
+            <button class="btn secondary" id="dl">Download Excel (Master + Breakdowns)</button>
+          </div>
+          <div class="two">
+            <button class="btn secondary" id="master">Download Master All Results</button>
           </div>
         </div>
+        <div id="msg" style="margin-top:10px;color:var(--muted)"></div>
+      </div>
 
-        <div class="grid md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-sm font-medium mb-1">Exempt top K floors from 40% (optional)</label>
-            <input id="exempt_top" type="number" min="0" placeholder="e.g., 2"
-                   class="w-full rounded-lg border border-slate-300 p-2"/>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap gap-3">
-          <button id="btnPreview" class="px-5 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">
-            Preview scenarios
-          </button>
-          <button id="btnDownload" class="px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100">
-            Download Excel (Master + Breakdowns)
-          </button>
-          <a href="/export_master" class="px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100">
-            Download Master All Results
-          </a>
-          <span id="status" class="text-sm text-slate-500"></span>
-        </div>
-      </form>
-    </section>
-
-    <section id="previewArea" class="mt-8 grid md:grid-cols-3 gap-4"></section>
+      <div class="cols-6">
+        <div id="scenarios" class="scens"></div>
+      </div>
+    </div>
   </div>
 
-  <script>
-    const fileEl = document.getElementById('file');
-    const sheetEl = document.getElementById('sheet');
-    const writeBackEl = document.getElementById('write_back');
-    const familyEl = document.getElementById('require_family');
-    const capFloorEl = document.getElementById('cap_per_floor');
-    const exemptTopEl = document.getElementById('exempt_top');
-    const statusEl = document.getElementById('status');
-    const previewArea = document.getElementById('previewArea');
+<script>
+const $ = s => document.querySelector(s);
 
-    function mkFormData(preview=false) {
-      const fd = new FormData();
-      if (!fileEl.files.length) { alert("Please choose a file."); throw new Error(); }
-      fd.append("file", fileEl.files[0]);
-      if (sheetEl.value) fd.append("sheet", sheetEl.value);
-      fd.append("require_family_at_40", familyEl.value);
-      if (capFloorEl.value) fd.append("spread_40_max_per_floor", capFloorEl.value);
-      fd.append("exempt_top_k_floors", exemptTopEl.value || 0);
-      if (!preview) fd.append("write_back", writeBackEl.value);
-      return fd;
-    }
+function renderScenarios(payload){
+  const container = $("#scenarios");
+  container.innerHTML = "";
+  const order = ["S1","S2","S3","R1","R2","R3"].filter(k => payload.scenarios[k]);
+  order.forEach(k=>{
+    const m = payload.scenarios[k].metrics;
+    const b = payload.scenarios[k].buckets;
+    const el = document.createElement("div");
+    el.className = "scen";
+    el.innerHTML = `
+      <h3>Scenario ${k}</h3>
+      <div class="meta">WAvg: <b>${m.wavg.toFixed(3)}%</b> · 40% SF: <b>${m.pct40.toFixed(3)}%</b></div>
+      <div>
+        ${["40","60","70","80","90","100"].map(t=>{
+          const items = b[t]||[];
+          return `
+            <details ${items.length? "":"disabled"}>
+              <summary>${t}% AMI units (${items.length})</summary>
+              <div>${items.map(u=>`<span class="tag">${u.APT||""} · ${u.FLOOR??""}F · ${u.NET_SF.toFixed(0)} sf</span>`).join("")||"<span class='tag'>None</span>"}</div>
+            </details>
+          `;
+        }).join("")}
+      </div>
+    `;
+    container.appendChild(el);
+  });
+}
 
-    function scenarioCard(label, metrics, buckets) {
-      const card = document.createElement('div');
-      card.className = "bg-white rounded-2xl shadow p-4";
-      const m = metrics[label];
-      card.innerHTML = `
-        <div class="flex items-center justify-between">
-          <h3 class="text-lg font-semibold">Scenario ${label}</h3>
-          <div class="text-sm text-slate-500">
-            WAvg: <span class="font-medium">${m.wavg.toFixed(3)}%</span> ·
-            40% SF: <span class="font-medium">${m.pct40.toFixed(3)}%</span>
-          </div>
-        </div>
-        <p class="text-sm text-slate-600 mt-1">Compliant, profit-oriented variant.</p>
-      `;
-      const groups = [
-        ["40","40% AMI units"],["60","60% AMI units"],["70","70% AMI units"],
-        ["80","80% AMI units"],["90","90% AMI units"],["100","100% AMI units"],
-      ];
-      groups.forEach(([key,title])=>{
-        const arr = buckets[key] || [];
-        const details = document.createElement('details');
-        details.className = "mt-3 rounded-xl border border-slate-200";
-        const summary = document.createElement('summary');
-        summary.className = "cursor-pointer select-none px-3 py-2 bg-slate-50 rounded-t-xl";
-        summary.innerHTML = `${title} <span class="text-slate-500">(${arr.length})</span>`;
-        const body = document.createElement('div');
-        body.className = "max-h-56 overflow-auto text-sm p-3";
-        body.innerHTML = arr.length
-          ? `<table class="w-full text-left">
-               <thead class="text-slate-500">
-                 <tr><th class="pr-2">APT</th><th class="pr-2">Fl</th><th class="pr-2">Bed</th><th class="pr-2">SF</th></tr>
-               </thead>
-               <tbody>${arr.map(r=>`<tr>
-                 <td class="pr-2">${r.APT ?? ""}</td>
-                 <td class="pr-2">${r.FLOOR ?? ""}</td>
-                 <td class="pr-2">${r.BED ?? ""}</td>
-                 <td class="pr-2">${r.NET_SF.toLocaleString()}</td>
-               </tr>`).join("")}</tbody>
-             </table>`
-          : `<div class="text-slate-500">None</div>`;
-        details.appendChild(summary); details.appendChild(body);
-        card.appendChild(details);
-      });
-      return card;
-    }
+$("#preview").onclick = async ()=>{
+  const f = $("#file").files[0];
+  if(!f){ $("#msg").textContent="Pick a file first."; return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  if($("#sheet").value) fd.append("sheet", $("#sheet").value);
+  fd.append("require_family_at_40", $("#fam").value);
+  if($("#spread").value) fd.append("spread_40_max_per_floor", $("#spread").value);
+  if($("#exempt").value) fd.append("exempt_top_k_floors", $("#exempt").value);
 
-    document.getElementById('btnPreview').onclick = async () => {
-      statusEl.textContent = "Generating preview…";
-      previewArea.innerHTML = "";
-      try {
-        const fd = mkFormData(true);
-        const res = await fetch('/preview', { method: 'POST', body: fd });
-        const js = await res.json();
-        if (!res.ok) throw new Error(js.error || "Preview failed");
-        statusEl.textContent = "";
-        previewArea.appendChild(scenarioCard("A", js.metrics, js.A));
-        previewArea.appendChild(scenarioCard("B", js.metrics, js.B));
-        previewArea.appendChild(scenarioCard("C", js.metrics, js.C));
-      } catch (e) {
-        statusEl.textContent = e.message;
-      }
-    };
+  $("#msg").textContent="Running…";
+  const res = await fetch("/preview", { method:"POST", body:fd });
+  const data = await res.json();
+  if(!res.ok){ $("#msg").textContent = data.error || "Error"; return; }
+  $("#msg").textContent = `Best scenario: ${data.best}`;
+  renderScenarios(data);
+};
 
-    document.getElementById('btnDownload').onclick = async () => {
-      statusEl.textContent = "Building Excel…";
-      try {
-        const fd = mkFormData(false);
-        const res = await fetch('/allocate', { method: 'POST', body: fd });
-        if (!res.ok) {
-          const js = await res.json().catch(()=>({}));
-          throw new Error(js.error || "Allocate failed");
-        }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const fnameHdr = res.headers.get("Content-Disposition") || '';
-        const match = fnameHdr.match(/filename="(.+?)"/);
-        a.download = match ? match[1] : 'AMI Scenarios.xlsx';
-        a.href = url; a.click();
-        URL.revokeObjectURL(url);
-        statusEl.textContent = "Downloaded.";
-      } catch (e) {
-        statusEl.textContent = e.message;
-      }
-    };
-  </script>
+$("#dl").onclick = async ()=>{
+  const f = $("#file").files[0];
+  if(!f){ $("#msg").textContent="Pick a file first."; return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  if($("#sheet").value) fd.append("sheet", $("#sheet").value);
+  fd.append("write_back", $("#write").value);
+  fd.append("require_family_at_40", $("#fam").value);
+  if($("#spread").value) fd.append("spread_40_max_per_floor", $("#spread").value);
+  if($("#exempt").value) fd.append("exempt_top_k_floors", $("#exempt").value);
+
+  const res = await fetch("/allocate", { method:"POST", body:fd });
+  if(!res.ok){ const d=await res.json(); $("#msg").textContent=d.error||"Error"; return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download=f.name.replace(/\.xlsx?$/i,"") + " - AMI Scenarios.xlsx";
+  a.click(); URL.revokeObjectURL(url);
+};
+
+$("#master").onclick = async ()=>{
+  const res = await fetch("/export_master");
+  if(!res.ok){ const d=await res.json(); $("#msg").textContent=d.error||"Error"; return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download="AMI Master All Results.xlsx";
+  a.click(); URL.revokeObjectURL(url);
+};
+</script>
 </body>
 </html>
