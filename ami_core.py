@@ -251,18 +251,35 @@ def balance_average(
     preseed: Optional[List[Tuple[float,float]]] = None,   # [(tier, share_of_non40_sf), ...]
 ) -> np.ndarray:
     """
-    Assign 60→70→80→90→100 on non-40% units to reach avg in [avg_low, avg_high].
-    - max_tier caps the highest AMI allowed on non-40% units (e.g., 0.7 for strict).
-    - preseed lets us force a small share of non-40 SF to 0.8/0.9/1.0 up front for relaxed variants.
+    Assign 60→70→80→90→100 on non-40% units to reach avg in [avg_low, avg_high] *without ever exceeding 60%*.
+    - max_tier caps the highest AMI allowed on non-40% units (e.g., 0.70 for strict).
+    - preseed allows R-variants to set a slice of premium units to 0.8/0.9/1.0 first.
     """
-    assigned=np.full(len(sf),0.60,dtype=float)
-    assigned[mask40]=0.40
+    assigned = np.full(len(sf), 0.60, dtype=float)
+    assigned[mask40] = 0.40
     non40_idx = np.where(~mask40)[0]
 
-    # optional preseed for relaxed scenarios
+    def cur_avg() -> float:
+        return _sf_avg(assigned, sf)
+
+    # ---------- helper to push average DOWN safely when we overshoot ----------
+    def clamp_down_to(max_avg: float):
+        """Lower the highest AMI non-40 units first (smallest SF last) until <= max_avg."""
+        if cur_avg() <= max_avg + 1e-12:
+            return
+        raised = [i for i in non40_idx if assigned[i] > 0.60]
+        # Lower *largest* AMI first, and within same tier, smallest SF first
+        raised.sort(key=lambda i: (assigned[i], sf[i]))
+        for i in reversed(raised):
+            while assigned[i] > 0.60 + 1e-12 and cur_avg() > max_avg + 1e-12:
+                assigned[i] = round(assigned[i] - 0.1, 1)
+
+    # ---------- optional preseed for relaxed scenarios ----------
     if preseed:
-        # sort by developer preference: higher floors first, then larger SF
-        order = sorted(non40_idx, key=lambda i: (-(floors[i] if floors is not None and not np.isnan(floors[i]) else -1), -sf[i]))
+        order = sorted(
+            non40_idx,
+            key=lambda i: (-(floors[i] if floors is not None and not np.isnan(floors[i]) else -1), -sf[i])
+        )
         non40_sf_total = float(sf[non40_idx].sum())
         used = set()
         for tier, share in preseed:
@@ -270,39 +287,64 @@ def balance_average(
             acc = 0.0
             for i in order:
                 if i in used: continue
-                # do not exceed requested max_tier
-                if tier > max_tier: continue
+                if tier > max_tier: continue  # never exceed configured cap
                 assigned[i] = tier
                 used.add(i)
                 acc += float(sf[i])
                 if acc >= target_sf - 1e-9: break
+        # If that pushed us above 60, clamp back down *before* continuing.
+        clamp_down_to(avg_high - 1e-6)
 
-    tgt = (target if target is not None else (avg_high-1e-6))
+    # ---------- main “raise” loop (never aims above avg_high) ----------
+    target_avg = min(target if target is not None else (avg_high - 1e-6), avg_high - 1e-6)
 
-    def cur(): return _sf_avg(assigned, sf)
-    idx = _order_for_raise(floors, sf)  # raise on lower floors first (dev preference)
+    # Order to raise: lower floors first & larger sf (dev preference)
+    if floors is not None and not np.all(np.isnan(floors)):
+        idx = sorted(non40_idx, key=lambda i: ((floors[i] if not np.isnan(floors[i]) else 1e9), -sf[i]))
+    else:
+        idx = sorted(non40_idx, key=lambda i: -sf[i])
 
-    # raise in 0.1 steps but never above max_tier
-    while cur() < tgt - 1e-12:
-        progressed=False
+    while cur_avg() < target_avg - 1e-12:
+        progressed = False
         for i in idx:
-            if cur() >= tgt - 1e-12: break
-            if assigned[i] < max_tier - 1e-12 and assigned[i] < 1.0 - 1e-12 and (not mask40[i]):
-                assigned[i] = round(min(assigned[i]+0.1, max_tier), 1); progressed=True
-        if not progressed: break
+            if cur_avg() >= target_avg - 1e-12:
+                break
+            if assigned[i] < 1.0 - 1e-12 and assigned[i] < max_tier - 1e-12:
+                # Try a +0.1 bump but don't allow resulting avg > avg_high
+                old = assigned[i]
+                assigned[i] = round(min(old + 0.1, max_tier), 1)
+                if cur_avg() > avg_high + 1e-12:
+                    assigned[i] = old  # revert if it breaches the cap
+                else:
+                    progressed = True
+        if not progressed:
+            break  # cannot raise further without breaching the cap
 
-    # If overshot, gently lower the smallest-SF raised ones first
-    if cur() > avg_high + 1e-12:
-        raised=[i for i in idx if (assigned[i] > 0.60 and not mask40[i])]
-        raised.sort(key=lambda i: sf[i])
-        for i in raised:
-            old=assigned[i]; assigned[i]=round(max(0.60, assigned[i]-0.1),1)
-            if avg_low <= cur() <= avg_high: break
-            assigned[i]=old
+    # ---------- final safety: place inside [avg_low, avg_high] ----------
+    if cur_avg() > avg_high + 1e-12:
+        clamp_down_to(avg_high - 1e-6)
 
-    if not (avg_low - 1e-12 <= cur() <= avg_high + 1e-12):
-        raise RuntimeError(f"Weighted average out of band after balance ({cur()*100:.3f}%).")
+    # If still below lower bound, try minimal ups that keep <= avg_high
+    attempts = 0
+    while cur_avg() < avg_low - 1e-12 and attempts < 3:
+        for i in idx:
+            old = assigned[i]
+            if old < 1.0 - 1e-12 and old < max_tier - 1e-12:
+                assigned[i] = round(min(old + 0.1, max_tier), 1)
+                if cur_avg() > avg_high + 1e-12:
+                    assigned[i] = old
+        attempts += 1
+
+    if not (avg_low - 1e-12 <= cur_avg() <= avg_high + 1e-12):
+        # Last resort: clamp down if we're 1–3 bps over
+        if cur_avg() > avg_high + 1e-12:
+            clamp_down_to(avg_high - 1e-6)
+
+    if not (avg_low - 1e-12 <= cur_avg() <= avg_high + 1e-12):
+        raise RuntimeError(f"Weighted average out of band after balance ({cur_avg()*100:.3f}%).")
+
     return assigned
+
 
 # ----------------------------
 # Scenarios (S1–S3 strict, R1–R3 relaxed)
