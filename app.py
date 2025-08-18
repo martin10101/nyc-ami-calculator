@@ -12,10 +12,10 @@ from ami_core import allocate_with_scenarios
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ami")
 
-app = FastAPI(title="NYC AMI Allocator", version="2.2")
+app = FastAPI(title="NYC AMI Allocator", version="3.0")
 templates = Jinja2Templates(directory="templates")
 
-DB_PATH = os.environ.get("AMI_DB", "/data/ami_log.sqlite")  # attach a Railway volume to /data for persistence
+DB_PATH = os.environ.get("AMI_DB", "/data/ami_log.sqlite")  # attach a Railway volume at /data
 
 # ---------- loaders ----------
 
@@ -86,6 +86,8 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
         wb = writer.book
         fmt_pct = wb.add_format({"num_format": "0%"})
 
+        labels = list(metrics.keys())
+
         if write_back_mode == "same" and mirror is not None:
             mirror.to_excel(writer, index=False, sheet_name=mirror_sheet_name)
             # Summary
@@ -94,7 +96,7 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
                 pct  = max(min(m["pct40"], 21.0), 20.0)
                 return round(1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0, 3)
             rows=[]
-            for scen in ["A","B","C"]:
+            for scen in labels:
                 m = metrics[scen]
                 rows.append({
                     "Scenario": scen,
@@ -109,13 +111,13 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
             master = full.copy()
             master.to_excel(writer, index=False, sheet_name="Master")
             if "Master" in writer.sheets:
-                for label in ["A","B","C"]:
+                for label in labels:
                     colname = f"Assigned_AMI_{label}"
                     if colname in master.columns:
                         col = master.columns.get_loc(colname)
                         writer.sheets["Master"].set_column(col, col, 16, fmt_pct)
 
-            for label in ["A","B","C"]:
+            for label in labels:
                 br = aff_br.copy()
                 if f"Assigned_AMI_{label}" in br.columns:
                     br = br.rename(columns={f"Assigned_AMI_{label}":"Assigned_AMI"})
@@ -131,7 +133,7 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
                 pct  = max(min(m["pct40"], 21.0), 20.0)
                 return round(1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0, 3)
             rows=[]
-            for scen in ["A","B","C"]:
+            for scen in labels:
                 m = metrics[scen]
                 rows.append({
                     "Scenario": scen,
@@ -178,42 +180,40 @@ async def preview(
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    mask_aff = ~full["Assigned_AMI_A"].isna()
+    # Build per-scenario buckets (40/60/70/80/90/100)
+    mask_aff = ~full["Assigned_AMI_S1"].isna()  # any scenario column works
     aff_only = full.loc[mask_aff].copy()
 
-    def rows(label):
-        res=[]
+    def buckets(label):
+        out = {"40":[], "60":[], "70":[], "80":[], "90":[], "100":[]}
         for _, r in aff_only.iterrows():
-            res.append({
+            v = float(r[f"Assigned_AMI_{label}"])
+            row = {
                 "APT": r.get("APT"),
                 "FLOOR": None if pd.isna(r.get("FLOOR")) else int(r.get("FLOOR")),
                 "BED": r.get("BED"),
                 "NET_SF": float(r["NET SF"]),
-                "Original_AMI": None if pd.isna(r.get("AMI")) else float(r.get("AMI")),
-                "Assigned_AMI": float(r[f"Assigned_AMI_{label}"]),
-            })
-        return res
-
-    def buckets(label):
-        items = rows(label)
-        out = {"40":[], "60":[], "70":[], "80":[], "90":[], "100":[]}
-        for it in items:
-            v = it["Assigned_AMI"]
-            if abs(v-0.40)<1e-9: out["40"].append(it)
-            elif abs(v-0.60)<1e-9: out["60"].append(it)
-            elif abs(v-0.70)<1e-9: out["70"].append(it)
-            elif abs(v-0.80)<1e-9: out["80"].append(it)
-            elif abs(v-0.90)<1e-9: out["90"].append(it)
-            elif abs(v-1.00)<1e-9: out["100"].append(it)
+            }
+            if abs(v-0.40)<1e-9: out["40"].append(row)
+            elif abs(v-0.60)<1e-9: out["60"].append(row)
+            elif abs(v-0.70)<1e-9: out["70"].append(row)
+            elif abs(v-0.80)<1e-9: out["80"].append(row)
+            elif abs(v-0.90)<1e-9: out["90"].append(row)
+            elif abs(v-1.00)<1e-9: out["100"].append(row)
         return out
+
+    labels = list(metrics.keys())
+    scen_payload = {}
+    for label in labels:
+        scen_payload[label] = {
+            "metrics": metrics[label],
+            "buckets": buckets(label),
+        }
 
     return {
         "filename": file.filename,
-        "metrics": metrics,
         "best": best_label,
-        "A": buckets("A"),
-        "B": buckets("B"),
-        "C": buckets("C"),
+        "scenarios": scen_payload
     }
 
 @app.post("/allocate")
@@ -250,7 +250,7 @@ async def allocate(
         write_back_mode=write_back
     )
 
-    out_name = (f"{base}.xlsx" if write_back=="same" else f"{base} - AMI Scenarios (A,B,C).xlsx")
+    out_name = (f"{base}.xlsx" if write_back=="same" else f"{base} - AMI Scenarios (S1,S2,S3,R1,R2,R3).xlsx")
     return StreamingResponse(io.BytesIO(xlsx),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename=\"{out_name}\"'}
