@@ -457,11 +457,11 @@ def generate_scenarios(
     # RELAXED set (R1–R3): seed some high tiers on premium units, then rebalance
     # shares are of non-40% SF; tune to your taste
     R1 = build(mask_pref_high=True,  hi_adj=0.001, need_family=False, protect_top=0,
-               strict_cap_70=False, relaxed_seed=[(0.80, 0.06)])
-    R2 = build(mask_pref_high=True,  hi_adj=0.002, need_family=False, protect_top=0,
-               strict_cap_70=False, relaxed_seed=[(0.90, 0.03),(0.80,0.05)])
-    R3 = build(mask_pref_high=True,  hi_adj=0.002, need_family=False, protect_top=0,
-               strict_cap_70=False, relaxed_seed=[(1.00, 0.02),(0.90,0.03),(0.80,0.05)])
+               strict_cap_70=False, relaxed_seed=[(0.80, 0.03)])
+    R2 = build(mask_pref_high=True,  hi_adj=0.001, need_family=False, protect_top=0,
+               strict_cap_70=False, relaxed_seed=[(0.90, 0.02),(0.80,0.03)])
+    R3 = build(mask_pref_high=True,  hi_adj=0.001, need_family=False, protect_top=0,
+               strict_cap_70=False, relaxed_seed=[(1.00, 0.01),(0.90,0.02),(0.80,0.03)])
 
     out = {"S1": S1, "S2": S2, "S3": S3, "R1": R1, "R2": R2, "R3": R3}
 
