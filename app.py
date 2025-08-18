@@ -146,7 +146,7 @@ async def allocate(
 
     # Excel writer (Master + each breakdown + Summary)
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="XlsxWriter") as w:
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
         full.to_excel(w, index=False, sheet_name="Master")
         for lab in [c.replace("Assigned_AMI_","") for c in full.columns if c.startswith("Assigned_AMI_")]:
             aff_br[[*aff_br.columns]].assign(**{f"Assigned_AMI": full.loc[full[f"Assigned_AMI_{lab}"].notna(), f"Assigned_AMI_{lab}"].to_numpy()}) \
