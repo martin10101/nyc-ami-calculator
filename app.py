@@ -90,23 +90,26 @@ def make_excel(
 ) -> bytes:
     """
     Always produce:
-      - Mirror (if write_back_mode == "same") under the original sheet name
-      - Master (All Columns)  -> the full table with Assigned_AMI_S1..R3 columns
-      - Scenario_S1..Scenario_R3 -> affordable-only breakdown for each scenario
-      - Summary                -> metrics + scores
+      - (optional) Mirror (if write_back_mode == "same") under original sheet name
+      - Master (All Columns)  -> the full table with Assigned_AMI_* columns
+      - Scenario_* (one per scenario, affordable-only subset)
+      - Comparison            -> per-scenario counts/SF by AMI tier + family (2BR+) @ 40% check
+      - Summary               -> metrics + scores (unchanged)
 
-    This way the workbook always contains ALL six scenarios, regardless of write mode.
+    This function is a drop-in; no other code changes are required.
     """
+    import numpy as np
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
         fmt_pct = wb.add_format({"num_format": "0%"})
-        labels = list(metrics.keys())  # ["S1","S2","S3","R1","R2","R3"]
+        fmt_int = wb.add_format({"num_format": "0"})
+        fmt_sf  = wb.add_format({"num_format": "#,##0.00"})
+        labels = list(metrics.keys())  # e.g., ["S1","S2","S3","R1","R2","R3"]
 
         # 1) Mirror sheet (only if write-back-to-same)
         if write_back_mode == "same" and mirror is not None:
             mirror.to_excel(writer, index=False, sheet_name=mirror_sheet_name)
-            # Simple percent formatting if an AMI column is present
             if "AMI" in mirror.columns:
                 ws = writer.sheets[mirror_sheet_name]
                 col = mirror.columns.get_loc("AMI")
@@ -117,32 +120,101 @@ def make_excel(
         master = full.copy()
         master.to_excel(writer, index=False, sheet_name=master_name)
         ws_master = writer.sheets[master_name]
-        # Format each Assigned_AMI_* as %
         for c in master.columns:
             if str(c).startswith("Assigned_AMI_"):
                 col = master.columns.get_loc(c)
                 ws_master.set_column(col, col, 18, fmt_pct)
 
         # 3) Per-scenario sheets: affordable-only breakdown
-        #    For each label, we rename Assigned_AMI_<label> -> Assigned_AMI
         base_cols = [c for c in ["FLOOR", "APT", "BED", "NET SF", "AMI_RAW"] if c in aff_br.columns]
         for label in labels:
             br = aff_br.copy()
-            # Keep only the base cols + assigned col for this scenario
             keep = base_cols + [f"Assigned_AMI_{label}"]
-            br = br[[c for c in keep if c in br.columns]]
+            keep = [c for c in keep if c in br.columns]
+            br = br[keep]
             br = br.rename(columns={f"Assigned_AMI_{label}": "Assigned_AMI"})
             sheet = f"Scenario_{label}"
             br.to_excel(writer, index=False, sheet_name=sheet)
             ws = writer.sheets[sheet]
-            # Format AMI and AMI_RAW (if present)
             if "Assigned_AMI" in br.columns:
                 ws.set_column(br.columns.get_loc("Assigned_AMI"), br.columns.get_loc("Assigned_AMI"), 14, fmt_pct)
-            if "AMI_RAW" in br.columns:
-                # AMI_RAW may not be numeric, so do not apply pct format here
-                ws.set_column(br.columns.get_loc("AMI_RAW"), br.columns.get_loc("AMI_RAW"), 12)
 
-        # 4) Summary sheet with scores
+        # 4) Comparison (NEW): counts & SF by AMI tier + family@40 check
+        comp_rows = []
+        # Prepare arrays once per scenario
+        has_bed = "BED" in aff_br.columns
+        aff_sf = aff_br["NET SF"].astype(float).to_numpy() if "NET SF" in aff_br.columns else None
+        for label in labels:
+            col = f"Assigned_AMI_{label}"
+            if col not in aff_br.columns or aff_sf is None:
+                # minimal fallback if something is missing
+                m = metrics[label]
+                comp_rows.append({
+                    "Scenario": label,
+                    "WAvg_AMI_%": m["wavg"],
+                    "Pct_40%_%": m["pct40"],
+                    "Aff_SF_Total": m["aff_sf_total"],
+                    "SF_at_40%": m["sf_at_40"],
+                    "Units@40": None, "SF@40": None,
+                    "Units@60": None, "SF@60": None,
+                    "Units@70": None, "SF@70": None,
+                    "Units@80": None, "SF@80": None,
+                    "Units@90": None, "SF@90": None,
+                    "Units@100": None, "SF@100": None,
+                    "Family2BR+_Units@40": None
+                })
+                continue
+
+            assigned = aff_br[col].astype(float).to_numpy()
+            def cnt_and_sf(val):
+                mask = np.isclose(assigned, val)
+                return int(mask.sum()), float(aff_sf[mask].sum())
+
+            u40, sf40 = cnt_and_sf(0.4)
+            u60, sf60 = cnt_and_sf(0.6)
+            u70, sf70 = cnt_and_sf(0.7)
+            u80, sf80 = cnt_and_sf(0.8)
+            u90, sf90 = cnt_and_sf(0.9)
+            u100, sf100 = cnt_and_sf(1.0)
+
+            fam_40 = None
+            if has_bed:
+                beds = pd.to_numeric(aff_br["BED"], errors="coerce").fillna(0).to_numpy()
+                fam_40 = int(((beds >= 2) & np.isclose(assigned, 0.4)).sum())
+
+            m = metrics[label]
+            comp_rows.append({
+                "Scenario": label,
+                "WAvg_AMI_%": m["wavg"],
+                "Pct_40%_%": m["pct40"],
+                "Aff_SF_Total": m["aff_sf_total"],
+                "SF_at_40%": m["sf_at_40"],
+                "Units@40": u40, "SF@40": sf40,
+                "Units@60": u60, "SF@60": sf60,
+                "Units@70": u70, "SF@70": sf70,
+                "Units@80": u80, "SF@80": sf80,
+                "Units@90": u90, "SF@90": sf90,
+                "Units@100": u100, "SF@100": sf100,
+                "Family2BR+_Units@40": fam_40
+            })
+
+        comp_df = pd.DataFrame(comp_rows)
+        comp_df.to_excel(writer, index=False, sheet_name="Comparison")
+        ws_comp = writer.sheets["Comparison"]
+
+        # Format numeric columns
+        num_cols = [c for c in comp_df.columns if c not in ["Scenario"]]
+        for c in num_cols:
+            col_idx = comp_df.columns.get_loc(c)
+            # percent-like columns
+            if c in ["WAvg_AMI_%", "Pct_40%_%"]:
+                ws_comp.set_column(col_idx, col_idx, 12, None)  # values already in %
+            elif c.startswith("Units@") or c == "Family2BR+_Units@40":
+                ws_comp.set_column(col_idx, col_idx, 12, fmt_int)
+            else:
+                ws_comp.set_column(col_idx, col_idx, 14, fmt_sf)
+
+        # 5) Summary sheet (existing scoring logic)
         def grade(m):
             wavg = min(m["wavg"], 60.0)
             pct  = max(min(m["pct40"], 21.0), 20.0)
@@ -165,6 +237,7 @@ def make_excel(
 
     buf.seek(0)
     return buf.getvalue()
+
 
 # ---------- UI ----------
 
