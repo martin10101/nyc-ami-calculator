@@ -9,21 +9,29 @@ import pandas as pd
 # Fuzzy headers & value parsing
 # ---------------------------
 
+# --- REPLACE these helpers in ami_core.py ---
+
 FLEX_HEADERS = {
     "NET SF": {"netsf","net sf","net_sf","net s.f.","sf","sqft","sq ft","square feet","net area","area"},
     "AMI": {"ami","aime","aff ami","affordable ami","assigned_ami","aff_ami","aff-ami"},
     "FLOOR": {"floor","fl","story","level"},
     "APT": {"apt","apartment","unit","unit #","apt#","apt no","apartment #"},
     "BED": {"bed","beds","bedroom","br"},
+    "AFF": {"aff","affordable","selected","ami_selected","is_affordable","target_ami"},
 }
 
 def _coerce_percent(x):
     if pd.isna(x): return np.nan
     if isinstance(x,(int,float)):
         v=float(x); return v/100.0 if v>1.0 else v
-    s=str(x).strip().upper().replace("AIME","").replace("AMI","").replace("%","").strip()
+    s=str(x).strip()
+    sU=s.upper()
+    sU=sU.replace("AIME","").replace("AMI","").replace("%","").strip()
+    # treat checkmarks / x / yes as "selected"
+    if sU in {"Y","YES","TRUE","1","✓","✔","X"}:
+        return 0.60   # placeholder if someone asks for a numeric; not used by solver
     try:
-        v=float(s); return v/100.0 if v>1.0 else v
+        v=float(sU); return v/100.0 if v>1.0 else v
     except:
         return np.nan
 
@@ -35,26 +43,39 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     for target, variants in FLEX_HEADERS.items():
         for c in df.columns:
             if lc[c] in variants: ren[c]=target
-    if ren: df=df.rename(columns=ren)
+    if ren: df = df.rename(columns=ren)
     if "NET SF" in df.columns: df["NET SF"] = pd.to_numeric(df["NET SF"], errors="coerce")
     if "FLOOR" in df.columns: df["FLOOR"] = pd.to_numeric(df["FLOOR"], errors="coerce")
     if "BED" in df.columns: df["BED"] = pd.to_numeric(df["BED"], errors="coerce")
+    if "AMI" in df.columns: df["AMI_RAW"] = df["AMI"]  # keep original cell for “selected” detection
     if "AMI" in df.columns: df["AMI"] = df["AMI"].apply(_coerce_percent)
     return df
 
-def _affordable_mask(df: pd.DataFrame) -> pd.Series:
-    # Prefer explicit yes/no flags if present
+def _selected_for_ami_mask(df: pd.DataFrame) -> pd.Series:
+    """
+    A row is selected if the AMI cell is *non-empty* (any value at all: 0.6, 60%, x, ✓, Yes, etc.),
+    OR if there is an explicit Affordable/Selected flag set to Yes/True/1.
+    We don't trust the numeric; we only use this as a yes/no selection.
+    """
+    # explicit yes/no flag takes priority
     for c in df.columns:
-        key=str(c).strip().lower()
+        key = str(c).strip().lower()
         if key in {"aff","affordable","selected","ami_selected","is_affordable","target_ami"}:
-            return df[c].astype(str).str.lower().str.strip().isin({"1","true","yes","y"}) & df["NET SF"].notna()
-    # Fallback: non-null AMI means preselected
+            return df[c].astype(str).str.strip().str.lower().isin({"1","true","yes","y","✓","✔","x"}) & df["NET SF"].notna()
+
+    # otherwise: any non-empty AMI cell means selected
+    if "AMI_RAW" in df.columns:
+        return df["AMI_RAW"].astype(str).str.strip().ne("").fillna(False) & df["NET SF"].notna()
+
+    # last resort: if an AMI numeric exists, use non-null numeric
     if "AMI" in df.columns:
         return df["AMI"].notna() & df["NET SF"].notna()
+
     return pd.Series(False, index=df.index)
 
 def _sf_avg(ami: np.ndarray, sf: np.ndarray) -> float:
     return float(np.dot(ami, sf)/sf.sum()) if sf.sum() > 0 else 0.0
+
 
 # ---------------------------
 # Exact 40% SF picker (20–21% band)
