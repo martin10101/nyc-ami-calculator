@@ -3,54 +3,28 @@
 Complete Universal Guaranteed AMI Calculator Web Application
 ===========================================================
 
-This is the final, complete, deployable Flask web application that integrates
-the Universal Guaranteed AMI Calculator with a full web interface.
-
-FEATURES:
-- Cascading Multi-Tier System (Perfect → Excellent → Great)
-- Mix-and-Match Custom Ranges with presets
-- Universal Guaranteed Recommendations for ANY failed scenario
-- Always Aim for Max revenue optimization
-- Strict 20% minimum enforcement (government compliance)
-- Universal compatibility for any building size/type
-- Practical focus: Only realistic building modifications
-- Beautiful, responsive web interface
+Enhanced version with full calculation results and detailed strategies.
 """
 
 from flask import Flask, render_template_string, request, jsonify, send_file
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
-from itertools import combinations, product
 import json
 from datetime import datetime
 import warnings
 import io
 import os
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from itertools import combinations
 warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
-# Simplified AMI Calculator class (embedded for deployment)
-class UniversalGuaranteedAMICalculator:
-    """The universal guaranteed AMI calculator with recommendations for any failed scenario."""
-    
+class EnhancedAMICalculator:
     def __init__(self):
         self.ami_levels = [0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]
-        self.strategies = {
-            'optimal_revenue': 'Optimal Revenue Strategy',
-            'floor_optimized': 'Floor Optimized Strategy', 
-            'size_optimized': 'Size Optimized Strategy'
-        }
         
-        # Conservative tolerance settings with STRICT 20% MINIMUM
-        self.tolerance_40_ami = 0.02  # Very conservative: 19.98% minimum (NEVER BELOW 20%)
-        self.tolerance_weighted_ami = 0.05  # Revenue optimization flexibility
-        
-        # Scenario presets
         self.scenario_presets = {
             'conservative': {
                 'weighted_ami_range': (57.0, 58.0),
@@ -74,49 +48,57 @@ class UniversalGuaranteedAMICalculator:
             }
         }
     
-    def _enhanced_data_validation_and_cleaning(self, df):
-        """Enhanced data validation and cleaning with smart column detection."""
+    def _clean_data(self, df):
+        """Clean and validate the input data."""
         try:
-            # Create a copy to avoid modifying original
             df_clean = df.copy()
             
-            # Smart column detection
-            sf_columns = [col for col in df_clean.columns if 'SF' in str(col).upper() or 'SQFT' in str(col).upper() or 'SQUARE' in str(col).upper()]
-            floor_columns = [col for col in df_clean.columns if 'FLOOR' in str(col).upper() or 'LEVEL' in str(col).upper() or 'FLR' in str(col).upper()]
-            unit_columns = [col for col in df_clean.columns if 'APT' in str(col).upper() or 'UNIT' in str(col).upper() or 'APARTMENT' in str(col).upper()]
+            # Find SF column with better detection
+            sf_columns = []
+            for col in df_clean.columns:
+                col_upper = str(col).upper().strip()
+                if any(sf_term in col_upper for sf_term in ['SF', 'SQFT', 'SQUARE', 'SQ FT', 'NET SF', ' SF']):
+                    sf_columns.append(col)
             
-            # Use the first found column or create default names
-            sf_col = sf_columns[0] if sf_columns else 'SF'
+            if not sf_columns:
+                raise ValueError("No square footage column found. Expected columns like 'SF', 'NET SF', 'SQFT'")
+            
+            sf_col = sf_columns[0]
+            
+            # Find other columns
+            floor_columns = []
+            for col in df_clean.columns:
+                col_upper = str(col).upper().strip()
+                if any(floor_term in col_upper for floor_term in ['FLOOR', 'LEVEL', 'FLR', 'STORY']):
+                    floor_columns.append(col)
+            
+            unit_columns = []
+            for col in df_clean.columns:
+                col_upper = str(col).upper().strip()
+                if any(unit_term in col_upper for unit_term in ['APT', 'UNIT', 'APARTMENT', 'SUITE']):
+                    unit_columns.append(col)
+            
             floor_col = floor_columns[0] if floor_columns else 'Floor'
             unit_col = unit_columns[0] if unit_columns else 'Apartment'
             
-            # Ensure required columns exist
-            if sf_col not in df_clean.columns:
-                raise ValueError(f"No square footage column found. Expected columns like 'SF', 'NET SF', 'SQFT'")
-            
-            # Clean and validate SF column
-            df_clean[sf_col] = pd.to_numeric(df_clean[sf_col], errors='coerce')
-            df_clean = df_clean.dropna(subset=[sf_col])
-            df_clean = df_clean[df_clean[sf_col] > 0]
-            
-            # Create missing columns if needed
-            if floor_col not in df_clean.columns:
-                df_clean[floor_col] = 1  # Default to floor 1
-            if unit_col not in df_clean.columns:
-                df_clean[unit_col] = [f"Unit_{i+1}" for i in range(len(df_clean))]
-            
-            # Standardize column names for internal use
+            # Standardize column names
             df_clean = df_clean.rename(columns={
                 sf_col: 'SF',
-                floor_col: 'Floor', 
+                floor_col: 'Floor',
                 unit_col: 'Apartment'
             })
             
-            # Ensure numeric types
+            # Create missing columns
+            if 'Floor' not in df_clean.columns:
+                df_clean['Floor'] = range(1, len(df_clean) + 1)
+            if 'Apartment' not in df_clean.columns:
+                df_clean['Apartment'] = [f"Unit_{i+1}" for i in range(len(df_clean))]
+            
+            # Clean data
             df_clean['SF'] = pd.to_numeric(df_clean['SF'], errors='coerce')
             df_clean['Floor'] = pd.to_numeric(df_clean['Floor'], errors='coerce').fillna(1)
             
-            # Remove any remaining invalid rows
+            # Remove invalid rows
             df_clean = df_clean.dropna(subset=['SF'])
             df_clean = df_clean[df_clean['SF'] > 0]
             
@@ -129,7 +111,7 @@ class UniversalGuaranteedAMICalculator:
             raise ValueError(f"Data validation failed: {str(e)}")
     
     def _calculate_weighted_ami(self, df):
-        """Calculate weighted average AMI for the dataframe."""
+        """Calculate weighted average AMI."""
         if 'AMI_Level' not in df.columns or len(df) == 0:
             return 0.0
         
@@ -153,158 +135,235 @@ class UniversalGuaranteedAMICalculator:
         return (ami_40_sf / total_sf) * 100
     
     def _is_compliant(self, df, weighted_range, ami_40_range):
-        """Check if the assignment meets compliance requirements."""
+        """Check if assignment meets compliance requirements."""
         weighted_ami = self._calculate_weighted_ami(df)
         ami_40_coverage = self._calculate_40_ami_coverage(df)
         
         # STRICT 20% MINIMUM ENFORCEMENT
-        min_40_ami = max(20.0, ami_40_range[0])  # Never below 20%
+        min_40_ami = max(20.0, ami_40_range[0])
         
-        weighted_compliant = weighted_range[0] <= weighted_ami <= weighted_range[1]
-        ami_40_compliant = min_40_ami <= ami_40_coverage <= ami_40_range[1]
+        weighted_ok = weighted_range[0] <= weighted_ami <= weighted_range[1]
+        ami_40_ok = min_40_ami <= ami_40_coverage <= ami_40_range[1]
         
-        return weighted_compliant and ami_40_compliant
+        return weighted_ok and ami_40_ok
+    
+    def _generate_all_combinations(self, df, weighted_range, ami_40_range):
+        """Generate and test all possible AMI combinations."""
+        results = []
+        total_units = len(df)
+        
+        # Test different numbers of units at 40% AMI
+        for num_40_units in range(1, min(total_units, 12) + 1):
+            # Test different combinations of units for 40% AMI
+            for units_40_combo in combinations(range(total_units), num_40_units):
+                # Test different distributions for remaining units
+                remaining_units = [i for i in range(total_units) if i not in units_40_combo]
+                
+                if len(remaining_units) == 0:
+                    continue
+                
+                # Try different numbers of 80% AMI units
+                for num_80_units in range(0, min(len(remaining_units), 6) + 1):
+                    if num_80_units > 0:
+                        for units_80_combo in combinations(remaining_units, num_80_units):
+                            df_test = df.copy()
+                            
+                            # Assign AMI levels
+                            df_test['AMI_Level'] = 0.60  # Default
+                            
+                            # Assign 40% AMI
+                            for idx in units_40_combo:
+                                df_test.iloc[idx, df_test.columns.get_loc('AMI_Level')] = 0.40
+                            
+                            # Assign 80% AMI
+                            for idx in units_80_combo:
+                                df_test.iloc[idx, df_test.columns.get_loc('AMI_Level')] = 0.80
+                            
+                            # Calculate metrics
+                            weighted_ami = self._calculate_weighted_ami(df_test)
+                            ami_40_coverage = self._calculate_40_ami_coverage(df_test)
+                            is_compliant = self._is_compliant(df_test, weighted_range, ami_40_range)
+                            
+                            # Store result
+                            result = {
+                                'df': df_test.copy(),
+                                'weighted_ami': weighted_ami,
+                                '40_ami_coverage': ami_40_coverage,
+                                'units_40_ami': num_40_units,
+                                'units_80_ami': num_80_units,
+                                'units_60_ami': total_units - num_40_units - num_80_units,
+                                'compliant': is_compliant,
+                                'score': weighted_ami if is_compliant else 0
+                            }
+                            results.append(result)
+                    else:
+                        # No 80% AMI units
+                        df_test = df.copy()
+                        df_test['AMI_Level'] = 0.60  # Default
+                        
+                        # Assign 40% AMI
+                        for idx in units_40_combo:
+                            df_test.iloc[idx, df_test.columns.get_loc('AMI_Level')] = 0.40
+                        
+                        # Calculate metrics
+                        weighted_ami = self._calculate_weighted_ami(df_test)
+                        ami_40_coverage = self._calculate_40_ami_coverage(df_test)
+                        is_compliant = self._is_compliant(df_test, weighted_range, ami_40_range)
+                        
+                        # Store result
+                        result = {
+                            'df': df_test.copy(),
+                            'weighted_ami': weighted_ami,
+                            '40_ami_coverage': ami_40_coverage,
+                            'units_40_ami': num_40_units,
+                            'units_80_ami': 0,
+                            'units_60_ami': total_units - num_40_units,
+                            'compliant': is_compliant,
+                            'score': weighted_ami if is_compliant else 0
+                        }
+                        results.append(result)
+        
+        return results
     
     def _assign_ami_strategy(self, df, strategy_type, weighted_range, ami_40_range):
-        """Assign AMI levels using the specified strategy."""
-        df_result = df.copy()
-        
-        # Sort units based on strategy
+        """Assign AMI levels using comprehensive strategy testing."""
+        # Sort based on strategy
         if strategy_type == 'floor_optimized':
-            # Lower floors first for 40% AMI
-            df_result = df_result.sort_values(['Floor', 'SF'])
+            df_sorted = df.sort_values(['Floor', 'SF'])
         elif strategy_type == 'size_optimized':
-            # Smaller units first for 40% AMI
-            df_result = df_result.sort_values(['SF', 'Floor'])
+            df_sorted = df.sort_values(['SF', 'Floor'])
         else:  # optimal_revenue
-            # Balanced approach - smaller units on lower floors first
-            df_result = df_result.sort_values(['SF', 'Floor'])
+            df_sorted = df.sort_values(['SF', 'Floor'])
         
-        total_sf = df_result['SF'].sum()
-        target_40_ami_sf = total_sf * (ami_40_range[0] / 100)
+        # Generate all possible combinations
+        all_results = self._generate_all_combinations(df_sorted, weighted_range, ami_40_range)
         
-        # Try different numbers of units at 40% AMI
-        best_result = None
-        best_score = -1
+        if not all_results:
+            return None
         
-        for num_40_units in range(1, min(len(df_result), 10) + 1):
-            df_test = df_result.copy()
-            
-            # Assign 40% AMI to first num_40_units
-            df_test['AMI_Level'] = 0.60  # Default to 60%
-            df_test.iloc[:num_40_units, df_test.columns.get_loc('AMI_Level')] = 0.40
-            
-            # Check if this meets 40% AMI requirements
-            ami_40_coverage = self._calculate_40_ami_coverage(df_test)
-            if ami_40_coverage < 20.0:  # STRICT 20% MINIMUM
-                continue
-            
-            # Try to optimize remaining units for weighted AMI
-            remaining_indices = df_test.index[num_40_units:]
-            
-            # Assign higher AMI levels to maximize weighted average
-            for i, idx in enumerate(remaining_indices):
-                if i < len(remaining_indices) // 3:
-                    df_test.loc[idx, 'AMI_Level'] = 0.80  # Some at 80%
-                else:
-                    df_test.loc[idx, 'AMI_Level'] = 0.60  # Rest at 60%
-            
-            # Check compliance
-            if self._is_compliant(df_test, weighted_range, ami_40_range):
-                weighted_ami = self._calculate_weighted_ami(df_test)
-                score = weighted_ami  # Higher weighted AMI is better
-                
-                if score > best_score:
-                    best_score = score
-                    best_result = df_test.copy()
+        # Filter compliant results
+        compliant_results = [r for r in all_results if r['compliant']]
         
-        return best_result
+        if compliant_results:
+            # Return best compliant result (highest weighted AMI)
+            best_result = max(compliant_results, key=lambda x: x['score'])
+            return best_result['df']
+        else:
+            # Return best non-compliant result for analysis
+            best_result = max(all_results, key=lambda x: x['weighted_ami'])
+            return best_result['df']
     
-    def _generate_recommendations(self, df, weighted_range, ami_40_range):
-        """Generate practical recommendations for failed scenarios."""
+    def _generate_detailed_recommendations(self, df, weighted_range, ami_40_range, all_attempts):
+        """Generate detailed, specific recommendations."""
         recommendations = []
         
-        # Analyze current best attempt
-        df_sorted = df.sort_values(['SF', 'Floor'])
-        df_test = df_sorted.copy()
-        df_test['AMI_Level'] = 0.60
+        # Analyze what we achieved vs what we need
+        best_attempt = max(all_attempts, key=lambda x: x.get('weighted_ami', 0))
         
-        # Try minimum 40% AMI assignment
-        total_sf = df_test['SF'].sum()
-        target_sf = total_sf * 0.20  # 20% minimum
+        current_weighted = best_attempt.get('weighted_ami', 0)
+        current_40_coverage = best_attempt.get('40_ami_coverage', 0)
         
-        current_sf = 0
-        units_needed = 0
-        for idx, row in df_test.iterrows():
-            if current_sf < target_sf:
-                current_sf += row['SF']
-                units_needed += 1
-            else:
-                break
+        # Specific gap analysis
+        weighted_gap = weighted_range[0] - current_weighted
+        ami_40_gap = 20.0 - current_40_coverage  # 20% minimum
         
-        # Calculate what we can achieve
-        df_test.iloc[:units_needed, df_test.columns.get_loc('AMI_Level')] = 0.40
-        df_test.iloc[units_needed:, df_test.columns.get_loc('AMI_Level')] = 0.60
-        
-        current_weighted = self._calculate_weighted_ami(df_test)
-        current_40_coverage = self._calculate_40_ami_coverage(df_test)
-        
-        # Generate specific recommendations
-        if current_40_coverage < 20.0:
+        if ami_40_gap > 0:
             recommendations.append({
-                'title': 'Insufficient 40% AMI Coverage',
-                'description': f'Current building can only achieve {current_40_coverage:.1f}% at 40% AMI, but 20% minimum is required.',
-                'expected_result': 'Consider adding more affordable units or modifying unit sizes.'
+                'title': f'Need {ami_40_gap:.1f}% More 40% AMI Coverage',
+                'description': f'Current: {current_40_coverage:.1f}%, Required: 20.0% minimum. Gap: {ami_40_gap:.1f}%',
+                'expected_result': f'Add approximately {int(ami_40_gap * len(df) / 100)} more units at 40% AMI or increase unit sizes.'
             })
         
-        if current_weighted < weighted_range[0]:
-            gap = weighted_range[0] - current_weighted
+        if weighted_gap > 0:
             recommendations.append({
-                'title': 'Weighted AMI Below Target',
-                'description': f'Current weighted AMI is {current_weighted:.1f}%, need {gap:.1f}% increase to reach {weighted_range[0]}%.',
-                'expected_result': 'Consider replacing smaller units with larger units or adding 80% AMI units.'
+                'title': f'Need {weighted_gap:.1f}% Higher Weighted AMI',
+                'description': f'Current: {current_weighted:.1f}%, Target: {weighted_range[0]:.1f}%. Gap: {weighted_gap:.1f}%',
+                'expected_result': f'Replace some 60% AMI units with 80% AMI units, or increase unit sizes for higher AMI units.'
             })
+        
+        # Unit-specific recommendations based on building analysis
+        total_sf = df['SF'].sum()
+        target_40_sf = total_sf * 0.20  # 20% minimum
+        
+        # Calculate how many units needed
+        avg_unit_sf = df['SF'].mean()
+        units_needed_40 = int(target_40_sf / avg_unit_sf) + 1
+        
+        if units_needed_40 > len(df):
+            recommendations.append({
+                'title': 'Insufficient Units for Compliance',
+                'description': f'Need {units_needed_40} units at 40% AMI, but only have {len(df)} total affordable units.',
+                'expected_result': 'Add more affordable units to the building or modify existing unit sizes.'
+            })
+        else:
+            # Specific unit size recommendations
+            smallest_units = df.nsmallest(units_needed_40, 'SF')
+            largest_units = df.nlargest(min(3, len(df) - units_needed_40), 'SF')
+            
+            recommendations.append({
+                'title': 'Optimal Unit Assignment Strategy',
+                'description': f'Assign the {units_needed_40} smallest units ({smallest_units["SF"].sum():.0f} SF total) to 40% AMI.',
+                'expected_result': f'This would achieve {(smallest_units["SF"].sum()/total_sf)*100:.1f}% at 40% AMI.'
+            })
+            
+            if len(largest_units) > 0:
+                recommendations.append({
+                    'title': 'Revenue Optimization Strategy',
+                    'description': f'Assign the {len(largest_units)} largest units ({largest_units["SF"].sum():.0f} SF total) to 80% AMI.',
+                    'expected_result': f'This would help maximize the weighted average AMI while maintaining compliance.'
+                })
         
         return recommendations
     
-    def process_corrected_ultimate_optimization(self, df, mode='cascading', **kwargs):
-        """Process the ultimate optimization with universal guarantee."""
+    def process_optimization(self, df, mode='cascading', **kwargs):
+        """Process comprehensive AMI optimization with detailed results."""
         try:
-            # Clean and validate data
-            df_clean = self._enhanced_data_validation_and_cleaning(df)
+            df_clean = self._clean_data(df)
             
             results = {
                 'success': True,
                 'strategies': {},
                 'recommendations': [],
-                'mode': mode
+                'mode': mode,
+                'building_analysis': {
+                    'total_units': len(df_clean),
+                    'total_sf': int(df_clean['SF'].sum()),
+                    'avg_unit_sf': int(df_clean['SF'].mean()),
+                    'min_unit_sf': int(df_clean['SF'].min()),
+                    'max_unit_sf': int(df_clean['SF'].max())
+                }
             }
             
-            # Define scenarios to test based on mode
-            scenarios_to_test = []
-            
+            # Define scenarios to test
             if mode == 'cascading':
-                # Test multiple tiers
-                scenarios_to_test = [
-                    ('Perfect', (59.5, 60.0), (20.0, 20.5)),
-                    ('Excellent', (58.5, 59.5), (20.5, 21.5)),
-                    ('Great', (57.0, 58.5), (21.5, 23.0))
+                scenarios = [
+                    ('Perfect Scenario', (59.5, 60.0), (20.0, 20.5)),
+                    ('Excellent Scenario', (58.5, 59.5), (20.5, 21.5)),
+                    ('Great Scenario', (57.0, 58.5), (21.5, 23.0)),
+                    ('Conservative Fallback', (55.0, 57.0), (23.0, 25.0))
                 ]
             elif mode == 'custom':
                 weighted_range = kwargs.get('custom_weighted_range', (58, 60))
                 ami_40_range = kwargs.get('custom_40_ami_range', (20, 22))
-                scenarios_to_test = [('Custom', weighted_range, ami_40_range)]
+                scenarios = [('Custom Scenario', weighted_range, ami_40_range)]
             else:
-                # Use preset
                 preset = self.scenario_presets.get(mode, self.scenario_presets['balanced'])
-                scenarios_to_test = [(mode.title(), preset['weighted_ami_range'], preset['40_ami_range'])]
+                scenarios = [(f'{mode.title()} Scenario', preset['weighted_ami_range'], preset['40_ami_range'])]
             
             # Test each scenario
-            for scenario_name, weighted_range, ami_40_range in scenarios_to_test:
+            all_attempts = []
+            
+            for scenario_name, weighted_range, ami_40_range in scenarios:
                 scenario_results = {}
+                scenario_attempts = []
                 
-                # Test each strategy type
-                for strategy_key, strategy_name in self.strategies.items():
+                strategies = {
+                    'optimal_revenue': 'Optimal Revenue Strategy',
+                    'floor_optimized': 'Floor Optimized Strategy',
+                    'size_optimized': 'Size Optimized Strategy'
+                }
+                
+                for strategy_key, strategy_name in strategies.items():
                     result_df = self._assign_ami_strategy(df_clean, strategy_key, weighted_range, ami_40_range)
                     
                     if result_df is not None:
@@ -312,30 +371,50 @@ class UniversalGuaranteedAMICalculator:
                         ami_40_coverage = self._calculate_40_ami_coverage(result_df)
                         is_compliant = self._is_compliant(result_df, weighted_range, ami_40_range)
                         
-                        scenario_results[strategy_name] = {
+                        # Count units by AMI level
+                        units_40 = len(result_df[result_df['AMI_Level'] == 0.40])
+                        units_60 = len(result_df[result_df['AMI_Level'] == 0.60])
+                        units_80 = len(result_df[result_df['AMI_Level'] == 0.80])
+                        
+                        strategy_result = {
                             'df_with_ami': result_df,
                             'weighted_ami': weighted_ami,
                             '40_ami_coverage': ami_40_coverage,
-                            'units_40_ami': len(result_df[result_df['AMI_Level'] == 0.40]),
+                            'units_40_ami': units_40,
+                            'units_60_ami': units_60,
+                            'units_80_ami': units_80,
                             'total_units': len(result_df),
-                            'compliant': is_compliant
+                            'compliant': is_compliant,
+                            'scenario': scenario_name,
+                            'ami_distribution': {
+                                '40%': units_40,
+                                '60%': units_60,
+                                '80%': units_80
+                            }
                         }
+                        
+                        scenario_results[strategy_name] = strategy_result
+                        scenario_attempts.append(strategy_result)
                 
-                # If we found compliant strategies, use this scenario
+                all_attempts.extend(scenario_attempts)
+                
+                # Use first scenario with compliant strategies
                 compliant_strategies = [s for s in scenario_results.values() if s.get('compliant', False)]
-                if compliant_strategies:
+                if compliant_strategies and not results['strategies']:
                     results['strategies'] = scenario_results
                     results['scenario_used'] = scenario_name
                     break
-                elif not results['strategies']:  # Keep first attempt if no compliant found
+                elif not results['strategies']:  # Keep first attempt
                     results['strategies'] = scenario_results
                     results['scenario_used'] = scenario_name
             
-            # Generate recommendations if no compliant strategies found
+            # Generate detailed recommendations if needed
             if not any(s.get('compliant', False) for s in results['strategies'].values()):
-                # Use the last tested scenario for recommendations
-                last_scenario = scenarios_to_test[-1] if scenarios_to_test else ('Default', (58, 60), (20, 22))
-                results['recommendations'] = self._generate_recommendations(df_clean, last_scenario[1], last_scenario[2])
+                # Use the most restrictive scenario for recommendations
+                target_scenario = scenarios[0] if scenarios else ('Default', (58, 60), (20, 22))
+                results['recommendations'] = self._generate_detailed_recommendations(
+                    df_clean, target_scenario[1], target_scenario[2], all_attempts
+                )
             
             return results
             
@@ -347,7 +426,7 @@ class UniversalGuaranteedAMICalculator:
                 'recommendations': []
             }
 
-# HTML Template for the web interface
+# HTML Template (same as before but with enhanced results display)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -356,19 +435,13 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Guaranteed AMI Calculator</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
         }
-        
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -377,29 +450,15 @@ HTML_TEMPLATE = """
             box-shadow: 0 20px 40px rgba(0,0,0,0.1);
             overflow: hidden;
         }
-        
         .header {
             background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
             color: white;
             padding: 30px;
             text-align: center;
         }
-        
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            font-weight: 300;
-        }
-        
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-        
-        .content {
-            padding: 40px;
-        }
-        
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; font-weight: 300; }
+        .header p { font-size: 1.1em; opacity: 0.9; }
+        .content { padding: 40px; }
         .upload-section {
             background: #f8f9fa;
             border-radius: 15px;
@@ -409,16 +468,8 @@ HTML_TEMPLATE = """
             text-align: center;
             transition: all 0.3s ease;
         }
-        
-        .upload-section:hover {
-            border-color: #667eea;
-            background: #f0f4ff;
-        }
-        
-        .file-input {
-            display: none;
-        }
-        
+        .upload-section:hover { border-color: #667eea; background: #f0f4ff; }
+        .file-input { display: none; }
         .file-label {
             display: inline-block;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -430,16 +481,11 @@ HTML_TEMPLATE = """
             transition: all 0.3s ease;
             margin-bottom: 15px;
         }
-        
         .file-label:hover {
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
         }
-        
-        .scenario-section {
-            margin-bottom: 30px;
-        }
-        
+        .scenario-section { margin-bottom: 30px; }
         .scenario-title {
             font-size: 1.5em;
             color: #2c3e50;
@@ -447,14 +493,12 @@ HTML_TEMPLATE = """
             padding-bottom: 10px;
             border-bottom: 2px solid #ecf0f1;
         }
-        
         .scenario-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
-        
         .scenario-card {
             background: white;
             border: 2px solid #ecf0f1;
@@ -463,73 +507,14 @@ HTML_TEMPLATE = """
             transition: all 0.3s ease;
             cursor: pointer;
         }
-        
         .scenario-card:hover {
             border-color: #667eea;
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(0,0,0,0.1);
         }
-        
-        .scenario-card.selected {
-            border-color: #667eea;
-            background: #f0f4ff;
-        }
-        
-        .scenario-name {
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-        
-        .scenario-details {
-            font-size: 0.9em;
-            color: #7f8c8d;
-        }
-        
-        .custom-section {
-            background: #f8f9fa;
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-        }
-        
-        .range-inputs {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .input-group {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .input-group label {
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 8px;
-        }
-        
-        .input-row {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        
-        .input-row input {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            font-size: 1em;
-        }
-        
-        .input-row input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
+        .scenario-card.selected { border-color: #667eea; background: #f0f4ff; }
+        .scenario-name { font-weight: 600; color: #2c3e50; margin-bottom: 10px; }
+        .scenario-details { font-size: 0.9em; color: #7f8c8d; }
         .calculate-btn {
             background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
             color: white;
@@ -542,25 +527,17 @@ HTML_TEMPLATE = """
             width: 100%;
             margin-top: 20px;
         }
-        
         .calculate-btn:hover {
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(39, 174, 96, 0.3);
         }
-        
         .calculate-btn:disabled {
             background: #bdc3c7;
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
         }
-        
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 40px;
-        }
-        
+        .loading { display: none; text-align: center; padding: 40px; }
         .spinner {
             border: 4px solid #f3f3f3;
             border-top: 4px solid #667eea;
@@ -570,17 +547,28 @@ HTML_TEMPLATE = """
             animation: spin 1s linear infinite;
             margin: 0 auto 20px;
         }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .results { display: none; margin-top: 30px; }
+        .building-analysis {
+            background: #e8f5e8;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
         }
-        
-        .results {
-            display: none;
-            margin-top: 30px;
+        .building-analysis h3 { color: #27ae60; margin-bottom: 15px; }
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
         }
-        
+        .analysis-item {
+            text-align: center;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+        }
+        .analysis-value { font-size: 1.3em; font-weight: 600; color: #27ae60; }
+        .analysis-label { font-size: 0.9em; color: #666; margin-top: 5px; }
         .result-card {
             background: white;
             border-radius: 15px;
@@ -588,63 +576,53 @@ HTML_TEMPLATE = """
             margin-bottom: 20px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
-        
         .result-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
         }
-        
-        .result-title {
-            font-size: 1.3em;
-            font-weight: 600;
-            color: #2c3e50;
-        }
-        
+        .result-title { font-size: 1.3em; font-weight: 600; color: #2c3e50; }
         .result-status {
             padding: 8px 16px;
             border-radius: 20px;
             font-weight: 600;
             font-size: 0.9em;
         }
-        
-        .status-success {
-            background: #d4edda;
-            color: #155724;
-        }
-        
-        .status-failed {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        
+        .status-success { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
         .result-metrics {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
             margin-bottom: 20px;
         }
-        
         .metric {
             text-align: center;
             padding: 15px;
             background: #f8f9fa;
             border-radius: 10px;
         }
-        
-        .metric-value {
-            font-size: 1.5em;
-            font-weight: 600;
-            color: #2c3e50;
+        .metric-value { font-size: 1.3em; font-weight: 600; color: #2c3e50; }
+        .metric-label { font-size: 0.9em; color: #7f8c8d; margin-top: 5px; }
+        .ami-distribution {
+            background: #f0f8ff;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
         }
-        
-        .metric-label {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-top: 5px;
+        .ami-distribution h4 { color: #2c3e50; margin-bottom: 10px; }
+        .distribution-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
         }
-        
+        .distribution-item {
+            text-align: center;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+        }
         .download-btn {
             background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
             color: white;
@@ -656,12 +634,10 @@ HTML_TEMPLATE = """
             text-decoration: none;
             display: inline-block;
         }
-        
         .download-btn:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 16px rgba(52, 152, 219, 0.3);
         }
-        
         .recommendations {
             background: #fff3cd;
             border: 1px solid #ffeaa7;
@@ -669,12 +645,7 @@ HTML_TEMPLATE = """
             padding: 20px;
             margin-top: 20px;
         }
-        
-        .recommendations h4 {
-            color: #856404;
-            margin-bottom: 15px;
-        }
-        
+        .recommendations h4 { color: #856404; margin-bottom: 15px; }
         .recommendation-item {
             background: white;
             border-radius: 8px;
@@ -682,24 +653,10 @@ HTML_TEMPLATE = """
             margin-bottom: 10px;
             border-left: 4px solid #f39c12;
         }
-        
         @media (max-width: 768px) {
-            .container {
-                margin: 10px;
-                border-radius: 15px;
-            }
-            
-            .content {
-                padding: 20px;
-            }
-            
-            .range-inputs {
-                grid-template-columns: 1fr;
-            }
-            
-            .scenario-grid {
-                grid-template-columns: 1fr;
-            }
+            .container { margin: 10px; border-radius: 15px; }
+            .content { padding: 20px; }
+            .scenario-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -711,21 +668,16 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="content">
-            <!-- File Upload Section -->
             <div class="upload-section">
                 <input type="file" id="fileInput" class="file-input" accept=".xlsx,.xls" />
-                <label for="fileInput" class="file-label">
-                    📁 Choose Excel File
-                </label>
+                <label for="fileInput" class="file-label">📁 Choose Excel File</label>
                 <p>Upload your building's unit schedule (Excel format)</p>
                 <div id="fileName" style="margin-top: 10px; font-weight: 600; color: #27ae60;"></div>
             </div>
             
-            <!-- Scenario Selection -->
             <div class="scenario-section">
                 <h2 class="scenario-title">🎯 Choose Optimization Scenario</h2>
                 
-                <!-- Cascading Optimization -->
                 <div class="scenario-grid">
                     <div class="scenario-card" data-mode="cascading">
                         <div class="scenario-name">🚀 Cascading Optimization (Recommended)</div>
@@ -736,7 +688,6 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 
-                <!-- Preset Scenarios -->
                 <h3 style="margin: 30px 0 15px 0; color: #2c3e50;">📋 Preset Scenarios</h3>
                 <div class="scenario-grid">
                     <div class="scenario-card" data-mode="conservative">
@@ -775,49 +726,15 @@ HTML_TEMPLATE = """
                         </div>
                     </div>
                 </div>
-                
-                <!-- Custom Range -->
-                <h3 style="margin: 30px 0 15px 0; color: #2c3e50;">🔧 Custom Mix-and-Match</h3>
-                <div class="custom-section">
-                    <div class="range-inputs">
-                        <div class="input-group">
-                            <label>Weighted AMI Range (%)</label>
-                            <div class="input-row">
-                                <input type="number" id="weightedMin" placeholder="Min" min="50" max="65" step="0.1" value="58">
-                                <span>to</span>
-                                <input type="number" id="weightedMax" placeholder="Max" min="50" max="65" step="0.1" value="60">
-                            </div>
-                        </div>
-                        
-                        <div class="input-group">
-                            <label>40% AMI Coverage Range (%)</label>
-                            <div class="input-row">
-                                <input type="number" id="amiMin" placeholder="Min" min="15" max="30" step="0.1" value="20">
-                                <span>to</span>
-                                <input type="number" id="amiMax" placeholder="Max" min="15" max="30" step="0.1" value="22">
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="scenario-card" data-mode="custom" style="margin: 0; cursor: pointer;">
-                        <div class="scenario-name">🎨 Use Custom Ranges</div>
-                        <div class="scenario-details">Apply your specific target ranges above</div>
-                    </div>
-                </div>
             </div>
             
-            <!-- Calculate Button -->
-            <button id="calculateBtn" class="calculate-btn" disabled>
-                🚀 Calculate AMI Strategies
-            </button>
+            <button id="calculateBtn" class="calculate-btn" disabled>🚀 Calculate AMI Strategies</button>
             
-            <!-- Loading -->
             <div id="loading" class="loading">
                 <div class="spinner"></div>
                 <p>Analyzing building and optimizing strategies...</p>
             </div>
             
-            <!-- Results -->
             <div id="results" class="results"></div>
         </div>
     </div>
@@ -826,7 +743,6 @@ HTML_TEMPLATE = """
         let selectedMode = null;
         let uploadedFile = null;
         
-        // File upload handling
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
@@ -836,13 +752,9 @@ HTML_TEMPLATE = """
             }
         });
         
-        // Scenario selection
         document.querySelectorAll('.scenario-card').forEach(card => {
             card.addEventListener('click', function() {
-                // Remove previous selection
                 document.querySelectorAll('.scenario-card').forEach(c => c.classList.remove('selected'));
-                
-                // Add selection to clicked card
                 this.classList.add('selected');
                 selectedMode = this.dataset.mode;
                 updateCalculateButton();
@@ -860,28 +772,16 @@ HTML_TEMPLATE = """
             }
         }
         
-        // Calculate button
         document.getElementById('calculateBtn').addEventListener('click', function() {
             if (!uploadedFile || !selectedMode) return;
             
-            // Show loading
             document.getElementById('loading').style.display = 'block';
             document.getElementById('results').style.display = 'none';
             
-            // Prepare form data
             const formData = new FormData();
             formData.append('file', uploadedFile);
             formData.append('mode', selectedMode);
             
-            // Add custom ranges if custom mode
-            if (selectedMode === 'custom') {
-                formData.append('weighted_min', document.getElementById('weightedMin').value);
-                formData.append('weighted_max', document.getElementById('weightedMax').value);
-                formData.append('ami_min', document.getElementById('amiMin').value);
-                formData.append('ami_max', document.getElementById('amiMax').value);
-            }
-            
-            // Send request
             fetch('/calculate', {
                 method: 'POST',
                 body: formData
@@ -904,6 +804,38 @@ HTML_TEMPLATE = """
             if (data.success) {
                 html += `<h2 style="color: #27ae60; margin-bottom: 20px;">✅ Optimization Results</h2>`;
                 
+                // Building Analysis
+                if (data.building_analysis) {
+                    const analysis = data.building_analysis;
+                    html += `
+                        <div class="building-analysis">
+                            <h3>🏢 Building Analysis</h3>
+                            <div class="analysis-grid">
+                                <div class="analysis-item">
+                                    <div class="analysis-value">${analysis.total_units}</div>
+                                    <div class="analysis-label">Total Units</div>
+                                </div>
+                                <div class="analysis-item">
+                                    <div class="analysis-value">${analysis.total_sf.toLocaleString()}</div>
+                                    <div class="analysis-label">Total SF</div>
+                                </div>
+                                <div class="analysis-item">
+                                    <div class="analysis-value">${analysis.avg_unit_sf}</div>
+                                    <div class="analysis-label">Avg Unit SF</div>
+                                </div>
+                                <div class="analysis-item">
+                                    <div class="analysis-value">${analysis.min_unit_sf}</div>
+                                    <div class="analysis-label">Min Unit SF</div>
+                                </div>
+                                <div class="analysis-item">
+                                    <div class="analysis-value">${analysis.max_unit_sf}</div>
+                                    <div class="analysis-label">Max Unit SF</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
                 // Display each strategy
                 let strategyIndex = 0;
                 for (const [strategyName, strategy] of Object.entries(data.strategies)) {
@@ -916,6 +848,24 @@ HTML_TEMPLATE = """
                                 <div class="result-header">
                                     <div class="result-title">${strategyName}</div>
                                     <div class="result-status ${statusClass}">${statusText}</div>
+                                </div>
+                                
+                                <div class="ami-distribution">
+                                    <h4>AMI Level Distribution</h4>
+                                    <div class="distribution-grid">
+                                        <div class="distribution-item">
+                                            <div style="font-weight: 600; color: #e74c3c;">${strategy.units_40_ami || 0}</div>
+                                            <div style="font-size: 0.8em;">40% AMI</div>
+                                        </div>
+                                        <div class="distribution-item">
+                                            <div style="font-weight: 600; color: #f39c12;">${strategy.units_60_ami || 0}</div>
+                                            <div style="font-size: 0.8em;">60% AMI</div>
+                                        </div>
+                                        <div class="distribution-item">
+                                            <div style="font-weight: 600; color: #27ae60;">${strategy.units_80_ami || 0}</div>
+                                            <div style="font-size: 0.8em;">80% AMI</div>
+                                        </div>
+                                    </div>
                                 </div>
                                 
                                 <div class="result-metrics">
@@ -948,12 +898,12 @@ HTML_TEMPLATE = """
                     }
                 }
                 
-                // Show recommendations if any strategies failed
+                // Show recommendations
                 if (data.recommendations && data.recommendations.length > 0) {
                     html += `
                         <div class="recommendations">
-                            <h4>💡 Smart Recommendations</h4>
-                            <p>The following modifications could help achieve your targets:</p>
+                            <h4>💡 Detailed Recommendations</h4>
+                            <p>Specific guidance to achieve your targets:</p>
                     `;
                     
                     data.recommendations.forEach(rec => {
@@ -991,14 +941,11 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    """Main page with the calculator interface."""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/calculate', methods=['POST'])
 def calculate():
-    """Process the uploaded file and calculate AMI strategies."""
     try:
-        # Get uploaded file
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'No file uploaded'})
         
@@ -1006,32 +953,16 @@ def calculate():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'})
         
-        # Get calculation mode
         mode = request.form.get('mode', 'cascading')
         
         # Read Excel file
         df = pd.read_excel(file)
         
         # Initialize calculator
-        calculator = UniversalGuaranteedAMICalculator()
+        calculator = EnhancedAMICalculator()
         
-        # Prepare parameters based on mode
-        if mode == 'custom':
-            weighted_min = float(request.form.get('weighted_min', 58))
-            weighted_max = float(request.form.get('weighted_max', 60))
-            ami_min = float(request.form.get('ami_min', 20))
-            ami_max = float(request.form.get('ami_max', 22))
-            
-            # Run custom optimization
-            result = calculator.process_corrected_ultimate_optimization(
-                df, 
-                mode='custom',
-                custom_weighted_range=(weighted_min, weighted_max),
-                custom_40_ami_range=(ami_min, ami_max)
-            )
-        else:
-            # Run preset optimization
-            result = calculator.process_corrected_ultimate_optimization(df, mode=mode)
+        # Run optimization
+        result = calculator.process_optimization(df, mode=mode)
         
         # Store results for download
         app.config['LAST_RESULTS'] = result
@@ -1043,14 +974,11 @@ def calculate():
 
 @app.route('/download/<int:strategy_index>')
 def download_strategy(strategy_index):
-    """Download Excel file for a specific strategy."""
     try:
-        # Get stored results
         results = app.config.get('LAST_RESULTS')
         if not results or not results.get('success'):
             return "No results available", 404
         
-        # Get strategy data
         strategy_names = list(results['strategies'].keys())
         if strategy_index >= len(strategy_names):
             return "Strategy not found", 404
@@ -1063,39 +991,8 @@ def download_strategy(strategy_index):
         
         # Create Excel file
         output = io.BytesIO()
-        
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Write the main data
-            df_result = strategy_data['df_with_ami']
-            df_result.to_excel(writer, sheet_name='AMI Strategy', index=False)
-            
-            # Get workbook and worksheet for formatting
-            workbook = writer.book
-            worksheet = writer.sheets['AMI Strategy']
-            
-            # Apply formatting
-            header_font = Font(bold=True, color="FFFFFF")
-            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            
-            # Format headers
-            for cell in worksheet[1]:
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = Alignment(horizontal="center")
-            
-            # Auto-adjust column widths
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)
-                worksheet.column_dimensions[column_letter].width = adjusted_width
-        
+        df_result = strategy_data['df_with_ami']
+        df_result.to_excel(output, index=False, engine='openpyxl')
         output.seek(0)
         
         # Generate filename
@@ -1113,13 +1010,5 @@ def download_strategy(strategy_index):
         return f"Error generating download: {str(e)}", 500
 
 if __name__ == '__main__':
-    # Test the calculator
-    try:
-        calculator = UniversalGuaranteedAMICalculator()
-        print("✅ Universal Guaranteed AMI Calculator loaded successfully")
-    except Exception as e:
-        print(f"❌ Error loading calculator: {e}")
-    
-    # Run the Flask app
     app.run(host='0.0.0.0', port=8080, debug=True)
 
