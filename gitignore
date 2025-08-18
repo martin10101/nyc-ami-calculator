@@ -1,4 +1,6 @@
-# Python
+# ====================================
+# PYTHON / BUILD
+# ====================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -21,28 +23,46 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
+# ====================================
+# VIRTUAL ENVIRONMENTS
+# ====================================
 venv/
 env/
 ENV/
 
-# IDE
+# ====================================
+# IDE & EDITOR
+# ====================================
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# ====================================
+# OS JUNK
+# ====================================
 .DS_Store
 Thumbs.db
 
-# Application specific
+# ====================================
+# APP SPECIFIC
+# ====================================
+# Uploaded input files (Excel, Word, etc.)
 upload/
+
+# Generated results (Excel, CSV, Word)
 results/
+
+# Logs (keep Railway clean, unless using persistent volumes)
 logs/
 *.log
 
-# Temporary files
+# Temporary scratch files
 *.tmp
 *.temp
 
+# ====================================
+# SECRETS / CONFIG (to protect sensitive info)
+# ====================================
+.env
+*.secret
