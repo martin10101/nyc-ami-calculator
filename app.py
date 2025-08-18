@@ -1,5 +1,4 @@
-# app.py
-import io, os, time, sqlite3
+import io, os, time, sqlite3, logging
 from typing import Optional
 
 import numpy as np
@@ -10,18 +9,21 @@ from fastapi.templating import Jinja2Templates
 
 from ami_core import allocate_with_scenarios
 
-app = FastAPI(title="NYC AMI Allocator", version="2.1")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ami")
+
+app = FastAPI(title="NYC AMI Allocator", version="2.2")
 templates = Jinja2Templates(directory="templates")
 
 DB_PATH = os.environ.get("AMI_DB", "/data/ami_log.sqlite")  # attach a Railway volume to /data for persistence
 
-# --------------- Loaders ---------------
+# ---------- loaders ----------
 
 def load_any_table(file_bytes: bytes, filename: str, sheet: Optional[str] = None) -> pd.DataFrame:
     name = filename.lower()
     bio = io.BytesIO(file_bytes)
 
-    if name.endswith(".xlsx") or name.endswith(".xlsm"):
+    if name.endswith((".xlsx",".xlsm")):
         xls = pd.ExcelFile(bio)
         sh = sheet or xls.sheet_names[0]
         return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sh)
@@ -56,7 +58,7 @@ def load_any_table(file_bytes: bytes, filename: str, sheet: Optional[str] = None
         return best
     raise ValueError("Unsupported file type. Upload .xlsx, .xlsm, .xls, .xlsb, .csv, or .docx")
 
-# --------------- DB (Master All Results) ---------------
+# ---------- DB (Master log) ----------
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -76,22 +78,15 @@ def log_run(filename: str, metrics: dict):
                 (int(time.time()), filename, scen, m["aff_sf_total"], m["sf_at_40"], m["pct40"], m["wavg"])
             )
 
-# --------------- Writers ---------------
-
-# --- REPLACE make_excel in app.py ---
+# ---------- Excel writer ----------
 
 def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: Optional[pd.DataFrame]=None, mirror_sheet_name: str="Sheet1", write_back_mode: str="new") -> bytes:
-    """
-    If write_back_mode == 'same', write a single sheet that mirrors the original (mirror DataFrame),
-    plus a Summary. Otherwise, keep the Master + Breakdown_A/B/C + Summary layout.
-    """
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
         fmt_pct = wb.add_format({"num_format": "0%"})
 
         if write_back_mode == "same" and mirror is not None:
-            # Write just the mirror sheet (original-like) + Summary
             mirror.to_excel(writer, index=False, sheet_name=mirror_sheet_name)
             # Summary
             def grade(m):
@@ -111,18 +106,19 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
                 })
             pd.DataFrame(rows).sort_values("Score", ascending=False).to_excel(writer, index=False, sheet_name="Summary")
         else:
-            # Original multi-sheet layout
             master = full.copy()
             master.to_excel(writer, index=False, sheet_name="Master")
-            for label in ["A","B","C"]:
-                if f"Assigned_AMI_{label}" in master.columns:
-                    col = master.columns.get_loc(f"Assigned_AMI_{label}")
-                    writer.sheets["Master"].set_column(col, col, 16, fmt_pct)
+            if "Master" in writer.sheets:
+                for label in ["A","B","C"]:
+                    colname = f"Assigned_AMI_{label}"
+                    if colname in master.columns:
+                        col = master.columns.get_loc(colname)
+                        writer.sheets["Master"].set_column(col, col, 16, fmt_pct)
 
             for label in ["A","B","C"]:
                 br = aff_br.copy()
                 if f"Assigned_AMI_{label}" in br.columns:
-                    br = br.rename(columns={f"Assigned_AMI_{label}": "Assigned_AMI"})
+                    br = br.rename(columns={f"Assigned_AMI_{label}":"Assigned_AMI"})
                 br.to_excel(writer, index=False, sheet_name=f"Breakdown_{label}")
                 ws = writer.sheets[f"Breakdown_{label}"]
                 for cname in ["AMI","Assigned_AMI"]:
@@ -150,17 +146,16 @@ def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: 
     buf.seek(0)
     return buf.getvalue()
 
-
-# --------------- UI ---------------
+# ---------- UI ----------
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-# --------------- API ---------------
-
 @app.get("/health")
 def health(): return {"status": "ok"}
+
+# ---------- API ----------
 
 @app.post("/preview")
 async def preview(
@@ -173,16 +168,16 @@ async def preview(
     content = await file.read()
     try:
         df = load_any_table(content, file.filename, sheet=sheet)
-        full, aff_br, metrics = allocate_with_scenarios(
+        full, aff_br, metrics, mirror_out, best_label = allocate_with_scenarios(
             df,
             require_family_at_40=bool(require_family_at_40),
             spread_40_max_per_floor=spread_40_max_per_floor,
             exempt_top_k_floors=exempt_top_k_floors,
         )
+        logger.info("Metrics: %s", metrics)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    # Build compact per-scenario buckets from affordable rows
     mask_aff = ~full["Assigned_AMI_A"].isna()
     aff_only = full.loc[mask_aff].copy()
 
@@ -215,12 +210,11 @@ async def preview(
     return {
         "filename": file.filename,
         "metrics": metrics,
+        "best": best_label,
         "A": buckets("A"),
         "B": buckets("B"),
         "C": buckets("C"),
     }
-
-# --- REPLACE ONLY the allocate() handler body return in app.py ---
 
 @app.post("/allocate")
 async def allocate(
@@ -240,15 +234,14 @@ async def allocate(
             spread_40_max_per_floor=spread_40_max_per_floor,
             exempt_top_k_floors=exempt_top_k_floors,
         )
+        logger.info("Metrics: %s", metrics)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    # Log run for Master All Results (if volume attached)
     base = os.path.splitext(os.path.basename(file.filename))[0]
     try: log_run(base, metrics)
     except Exception: pass
 
-    # Decide output structure
     mirror_sheet_name = sheet or "Sheet1"
     xlsx = make_excel(
         full, aff_br, metrics,
@@ -262,7 +255,6 @@ async def allocate(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename=\"{out_name}\"'}
     )
-
 
 @app.get("/export_master")
 def export_master():
