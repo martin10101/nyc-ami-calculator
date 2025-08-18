@@ -80,70 +80,88 @@ def log_run(filename: str, metrics: dict):
 
 # ---------- Excel writer ----------
 
-def make_excel(full: pd.DataFrame, aff_br: pd.DataFrame, metrics: dict, mirror: Optional[pd.DataFrame]=None, mirror_sheet_name: str="Sheet1", write_back_mode: str="new") -> bytes:
+def make_excel(
+    full: pd.DataFrame,
+    aff_br: pd.DataFrame,
+    metrics: dict,
+    mirror: Optional[pd.DataFrame] = None,
+    mirror_sheet_name: str = "Sheet1",
+    write_back_mode: str = "new",
+) -> bytes:
+    """
+    Always produce:
+      - Mirror (if write_back_mode == "same") under the original sheet name
+      - Master (All Columns)  -> the full table with Assigned_AMI_S1..R3 columns
+      - Scenario_S1..Scenario_R3 -> affordable-only breakdown for each scenario
+      - Summary                -> metrics + scores
+
+    This way the workbook always contains ALL six scenarios, regardless of write mode.
+    """
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
         fmt_pct = wb.add_format({"num_format": "0%"})
+        labels = list(metrics.keys())  # ["S1","S2","S3","R1","R2","R3"]
 
-        labels = list(metrics.keys())
-
+        # 1) Mirror sheet (only if write-back-to-same)
         if write_back_mode == "same" and mirror is not None:
             mirror.to_excel(writer, index=False, sheet_name=mirror_sheet_name)
-            # Summary
-            def grade(m):
-                wavg = min(m["wavg"], 60.0)
-                pct  = max(min(m["pct40"], 21.0), 20.0)
-                return round(1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0, 3)
-            rows=[]
-            for scen in labels:
-                m = metrics[scen]
-                rows.append({
-                    "Scenario": scen,
-                    "Affordable SF (total)": f"{m['aff_sf_total']:,.2f}",
-                    "SF @ 40%": f"{m['sf_at_40']:,.2f}",
-                    "% @ 40%": f"{m['pct40']:.3f}%",
-                    "Weighted Avg AMI": f"{m['wavg']:.3f}%",
-                    "Score": grade(m),
-                })
-            pd.DataFrame(rows).sort_values("Score", ascending=False).to_excel(writer, index=False, sheet_name="Summary")
-        else:
-            master = full.copy()
-            master.to_excel(writer, index=False, sheet_name="Master")
-            if "Master" in writer.sheets:
-                for label in labels:
-                    colname = f"Assigned_AMI_{label}"
-                    if colname in master.columns:
-                        col = master.columns.get_loc(colname)
-                        writer.sheets["Master"].set_column(col, col, 16, fmt_pct)
+            # Simple percent formatting if an AMI column is present
+            if "AMI" in mirror.columns:
+                ws = writer.sheets[mirror_sheet_name]
+                col = mirror.columns.get_loc("AMI")
+                ws.set_column(col, col, 14, fmt_pct)
 
-            for label in labels:
-                br = aff_br.copy()
-                if f"Assigned_AMI_{label}" in br.columns:
-                    br = br.rename(columns={f"Assigned_AMI_{label}":"Assigned_AMI"})
-                br.to_excel(writer, index=False, sheet_name=f"Breakdown_{label}")
-                ws = writer.sheets[f"Breakdown_{label}"]
-                for cname in ["AMI","Assigned_AMI"]:
-                    if cname in br.columns:
-                        c = br.columns.get_loc(cname)
-                        ws.set_column(c, c, 16, fmt_pct)
+        # 2) Master (all columns, with every Assigned_AMI_* column)
+        master_name = "Master (All Columns)"
+        master = full.copy()
+        master.to_excel(writer, index=False, sheet_name=master_name)
+        ws_master = writer.sheets[master_name]
+        # Format each Assigned_AMI_* as %
+        for c in master.columns:
+            if str(c).startswith("Assigned_AMI_"):
+                col = master.columns.get_loc(c)
+                ws_master.set_column(col, col, 18, fmt_pct)
 
-            def grade(m):
-                wavg = min(m["wavg"], 60.0)
-                pct  = max(min(m["pct40"], 21.0), 20.0)
-                return round(1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0, 3)
-            rows=[]
-            for scen in labels:
-                m = metrics[scen]
-                rows.append({
-                    "Scenario": scen,
-                    "Affordable SF (total)": f"{m['aff_sf_total']:,.2f}",
-                    "SF @ 40%": f"{m['sf_at_40']:,.2f}",
-                    "% @ 40%": f"{m['pct40']:.3f}%",
-                    "Weighted Avg AMI": f"{m['wavg']:.3f}%",
-                    "Score": grade(m),
-                })
-            pd.DataFrame(rows).sort_values("Score", ascending=False).to_excel(writer, index=False, sheet_name="Summary")
+        # 3) Per-scenario sheets: affordable-only breakdown
+        #    For each label, we rename Assigned_AMI_<label> -> Assigned_AMI
+        base_cols = [c for c in ["FLOOR", "APT", "BED", "NET SF", "AMI_RAW"] if c in aff_br.columns]
+        for label in labels:
+            br = aff_br.copy()
+            # Keep only the base cols + assigned col for this scenario
+            keep = base_cols + [f"Assigned_AMI_{label}"]
+            br = br[[c for c in keep if c in br.columns]]
+            br = br.rename(columns={f"Assigned_AMI_{label}": "Assigned_AMI"})
+            sheet = f"Scenario_{label}"
+            br.to_excel(writer, index=False, sheet_name=sheet)
+            ws = writer.sheets[sheet]
+            # Format AMI and AMI_RAW (if present)
+            if "Assigned_AMI" in br.columns:
+                ws.set_column(br.columns.get_loc("Assigned_AMI"), br.columns.get_loc("Assigned_AMI"), 14, fmt_pct)
+            if "AMI_RAW" in br.columns:
+                # AMI_RAW may not be numeric, so do not apply pct format here
+                ws.set_column(br.columns.get_loc("AMI_RAW"), br.columns.get_loc("AMI_RAW"), 12)
+
+        # 4) Summary sheet with scores
+        def grade(m):
+            wavg = min(m["wavg"], 60.0)
+            pct  = max(min(m["pct40"], 21.0), 20.0)
+            return round(1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0, 3)
+
+        rows = []
+        for scen in labels:
+            m = metrics[scen]
+            rows.append({
+                "Scenario": scen,
+                "Affordable SF (total)": f"{m['aff_sf_total']:,.2f}",
+                "SF @ 40%": f"{m['sf_at_40']:,.2f}",
+                "% @ 40%": f"{m['pct40']:.3f}%",
+                "Weighted Avg AMI": f"{m['wavg']:.3f}%",
+                "Score": grade(m),
+            })
+        pd.DataFrame(rows).sort_values("Score", ascending=False).to_excel(
+            writer, index=False, sheet_name="Summary"
+        )
 
     buf.seek(0)
     return buf.getvalue()
