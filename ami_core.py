@@ -338,20 +338,24 @@ def generate_scenarios(
 # Public API
 # ---------------------------
 
+# --- REPLACE allocate_with_scenarios in ami_core.py ---
+
 def allocate_with_scenarios(
     df: pd.DataFrame,
     low_share=0.20, high_share=0.21, avg_low=0.59, avg_high=0.60,
     require_family_at_40: bool = False,
     spread_40_max_per_floor: Optional[int] = None,
     exempt_top_k_floors: int = 0,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Dict]]:
+):
     df = _normalize_headers(df)
     if "NET SF" not in df.columns:
         raise ValueError("Missing NET SF column after normalization.")
-    aff_mask = _affordable_mask(df)
-    if not aff_mask.any():
-        raise ValueError("No pre-designated affordable units detected (need AMI or Affordable flag).")
-    aff = df.loc[aff_mask].copy()
+
+    sel = _selected_for_ami_mask(df)
+    if not sel.any():
+        raise ValueError("No AMI-selected rows detected. Fill the AMI column (any value) to mark selected rows.")
+
+    aff = df.loc[sel].copy()
 
     scen = generate_scenarios(
         aff,
@@ -361,15 +365,52 @@ def allocate_with_scenarios(
         exempt_top_k_floors=exempt_top_k_floors,
     )
 
+    # attach scenario assignments to the full table (separate columns)
     full = df.copy()
     for label in ["A","B","C"]:
         full[f"Assigned_AMI_{label}"] = np.nan
-        full.loc[aff_mask, f"Assigned_AMI_{label}"] = scen[label]["assigned"]
+        full.loc[sel, f"Assigned_AMI_{label}"] = scen[label]["assigned"]
 
-    base_cols = [c for c in ["FLOOR","APT","BED","NET SF","AMI"] if c in df.columns]
-    aff_br = df.loc[aff_mask, base_cols].copy()
+    # make an “affordable only” breakdown for each scenario
+    base_cols = [c for c in ["FLOOR","APT","BED","NET SF","AMI_RAW"] if c in df.columns]
+    aff_br = df.loc[sel, base_cols].copy()
     for label in ["A","B","C"]:
         aff_br[f"Assigned_AMI_{label}"] = scen[label]["assigned"]
 
-    metrics = {k: v["metrics"] for k,v in scen.items()}
-    return full, aff_br, metrics
+    # choose “best” scenario for mirror write-back (closest to 20% and 60%)
+    def score(m):
+        wavg = min(m["wavg"], 60.0)
+        pct  = max(min(m["pct40"], 21.0), 20.0)
+        return 1000.0 - abs(60.0 - wavg)*50.0 - abs(20.0 - pct)*100.0
+
+    metrics = {k:v["metrics"] for k,v in scen.items()}
+    best_label = max(["A","B","C"], key=lambda k: score(metrics[k]))
+    best_assigned = scen[best_label]["assigned"]
+
+    # build a mirror of the original sheet:
+    # overwrite AMI for selected rows with the chosen scenario,
+    # preserve every other column and row order; append a totals block.
+    mirror = df.copy()
+    # If original had AMI_RAW and AMI, prefer to overwrite the visible AMI column if present,
+    # otherwise create it.
+    target_col = "AMI" if "AMI" in mirror.columns else "AMI"
+    mirror[target_col] = mirror.get(target_col, np.nan)
+    mirror.loc[sel, target_col] = best_assigned  # decimals: 0.4, 0.6, etc.
+
+    # append a small totals block (blank row + 4 lines)
+    total_sf = float(aff["NET SF"].sum())
+    sf40 = float(aff["NET SF"].to_numpy()[np.isclose(best_assigned, 0.40)].sum())
+    pct40 = (sf40 / total_sf * 100.0) if total_sf else 0.0
+    wavg = _sf_avg(best_assigned, aff["NET SF"].to_numpy()) * 100.0
+
+    footer = pd.DataFrame({
+        list(mirror.columns)[0]: [
+            "", "Affordable SF total", "SF at 40% AMI", "% at 40% AMI", "Weighted Avg AMI"
+        ],
+        list(mirror.columns)[1] if len(mirror.columns) > 1 else "Value": [
+            "", f"{total_sf:,.2f}", f"{sf40:,.2f}", f"{pct40:.3f}%", f"{wavg:.3f}%"
+        ]
+    })
+    mirror_out = pd.concat([mirror, footer], ignore_index=True)
+
+    return full, aff_br, metrics, mirror_out, best_label
