@@ -49,21 +49,47 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 def _selected_for_ami_mask(d: pd.DataFrame) -> pd.Series:
-    """Row is selected if:
-       - there is an explicit Affordable/Selected flag (yes/true/1/x/✓), OR
-       - the AMI cell is non-empty (any text/number)."""
+    """
+    Priority for detecting which rows are PRESELECTED for AMI:
+      1) If a dedicated flag exists (Affordable/Selected/etc): use Yes/True/1/✓/✔/X.
+      2) If a 'signed_AMI' style column exists: any non-empty value => selected.
+      3) Otherwise use the visible AMI column *strictly*:
+         - 'x'/'✓'/'✔'/'yes'/'y'/'1' => selected
+         - numeric in a narrow band around 0.60 (0.55–0.65) => selected  (typical placeholder)
+         - everything else (blank, 1.0, random text) => not selected
+    We always require NET SF to be present.
+    """
+    # 1) explicit flag column?
     for c in d.columns:
-        key=str(c).strip().lower()
+        key = str(c).strip().lower()
         if key in {"aff","affordable","selected","ami_selected","is_affordable","target_ami"}:
-            return d[c].astype(str).str.strip().str.lower().isin({"1","true","yes","y","✓","✔","x"}) & d["NET SF"].notna()
+            return d[c].astype(str).str.strip().str.lower().isin(
+                {"1","true","yes","y","✓","✔","x"}
+            ) & d["NET SF"].notna()
 
+    # 2) 'signed_AMI' style columns commonly seen in client files
+    for c in d.columns:
+        if str(c).strip().lower() in {"signed_ami","signedami","assigned_ami","assignedami"}:
+            return d[c].astype(str).str.strip().ne("").fillna(False) & d["NET SF"].notna()
+
+    # 3) strict AMI column rule
     if "AMI_RAW" in d.columns:
-        return d["AMI_RAW"].astype(str).str.strip().ne("").fillna(False) & d["NET SF"].notna()
+        raw = d["AMI_RAW"].astype(str).str.strip()
+        yesish = raw.str.upper().isin({"X","✓","✔","YES","Y","1"})
+        # numeric close to 0.6 => selected (typical placeholder the client uses)
+        def _num_is_06(s):
+            try:
+                v = float(str(s).upper().replace("%","").replace("AMI","").replace("AIME","").strip())
+                v = v/100.0 if v>1.0 else v
+                return 0.55 <= v <= 0.65
+            except:
+                return False
+        near06 = raw.apply(_num_is_06)
+        return (yesish | near06) & d["NET SF"].notna()
 
-    if "AMI" in d.columns:
-        return d["AMI"].notna() & d["NET SF"].notna()
-
+    # fallback: nothing selected
     return pd.Series(False, index=d.index)
+
 
 # ----------------------------
 # Math helpers
