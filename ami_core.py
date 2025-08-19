@@ -1,3 +1,45 @@
+# top of file
+import os
+# ...
+DEFAULT_MILP_TIMELIMIT = int(os.getenv("MILP_TIMELIMIT_SEC", "10"))
+
+# in _try_exact_optimize(...):
+    # Phase 1
+    prob1, x1 = build_lp(maximize_wavg=True)
+    prob1.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
+    # Phase 2
+    prob2, x2 = build_lp(maximize_wavg=False, wavg_floor=wavg_num_opt)
+    prob2.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
+
+# public entry
+def allocate_with_scenarios(
+    df: pd.DataFrame,
+    low_share=0.20, high_share=0.21, avg_low=0.59, avg_high=0.60,
+    require_family_at_40: bool = False,
+    spread_40_max_per_floor: Optional[int] = None,
+    exempt_top_k_floors: int = 0,
+    return_top_k: int = 3,
+    use_milp: bool = True  # NEW
+):
+    d = _normalize_headers(df)
+    if "NET SF" not in d.columns:
+        raise ValueError("Missing NET SF column after normalization.")
+
+    sel = _selected_for_ami_mask(d)
+    if not sel.any():
+        raise ValueError("No AMI-selected rows detected. Put ANY value in the AMI column for selected rows (e.g., 0.6, x, ✓).")
+
+    aff = d.loc[sel].copy()
+    scen = generate_scenarios(
+        aff,
+        low_share=low_share, high_share=high_share, avg_low=avg_low, avg_high=avg_high,
+        require_family_at_40=require_family_at_40,
+        spread_40_max_per_floor=spread_40_max_per_floor,
+        exempt_top_k_floors=exempt_top_k_floors,
+        try_exact=use_milp,                # << toggle here
+        return_top_k=return_top_k
+    )
+    # ... (rest identical to the previous full version you pasted)
 # ami_core.py — unified, optimized allocator
 # - Any band allowed: {0.40,0.60,0.70,0.80,0.90,1.00}
 # - 20–21% SF at 40%, weighted average 59–60% (target 60.00)
