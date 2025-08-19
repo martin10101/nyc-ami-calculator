@@ -1,7 +1,8 @@
-# top of file
-import os
-# ...
-DEFAULT_MILP_TIMELIMIT = int(os.getenv("MILP_TIMELIMIT_SEC", "10"))
+# ami_core.py — unified, optimized allocator
+
+from typing import Optional, Dict, List, Tuple
+import numpy as np
+import pandas as pd  # <-- MUST be here before any `pd.` type hints
 
 
 # public entry
