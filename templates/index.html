@@ -18,6 +18,7 @@
     .pill{display:inline-block;padding:6px 8px;margin:4px;border-radius:999px;background:#1e2533;border:1px solid #2b3550;color:#cfe0ff;font-size:12px}
     .title{font-size:22px;font-weight:700;margin:0 0 10px}
     .muted{color:var(--muted)}
+    #spinner{display:none;margin:8px 0;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -43,20 +44,24 @@
           </select>
         </div>
         <div>
-          <label>Exempt top K floors from 40% (optional)</label>
-          <input name="exempt_top_k_floors" placeholder="e.g., 2"/>
+          <label>Max 40% units per floor (optional)</label>
+          <input name="spread_40_max_per_floor" placeholder="e.g., 2"/>
         </div>
       </div>
       <div class="row">
         <div>
-          <label>Max 40% units per floor (optional)</label>
-          <input name="spread_40_max_per_floor" placeholder="e.g., 2"/>
+          <label>Exempt top K floors from 40% (optional)</label>
+          <input name="exempt_top_k_floors" placeholder="e.g., 2"/>
         </div>
         <div>
           <label>Return top scenarios</label>
           <select name="top_k"><option>3</option><option>2</option></select>
         </div>
       </div>
+      <div style="margin-top:6px">
+        <label><input type="checkbox" id="fast_preview" checked/> Fast preview (heuristic only)</label>
+      </div>
+      <div id="spinner">Working…</div>
       <div style="margin-top:12px">
         <button class="btn" type="button" onclick="doPreview()">Preview scenarios</button>
         <button class="btn secondary" type="button" onclick="doDownload()">Download Excel (Master + Breakdowns)</button>
@@ -68,44 +73,51 @@
   <div id="out"></div>
 </div>
 <script>
+function setBusy(b){ document.getElementById('spinner').style.display = b?'block':'none'; }
 async function doPreview(){
-  const f = document.getElementById('f');
-  const fd = new FormData(f);
-  const r = await fetch('/preview', {method:'POST', body:fd});
-  const j = await r.json();
-  if(j.error){ alert(j.error); return; }
-  const out = document.getElementById('out');
-  out.innerHTML='';
-  const metrics = j.metrics;
-  const scenarios = j.scenarios;
-  const grid = document.createElement('div'); grid.className='grid'; out.appendChild(grid);
-  Object.keys(scenarios).forEach(k=>{
-    const card = document.createElement('div'); card.className='card'; grid.appendChild(card);
-    card.innerHTML = `<div class="title">Scenario ${k}</div>
-      <div class="muted">WAvg: ${metrics[k].wavg.toFixed(3)}% · 40% SF: ${metrics[k].pct40.toFixed(3)}%</div>`;
-    const buckets = scenarios[k];
-    ["40","60","70","80","90","100"].forEach(b=>{
-      if(!buckets[b]?.length) return;
-      const h = document.createElement('div'); h.style.marginTop='8px';
-      h.innerHTML = `<div class="muted">▼ ${b}% AMI units (${buckets[b].length})</div>`;
-      buckets[b].forEach(u=>{
-        const p = document.createElement('span'); p.className='pill';
-        p.textContent = `${u.APT ?? ''} · ${u.FLOOR ?? ''}F · ${u.NET_SF.toFixed(0)} sf`;
-        h.appendChild(p);
+  setBusy(true);
+  try{
+    const f = document.getElementById('f');
+    const fd = new FormData(f);
+    fd.append('fast_preview', document.getElementById('fast_preview').checked ? '1' : '0');
+    const r = await fetch('/preview', {method:'POST', body:fd});
+    const j = await r.json();
+    if(j.error){ alert(j.error); return; }
+    const out = document.getElementById('out');
+    out.innerHTML='';
+    const grid = document.createElement('div'); grid.className='grid'; out.appendChild(grid);
+    Object.keys(j.scenarios).forEach(k=>{
+      const card = document.createElement('div'); card.className='card'; grid.appendChild(card);
+      const m=j.metrics[k];
+      card.innerHTML = `<div class="title">Scenario ${k}</div>
+        <div class="muted">WAvg: ${m.wavg.toFixed(3)}% · 40% SF: ${m.pct40.toFixed(3)}%</div>`;
+      const b=j.scenarios[k];
+      ["40","60","70","80","90","100"].forEach(t=>{
+        if(!b[t]?.length) return;
+        const s=document.createElement('div'); s.style.marginTop='8px';
+        s.innerHTML=`<div class="muted">▼ ${t}% AMI units (${b[t].length})</div>`;
+        b[t].forEach(u=>{
+          const p=document.createElement('span'); p.className='pill';
+          p.textContent=`${u.APT??''} · ${u.FLOOR??''}F · ${u.NET_SF.toFixed(0)} sf`;
+          s.appendChild(p);
+        });
+        card.appendChild(s);
       });
-      card.appendChild(h);
     });
-  });
+  } finally{ setBusy(false); }
 }
 async function doDownload(){
-  const f = document.getElementById('f');
-  const fd = new FormData(f);
-  const r = await fetch('/allocate', {method:'POST', body:fd});
-  if(!r.ok){ const j=await r.json(); alert(j.error||'Error'); return; }
-  const blob = await r.blob();
-  const url = URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='AMI Scenarios.xlsx'; document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  setBusy(true);
+  try{
+    const f = document.getElementById('f');
+    const fd = new FormData(f);
+    const r = await fetch('/allocate', {method:'POST', body:fd});
+    if(!r.ok){ const j=await r.json(); alert(j.error||'Error'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='AMI Scenarios.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } finally{ setBusy(false); }
 }
 </script>
 </body>
