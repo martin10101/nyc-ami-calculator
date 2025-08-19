@@ -3,13 +3,6 @@ import os
 # ...
 DEFAULT_MILP_TIMELIMIT = int(os.getenv("MILP_TIMELIMIT_SEC", "10"))
 
-# in _try_exact_optimize(...):
-    # Phase 1
-    prob1, x1 = build_lp(maximize_wavg=True)
-    prob1.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
-    # Phase 2
-    prob2, x2 = build_lp(maximize_wavg=False, wavg_floor=wavg_num_opt)
-    prob2.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
 
 # public entry
 def allocate_with_scenarios(
