@@ -1,2 +1,3 @@
 [phases.setup]
-nixPkgs = ['coin-or-cbc']
+# Use the canonical package name for the solver
+nixPkgs = ['cbc']
