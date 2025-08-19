@@ -1,6 +1,8 @@
 import io, os, time, sqlite3
 from typing import Optional, Dict, Any
 import pandas as pd
+import XlsxWriter  # ensure the engine is present
+pd.io.excel._excel_writer._writers['xlsxwriter'] = XlsxWriter
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
