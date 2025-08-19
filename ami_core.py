@@ -364,6 +364,13 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, mask40: np.ndarray,
     except Exception:
         return None
 
+    # Optional: read a MILP time limit from env, default 10s
+    import os
+    try:
+        tl = int(os.getenv("MILP_TIMELIMIT_SEC", "10"))
+    except Exception:
+        tl = 10
+
     n = len(sf)
     I = list(range(n))
     bands = sorted(set(allowed_bands))
@@ -376,9 +383,11 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, mask40: np.ndarray,
         x = {(i,b): pulp.LpVariable(f"x_{i}_{int(b*100)}", 0, 1, pulp.LpBinary) for i in I for b in bands}
         y = {b: pulp.LpVariable(f"y_{int(b*100)}", 0, 1, pulp.LpBinary) for b in bands}
 
+        # each unit chooses exactly one band
         for i in I:
             prob += pulp.lpSum(x[i,b] for b in bands) == 1
 
+        # enforce 40% preselection
         for i in I:
             if is40[i]:
                 prob += x[i,0.40] == 1
@@ -387,51 +396,59 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, mask40: np.ndarray,
             else:
                 prob += x[i,0.40] == 0
 
+        # 20–21% of affordable SF at 40%
         sf40 = pulp.lpSum(sf[i]*x[i,0.40] for i in I)
         prob += sf40 >= total_sf * low_share - 1e-6
         prob += sf40 <= total_sf * high_share + 1e-6
 
+        # weighted average 59–60
         wavg_num = pulp.lpSum(sf[i]*pulp.lpSum(b*x[i,b] for b in bands) for i in I)
         prob += wavg_num >= total_sf*avg_low - 1e-6
         prob += wavg_num <= total_sf*avg_high + 1e-6
 
+        # ≤3 bands in use
         for b in bands:
             for i in I:
                 prob += x[i,b] <= y[b]
         prob += pulp.lpSum(y[b] for b in bands) <= max_bands
 
         if maximize_wavg:
-            prob += wavg_num  # Phase 1: maximize average
+            # Phase 1: maximize the (clipped) average
+            prob += wavg_num
         else:
+            # Phase 2: keep that average, then optimize layout/revenue proxies
             if wavg_floor is not None:
-                prob += wavg_num >= wavg_floor - 1e-6  # keep max average
+                prob += wavg_num >= wavg_floor - 1e-6
             hi_term   = pulp.lpSum(Floors[i]*pulp.lpSum(x[i,b] for b in bands if b>=0.70) for i in I)
             lo40_term = pulp.lpSum(Floors[i]*x[i,0.40] for i in I)
-            # tiny preference for putting higher bands on larger SF
-            sf_hi = pulp.lpSum(sf[i]*pulp.lpSum(x[i,b] for b in bands if b>=0.70) for i in I)
+            sf_hi     = pulp.lpSum(sf[i]*pulp.lpSum(x[i,b] for b in bands if b>=0.70) for i in I)
             denom = max(1, n)
             prob += alpha * (hi_term/denom) - beta * (lo40_term/denom) + gamma * (sf_hi / float(total_sf))
         return prob, x
 
-    # Phase 1 — max average
+    # Phase 1 — find the best average
     prob1, x1 = build_lp(maximize_wavg=True)
-    prob1.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=12))
-    if pulp.LpStatus[prob1.status] not in ("Optimal","Not Solved","Optimal Infeasible","Infeasible"):
+    prob1.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=tl))
+    status1 = pulp.LpStatus[prob1.status]
+    if status1 not in ("Optimal","Not Solved","Optimal Infeasible","Infeasible"):
         return None
     wavg_num_opt = float(pulp.value(prob1.objective))
 
-    # Phase 2 — keep average, optimize layout
+    # Phase 2 — keep that average and improve layout
     prob2, x2 = build_lp(maximize_wavg=False, wavg_floor=wavg_num_opt)
-    prob2.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=12))
-    if pulp.LpStatus[prob2.status] not in ("Optimal","Not Solved","Optimal Infeasible","Infeasible"):
+    prob2.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=tl))
+    status2 = pulp.LpStatus[prob2.status]
+    if status2 not in ("Optimal","Not Solved","Optimal Infeasible","Infeasible"):
         return None
 
     assigned = np.zeros(n, dtype=float)
     for i in I:
         for b in bands:
             if pulp.value(x2[i,b]) >= 0.5:
-                assigned[i] = b; break
-        if assigned[i] == 0.0: return None
+                assigned[i] = b
+                break
+        if assigned[i] == 0.0:
+            return None
     return assigned
 
 # =========================
