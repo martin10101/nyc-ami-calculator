@@ -146,7 +146,7 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, beds: np.ndarray, lo
 
     # Build LP model
     def build_lp(maximize_wavg=True, wavg_floor=None):
-        prob = pulp.LpProblem("AMI_Allocation", pulp.LpMaximize if maximize_wavg else pulp.LpMinimize)
+        prob = pulp.LpProblem("AMI_Allocation", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("x", ((i, j) for i in range(n) for j in range(len(bands))),
                                   cat='Binary')
         
@@ -161,10 +161,13 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, beds: np.ndarray, lo
         
         # Weighted average 59-60%
         wavg = pulp.lpSum(bands[j] * sf[i] * x[i, j] for i in range(n) for j in range(len(bands))) / total_sf
+        prob += wavg >= avg_low
+        prob += wavg <= avg_high
+        
         if maximize_wavg:
             prob += wavg
         else:
-            prob += pulp.lpSum(floors[i] * x[i, 0] for i in range(n))  # Maximize vertical score by minimizing low floors at 40%
+            prob += pulp.lpSum(floors[i] * x[i, 0] for i in range(n))  # Maximize sum to put 40% on higher floors
             if wavg_floor is not None:
                 prob += wavg >= wavg_floor
         
@@ -181,14 +184,14 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, beds: np.ndarray, lo
         
         return prob, x
 
-    # Phase 1: Maximize wavg
+    # Phase 1: Maximize wavg within bounds
     prob1, x1 = build_lp(maximize_wavg=True)
     prob1.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
     if pulp.LpStatus[prob1.status] != 'Optimal':
         return None
     wavg_opt = pulp.value(prob1.objective)
 
-    # Phase 2: Maximize vertical/layout score given wavg >= optimal
+    # Phase 2: Maximize vertical score given wavg >= optimal (within bounds)
     prob2, x2 = build_lp(maximize_wavg=False, wavg_floor=wavg_opt)
     prob2.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=DEFAULT_MILP_TIMELIMIT))
     if pulp.LpStatus[prob2.status] != 'Optimal':
@@ -201,20 +204,22 @@ def _try_exact_optimize(sf: np.ndarray, floors: np.ndarray, beds: np.ndarray, lo
 # Heuristic fallback
 # =========================
 def _heuristic_assign(sf: np.ndarray, mask40: np.ndarray, target_avg=0.60, max_bands=3):
-    # Simple greedy assignment for remaining units
-    remaining = ~mask40
-    remaining_sf = sf[remaining].sum()
-    remaining_n = remaining.sum()
-    if remaining_n == 0:
-        return np.full(len(sf), 0.40)
-    
-    # Target SF for higher bands to hit avg
-    target_high_sf = (target_avg * sf.sum() - 0.40 * sf[mask40].sum()) / (1.00 - 0.40)  # Simplified for two bands
-    # ... (implement full heuristic logic as per original)
-
-    # Placeholder for full heuristic
     assigned = np.full(len(sf), 0.60)
     assigned[mask40] = 0.40
+    current_avg = _sf_avg(assigned, sf)
+    
+    bands_high = [0.70, 0.80, 0.90, 1.00]
+    remaining = ~mask40
+    rem_idx = np.where(remaining)[0]
+    np.random.shuffle(rem_idx)  # Random for variety
+    
+    while current_avg < target_avg and len(bands_high) > 0:
+        for i in rem_idx:
+            if current_avg >= target_avg:
+                break
+            assigned[i] = min(bands_high, key=lambda b: abs((current_avg * sf.sum() - assigned[i] * sf[i] + b * sf[i]) / sf.sum() - target_avg))
+            current_avg = _sf_avg(assigned, sf)
+    
     return assigned
 
 # =========================
@@ -244,8 +249,16 @@ def generate_scenarios(aff: pd.DataFrame, low_share=0.20, high_share=0.21, avg_l
         if need_family:
             # Ensure at least one 2BR+ in 40%
             if not np.any((beds >= 2) & m40):
-                # Swap or adjust
-                pass  # Implement adjustment
+                family_idx = np.where(beds >= 2)[0]
+                if len(family_idx) == 0:
+                    raise ValueError("No family units available for 40% requirement.")
+                # Swap a non-family in m40 with a family out
+                non_family_in = np.where(~(beds >= 2) & m40)[0]
+                if len(non_family_in) > 0:
+                    swap_in = np.random.choice(family_idx[~m40[family_idx]])
+                    swap_out = np.random.choice(non_family_in)
+                    m40[swap_out] = False
+                    m40[swap_in] = True
         
         # Assign bands
         if try_exact:
@@ -317,12 +330,19 @@ def enforce_max_bands(amis: np.ndarray, sf: np.ndarray, max_bands: int, targets:
     return amis
 
 def dedupe_scenarios(scens: Dict):
-    # Implement deduplication logic
-    return scens  # Placeholder
+    unique = {}
+    for k, v in scens.items():
+        ass_str = str(v["assigned"])
+        if ass_str not in unique:
+            unique[ass_str] = v
+    return {f"S{i+1}": v for i, v in enumerate(unique.values())}
 
 def prune_to_top_k(scens: Dict, top_k: int):
-    # Implement pruning logic
-    return scens  # Placeholder
+    def score(blob):
+        m = blob["metrics"]
+        return (m["wavg"] * 20.0) + blob["vscore"] - max(0, blob["bands_count"] - 3) * 2.0
+    sorted_scens = sorted(scens.items(), key=lambda x: score(x[1]), reverse=True)
+    return dict(sorted_scens[:top_k])
 
 # =========================
 # Public entry
