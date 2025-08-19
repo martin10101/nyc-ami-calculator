@@ -1,3 +1,0 @@
-[phases.setup]
-# Add Python & pip so "python -m venv" works during build
-nixPkgs = ['python311', 'python311Packages.pip', 'cbc']
