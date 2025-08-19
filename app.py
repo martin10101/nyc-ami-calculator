@@ -1,49 +1,92 @@
-import io, os, time, sqlite3
+import io
+import os
+import time
+import sqlite3
 from typing import Optional, Dict, Any
+
 import pandas as pd
 
-# --- Excel writer engine registration (Railway-safe) ---
-import xlsxwriter  # lowercase
-from pandas.io.excel import register_writer
-register_writer(xlsxwriter.Workbook)
-# --------------------------------------------------------
+# --- Excel writer engine registration (Railway‑safe) ---
+# Pandas uses openpyxl by default for .xlsx files, but we
+# explicitly register the xlsxwriter engine because it is
+# available and avoids case‑sensitivity issues in Railway.
+try:
+    import xlsxwriter as _xlsxwriter  # module name is lowercase
+    from pandas.io.excel import _excel_writer
+    _excel_writer._writers['xlsxwriter'] = _xlsxwriter
+except Exception:
+    pass
+# ---------------------------------------------------------
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-# NEW: allocate_with_scenarios now has fast/slow toggle
+# Import the core allocator.  It exposes allocate_with_scenarios,
+# which returns the full dataset with assigned AMI columns,
+# a subset with only affordable rows, a metrics dict, a mirror
+# table with footer, and the label of the best scenario.
 from ami_core import allocate_with_scenarios
 
+
+# Initialise FastAPI and templates
 app = FastAPI(title="NYC AMI Allocator", version="3.1")
 templates = Jinja2Templates(directory="templates")
 
+# Path for logging runs (Master All Results).  Railway
+# mounts /data as a persistent volume if configured.
 DB_PATH = os.environ.get("AMI_DB", "/data/ami_log.sqlite")
 
-# ---------- DB for Master All Results ----------
-def init_db():
+
+# ---------- DB helpers ----------
+def init_db() -> None:
+    """Initialise the sqlite database for recording runs."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as con:
-        con.execute("""CREATE TABLE IF NOT EXISTS runs(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts INTEGER, filename TEXT, scenario TEXT,
-            aff_sf_total REAL, sf_at_40 REAL, pct40 REAL, wavg REAL
-        )""")
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS runs(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER, filename TEXT, scenario TEXT,
+                aff_sf_total REAL, sf_at_40 REAL, pct40 REAL, wavg REAL
+            )"""
+        )
 
-def log_run(filename: str, metrics: Dict[str, Any]):
+
+def log_run(filename: str, metrics: Dict[str, Any]) -> None:
+    """Insert one row per scenario into the runs table."""
     init_db()
     with sqlite3.connect(DB_PATH) as con:
         for scen, m in metrics.items():
             con.execute(
-                "INSERT INTO runs(ts, filename, scenario, aff_sf_total, sf_at_40, pct40, wavg) VALUES (?,?,?,?,?,?,?)",
-                (int(time.time()), filename, scen, m["aff_sf_total"], m["sf_at_40"], m["pct40"], m["wavg"])
+                "INSERT INTO runs(ts, filename, scenario, aff_sf_total, sf_at_40, pct40, wavg)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (
+                    int(time.time()),
+                    filename,
+                    scen,
+                    m.get("aff_sf_total", 0.0),
+                    m.get("sf_at_40", 0.0),
+                    m.get("pct40", 0.0),
+                    m.get("wavg", 0.0),
+                ),
             )
 
+
 # ---------- File loader ----------
-def load_any_table(file_bytes: bytes, filename: str, sheet: Optional[str] = None) -> pd.DataFrame:
+def load_any_table(
+    file_bytes: bytes, filename: str, sheet: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Load a table from various formats (.xlsx, .xlsm, .xlsb, .xls, .csv, .docx).
+
+    - For Excel files we use pandas with the appropriate engine.
+    - For CSV we use pandas.read_csv.
+    - For DOCX we scan tables in the document and return the first
+      table that contains a column hinting at square footage ("sf").
+    """
     name = filename.lower()
     bio = io.BytesIO(file_bytes)
-    if name.endswith((".xlsx",".xlsm")):
+    if name.endswith((".xlsx", ".xlsm")):
         xls = pd.ExcelFile(bio)
         sh = sheet or xls.sheet_names[0]
         return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sh)
@@ -59,118 +102,221 @@ def load_any_table(file_bytes: bytes, filename: str, sheet: Optional[str] = None
         return pd.read_csv(io.BytesIO(file_bytes))
     if name.endswith(".docx"):
         from docx import Document
-        doc = Document(bio)
-        best=None
-        for t in doc.tables:
-            rows = [[c.text.strip() for c in r.cells] for r in t.rows]
-            if not rows or len(rows)<2: continue
-            df = pd.DataFrame(rows[1:], columns=rows[0])
-            if any("sf" in st.lower() for st in df.columns): best=df
-        if best is not None: return best
-        raise ValueError("No table found in DOCX")
-    raise ValueError("Unsupported file type")
 
-# ---------- UI ----------
+        doc = Document(bio)
+        best: Optional[pd.DataFrame] = None
+        for table in doc.tables:
+            rows = [[c.text.strip() for c in r.cells] for r in table.rows]
+            if not rows or len(rows) < 2:
+                continue
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+            # Prefer a table with a column that looks like a square footage column
+            if any("sf" in str(c).lower().replace(" ", "") for c in df.columns):
+                best = df
+                break
+            best = best or df
+        if best is None:
+            raise ValueError("No readable tables in DOCX.")
+        # Convert numeric columns where possible
+        for c in best.columns:
+            try:
+                best[c] = pd.to_numeric(best[c], errors="ignore")
+            except Exception:
+                pass
+        return best
+    raise ValueError(
+        "Unsupported file type. Upload .xlsx/.xlsm/.xls/.xlsb/.csv/.docx"
+    )
+
+
+# ---------- UI routes ----------
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
+    """Render the single‑page HTML interface."""
     return templates.TemplateResponse("index.html", {"request": request})
 
-# ---------- Preview (fast heuristic) ----------
+
+@app.get("/health")
+async def health() -> Dict[str, bool]:
+    """Simple health check endpoint."""
+    return {"ok": True}
+
+
+# ---------- Preview (fast heuristic or MILP) ----------
 @app.post("/preview")
 async def preview(
     file: UploadFile = File(...),
     sheet: Optional[str] = Form(None),
-    require_family_at_40: Optional[str] = Form("0"),
+    require_family_at_40: int = Form(0),
     spread_40_max_per_floor: Optional[int] = Form(None),
-    exempt_top_k_floors: Optional[int] = Form(0),
-    top_k: Optional[int] = Form(3),
+    exempt_top_k_floors: int = Form(0),
+    top_k: int = Form(3),
+    fast_preview: int = Form(1),  # 1 = heuristic only, 0 = allow MILP
 ):
+    """
+    Produce a quick preview of up to `top_k` scenarios without generating an Excel file.
+
+    If `fast_preview` is 1 (the default), the heuristic allocator is used for speed.
+    If `fast_preview` is 0, the MILP solver may be used if available.
+    """
     content = await file.read()
     try:
         df = load_any_table(content, file.filename, sheet)
-        _, _, metrics, _, best = allocate_with_scenarios(
+        # Determine whether to run the exact solver
+        use_milp = bool(1 - int(fast_preview))
+        # Compute scenarios.  allocate_with_scenarios returns
+        # (full, aff_br, metrics, mirror, best_label)
+        full, aff_br, metrics, mirror, best = allocate_with_scenarios(
             df,
-            require_family_at_40=bool(int(require_family_at_40)),
+            require_family_at_40=bool(require_family_at_40),
             spread_40_max_per_floor=spread_40_max_per_floor,
             exempt_top_k_floors=exempt_top_k_floors,
             return_top_k=top_k,
-            use_milp=False  # fast
+            use_milp=use_milp,
         )
-        return {"scenarios": {k: v for k, v in metrics.items()}, "best": best}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-# ---------- Full allocate (MILP + Excel) ----------
+    # Build per‑scenario buckets keyed by AMI band.  We only show
+    # affordable units (those rows where Assigned_AMI_X is not NaN).
+    labels = [c for c in full.columns if c.startswith("Assigned_AMI_")]
+    # Filter the full DataFrame to affordable units using the first scenario column
+    aff_only = full.loc[full[labels[0]].notna()].copy()
+
+    def buckets(label: str) -> Dict[str, List[Dict[str, Any]]]:
+        col = f"Assigned_AMI_{label}"
+        out = {"40": [], "60": [], "70": [], "80": [], "90": [], "100": []}
+        for _, r in aff_only.iterrows():
+            v = float(r[col])
+            key = {
+                0.4: "40",
+                0.6: "60",
+                0.7: "70",
+                0.8: "80",
+                0.9: "90",
+                1.0: "100",
+            }[round(v, 1)]
+            out[key].append(
+                {
+                    "APT": r.get("APT"),
+                    "FLOOR": None
+                    if pd.isna(r.get("FLOOR"))
+                    else int(r.get("FLOOR")),
+                    "BED": r.get("BED"),
+                    "NET_SF": float(r["NET SF"]),
+                }
+            )
+        return out
+
+    # Assemble response.  Each scenario is keyed by its label (S1, S2, …).
+    resp = {
+        "filename": file.filename,
+        "best": best,
+        "metrics": metrics,
+        "scenarios": {
+            lab.replace("Assigned_AMI_", ""): buckets(lab.replace("Assigned_AMI_", ""))
+            for lab in labels
+        },
+    }
+    return resp
+
+
+# ---------- Full allocate (generate workbook) ----------
 @app.post("/allocate")
 async def allocate(
     file: UploadFile = File(...),
     sheet: Optional[str] = Form(None),
-    require_family_at_40: Optional[str] = Form("0"),
+    write_back: str = Form("new"),  # "new" to rename, "same" to overwrite base filename
+    require_family_at_40: int = Form(0),
     spread_40_max_per_floor: Optional[int] = Form(None),
-    exempt_top_k_floors: Optional[int] = Form(0),
-    top_k: Optional[int] = Form(3),
-    write_back: Optional[str] = Form("same"),
-):
+    exempt_top_k_floors: int = Form(0),
+    top_k: int = Form(3),
+) -> StreamingResponse:
+    """
+    Solve the allocation problem (using MILP) and return an Excel workbook.
+
+    The workbook includes a master sheet with all columns, a breakdown
+    sheet for each scenario containing only the affordable units and
+    their assigned AMIs, and a summary sheet with scenario metrics.
+    The `write_back` parameter controls the output filename.
+    """
     content = await file.read()
     try:
         df = load_any_table(content, file.filename, sheet)
-        # Full solve (MILP) for the downloadable workbook
-        full, aff_br, metrics, mirror_out, best = allocate_with_scenarios(
+        full, aff_br, metrics, mirror, best = allocate_with_scenarios(
             df,
-            require_family_at_40=bool(int(require_family_at_40)),
+            require_family_at_40=bool(require_family_at_40),
             spread_40_max_per_floor=spread_40_max_per_floor,
             exempt_top_k_floors=exempt_top_k_floors,
             return_top_k=top_k,
-            use_milp=True
+            use_milp=True,
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    # Log Master All Results
+    # Log metrics for master results
     base = os.path.splitext(os.path.basename(file.filename))[0]
-    try: log_run(base, metrics)
-    except Exception: pass
+    try:
+        log_run(base, metrics)
+    except Exception:
+        pass
 
-    # Build workbook to match sample
+    # Build the Excel workbook.  We use xlsxwriter to avoid openpyxl
+    # dependency issues on Railway.
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        mirror_out.to_excel(w, index=False, sheet_name="Sheet1")  # mirror with footer
-        full.to_excel(w, index=False, sheet_name="Master (All Columns)")
-        for lab in list(metrics.keys()):
-            cols = [c for c in aff_br.columns if not c.startswith("Assigned_AMI_") or c == f"Assigned_AMI_{lab}"]
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        # Master sheet: full dataset with Assigned_AMI_X columns
+        full.to_excel(writer, index=False, sheet_name="Master")
+        # Breakdown sheets: only affordable rows and one scenario column
+        for lab in [c.replace("Assigned_AMI_", "") for c in full.columns if c.startswith("Assigned_AMI_")]:
+            cols = [c for c in aff_br.columns if not c.startswith("Assigned_AMI_")]
             br = aff_br[cols].copy()
-            br = br.rename(columns={f"Assigned_AMI_{lab}": "Assigned_AMI"})
-            br.to_excel(w, index=False, sheet_name=f"Scenario_{lab}")
-        sum_df = pd.DataFrame([
-            {"Scenario": k, "Affordable SF (total)": v["aff_sf_total"], "SF @ 40%": v["sf_at_40"], 
-             "% @ 40%": v["pct40"], "Weighted Avg AMI": v["wavg"], "Score": v.get("score", 0)} 
-            for k,v in metrics.items()
-        ])
-        sum_df.to_excel(w, index=False, sheet_name="Summary")
+            # The column in aff_br contains assignments for all scenarios; we overwrite
+            br[f"Assigned_AMI_{lab}"] = full.loc[
+                full[f"Assigned_AMI_{lab}"].notna(), f"Assigned_AMI_{lab}"
+            ].to_numpy()
+            br.to_excel(writer, index=False, sheet_name=f"Breakdown_{lab}")
+        # Summary sheet: scenario metrics as rows
+        summary_rows = []
+        for k, v in metrics.items():
+            row = {"Scenario": k}
+            row.update(v)
+            summary_rows.append(row)
+        pd.DataFrame(summary_rows).to_excel(
+            writer, index=False, sheet_name="Summary"
+        )
 
     buf.seek(0)
-    out_name = f"{base} - AMI Scenarios.xlsx"
+    out_name = (
+        f"{base}.xlsx" if write_back == "same" else f"{base} - AMI Scenarios.xlsx"
+    )
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'}
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
     )
 
+
 @app.get("/export_master")
-def export_master():
+async def export_master() -> StreamingResponse:
+    """
+    Download the log of all runs (Master All Results).  The log
+    contains one row per scenario per run and records the time,
+    filename, scenario label, affordable SF, SF at 40%, % at 40%,
+    and weighted average AMI.
+    """
     try:
         init_db()
         with sqlite3.connect(DB_PATH) as con:
             df = pd.read_sql_query("SELECT * FROM runs ORDER BY ts DESC", con)
     except Exception as e:
         return JSONResponse({"error": f"Cannot read DB: {e}"}, status_code=400)
-
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:  
-        df.to_excel(w, index=False, sheet_name="All Runs")
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="All Runs")
     buf.seek(0)
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="AMI Master All Results.xlsx"'}
+        headers={"Content-Disposition": 'attachment; filename="AMI Master All Results.xlsx"'},
     )
