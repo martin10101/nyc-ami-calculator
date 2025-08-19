@@ -73,51 +73,110 @@
   <div id="out"></div>
 </div>
 <script>
-function setBusy(b){ document.getElementById('spinner').style.display = b?'block':'none'; }
+function setBusy(b){
+  const sp = document.getElementById('spinner');
+  if (sp) sp.style.display = b ? 'block' : 'none';
+}
+function fmt(n){ return (typeof n==='number' && isFinite(n)) ? n.toFixed(3) : '—'; }
+
 async function doPreview(){
   setBusy(true);
   try{
     const f = document.getElementById('f');
     const fd = new FormData(f);
+    // fast preview (heuristic only) checkbox -> server expects 1/0
     fd.append('fast_preview', document.getElementById('fast_preview').checked ? '1' : '0');
-    const r = await fetch('/preview', {method:'POST', body:fd});
-    const j = await r.json();
-    if(j.error){ alert(j.error); return; }
+
+    const r = await fetch('/preview', { method:'POST', body: fd });
+    const j = await r.json().catch(()=>({error:'Invalid JSON from server'}));
+    if(!r.ok || j.error){
+      alert(j.error || ('HTTP '+r.status));
+      return;
+    }
+
+    // j should have: { filename, best, metrics:{S1:{wavg,pct40,...},...}, scenarios:{S1:{'40':[]...}, ...} }
     const out = document.getElementById('out');
-    out.innerHTML='';
-    const grid = document.createElement('div'); grid.className='grid'; out.appendChild(grid);
-    Object.keys(j.scenarios).forEach(k=>{
-      const card = document.createElement('div'); card.className='card'; grid.appendChild(card);
-      const m=j.metrics[k];
+    out.innerHTML = '';
+
+    // header
+    const hdr = document.createElement('div');
+    hdr.className = 'card';
+    hdr.innerHTML = `<div class="title">Preview · ${j.filename || ''}</div>
+      <div class="muted">Best: <b>${j.best||'—'}</b></div>`;
+    out.appendChild(hdr);
+
+    // scenarios grid
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    out.appendChild(grid);
+
+    const scenarios = j.scenarios || {};
+    const metrics = j.metrics || {};
+
+    Object.keys(scenarios).forEach(k=>{
+      const m = metrics[k] || {};
+      const card = document.createElement('div');
+      card.className = 'card';
+
       card.innerHTML = `<div class="title">Scenario ${k}</div>
-        <div class="muted">WAvg: ${m.wavg.toFixed(3)}% · 40% SF: ${m.pct40.toFixed(3)}%</div>`;
-      const b=j.scenarios[k];
+        <div class="muted">
+          Weighted Avg AMI: <b>${fmt(m.wavg)}%</b> ·
+          40% Share (by SF): <b>${fmt(m.pct40)}%</b>
+        </div>`;
+
+      const bands = scenarios[k];
       ["40","60","70","80","90","100"].forEach(t=>{
-        if(!b[t]?.length) return;
-        const s=document.createElement('div'); s.style.marginTop='8px';
-        s.innerHTML=`<div class="muted">▼ ${t}% AMI units (${b[t].length})</div>`;
-        b[t].forEach(u=>{
+        const arr = (bands && bands[t]) || [];
+        if(!arr.length) return;
+        const s = document.createElement('div'); s.style.marginTop='8px';
+        s.innerHTML = `<div class="muted">▼ ${t}% AMI units (${arr.length})</div>`;
+        arr.forEach(u=>{
           const p=document.createElement('span'); p.className='pill';
-          p.textContent=`${u.APT??''} · ${u.FLOOR??''}F · ${u.NET_SF.toFixed(0)} sf`;
+          const fl = (u.FLOOR==null || isNaN(u.FLOOR)) ? '' : `${u.FLOOR}F · `;
+          const sf = (typeof u.NET_SF==='number') ? `${Math.round(u.NET_SF)} sf` : '';
+          p.textContent = `${u.APT ?? ''} · ${fl}${sf}`;
           s.appendChild(p);
         });
         card.appendChild(s);
       });
+
+      grid.appendChild(card);
     });
-  } finally{ setBusy(false); }
+
+  } catch(err){
+    alert('Preview error: '+ (err?.message || err));
+  } finally {
+    setBusy(false);
+  }
 }
+
 async function doDownload(){
   setBusy(true);
   try{
     const f = document.getElementById('f');
     const fd = new FormData(f);
-    const r = await fetch('/allocate', {method:'POST', body:fd});
-    if(!r.ok){ const j=await r.json(); alert(j.error||'Error'); return; }
+    const r = await fetch('/allocate', { method:'POST', body: fd });
+
+    if(!r.ok){
+      let msg='Download failed';
+      try{
+        const j=await r.json();
+        if(j && j.error) msg=j.error;
+      }catch(_){}
+      alert(msg);
+      return;
+    }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download='AMI Scenarios.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+    const a = document.createElement('a');
+    a.href = url; a.download = 'AMI Scenarios.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-  } finally{ setBusy(false); }
+  } catch(err){
+    alert('Download error: '+ (err?.message || err));
+  } finally {
+    setBusy(false);
+  }
 }
 </script>
 </body>
