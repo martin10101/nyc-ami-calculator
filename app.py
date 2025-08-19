@@ -1,18 +1,20 @@
 import io, os, time, sqlite3
 from typing import Optional, Dict, Any
 import pandas as pd
+
 # --- Excel writer engine registration (Railway-safe) ---
-import pandas as pd
 try:
     import xlsxwriter as _xlsxwriter  # module name is lowercase
     from pandas.io.excel import _excel_writer
     _excel_writer._writers['xlsxwriter'] = _xlsxwriter
 except Exception:
     pass
-# -------------------------------------------------------- 
+# --------------------------------------------------------
+
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+
 
 # NEW: allocate_with_scenarios now has fast/slow toggle
 from ami_core import allocate_with_scenarios
