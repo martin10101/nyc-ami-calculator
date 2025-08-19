@@ -8,31 +8,102 @@ import pandas as pd  # <-- MUST be here before any `pd.` type hints
 # public entry
 def allocate_with_scenarios(
     df: pd.DataFrame,
-    low_share=0.20, high_share=0.21, avg_low=0.59, avg_high=0.60,
+    low_share: float = 0.20, high_share: float = 0.21,
+    avg_low: float = 0.59,  avg_high: float = 0.60,
     require_family_at_40: bool = False,
     spread_40_max_per_floor: Optional[int] = None,
     exempt_top_k_floors: int = 0,
     return_top_k: int = 3,
-    use_milp: bool = True  # NEW
+    use_milp: bool = True
 ):
+    """
+    Returns:
+        full        : full normalized table with one column per kept scenario (Assigned_AMI_<label>)
+        aff_br      : affordable-only breakdown with scenario columns
+        metrics_out : {label: {aff_sf_total, sf_at_40, pct40, wavg}}
+        mirror_out  : 'best scenario' mirror of the input (AMI column overwritten for selected rows)
+        best_label  : the label (e.g., 'S1') of the best-scoring scenario
+    """
+    # 1) normalize + detect selected affordable rows
     d = _normalize_headers(df)
     if "NET SF" not in d.columns:
-        raise ValueError("Missing NET SF column after normalization.")
+        raise ValueError("Missing NET SF column after normalization (looked for: NET SF / sqft / area).")
 
     sel = _selected_for_ami_mask(d)
     if not sel.any():
-        raise ValueError("No AMI-selected rows detected. Put ANY value in the AMI column for selected rows (e.g., 0.6, x, ✓).")
+        raise ValueError(
+            "No AMI-selected rows detected. Mark selected rows in the AMI column (e.g., 0.6 / 60% / X / ✓)."
+        )
 
+    # 2) run the scenario generator (MILP if use_milp=True, heuristic otherwise)
     aff = d.loc[sel].copy()
-    scen = generate_scenarios(
-        aff,
-        low_share=low_share, high_share=high_share, avg_low=avg_low, avg_high=avg_high,
+    scenarios = generate_scenarios(
+        aff_df=aff,
+        low_share=low_share, high_share=high_share,
+        avg_low=avg_low, avg_high=avg_high,
         require_family_at_40=require_family_at_40,
         spread_40_max_per_floor=spread_40_max_per_floor,
         exempt_top_k_floors=exempt_top_k_floors,
-        try_exact=use_milp,                # << toggle here
+        try_exact=use_milp,
         return_top_k=return_top_k
     )
+    if not scenarios:
+        raise RuntimeError("No feasible scenarios found under the given constraints.")
+
+    labels = list(scenarios.keys())
+
+    # 3) write scenario band assignments back onto a copy of the full table
+    full = d.copy()
+    for label in labels:
+        full[f"Assigned_AMI_{label}"] = np.nan
+        full.loc[sel, f"Assigned_AMI_{label}"] = scenarios[label]["assigned"]
+
+    # 4) build affordable-only breakdown with per-scenario assignments
+    base_cols = [c for c in ["FLOOR", "APT", "BED", "NET SF", "AMI_RAW"] if c in d.columns]
+    aff_br = d.loc[sel, base_cols].copy()
+    for label in labels:
+        aff_br[f"Assigned_AMI_{label}"] = scenarios[label]["assigned"]
+
+    # 5) pick the best scenario by score (weighted avg focus + layout bonus − band penalty)
+    def score_ext(m, vscore, bands_count):
+        return (m["wavg"] * 20.0) + vscore - max(0, bands_count - 3) * 2.0
+
+    metrics_out: Dict[str, Dict[str, float]] = {k: dict(scenarios[k]["metrics"]) for k in labels}
+    best_label = max(
+        labels,
+        key=lambda k: score_ext(metrics_out[k], scenarios[k].get("vscore", 0.0), scenarios[k].get("bands_count", 3))
+    )
+    best_assigned = scenarios[best_label]["assigned"]
+
+    # 6) build mirror sheet that overwrites AMI with the best scenario values on selected rows
+    mirror = d.copy()
+    target_col = "AMI" if "AMI" in mirror.columns else "AMI"
+    if target_col not in mirror.columns:
+        mirror[target_col] = np.nan
+    mirror.loc[sel, target_col] = best_assigned
+
+    # 7) append footer summary (affordable SF, 40% share, % at 40, weighted avg, best scenario)
+    total_sf = float(aff["NET SF"].sum())
+    sf_vec = aff["NET SF"].to_numpy(float)
+    sf40 = float(sf_vec[np.isclose(best_assigned, 0.40)].sum())
+    pct40 = (sf40 / total_sf * 100.0) if total_sf else 0.0
+    wavg = _sf_avg(best_assigned, sf_vec) * 100.0
+
+    footer = pd.DataFrame({
+        list(mirror.columns)[0]: ["", "Affordable SF total", "SF at 40% AMI", "% at 40% AMI", "Weighted Avg AMI", "Best Scenario"],
+        (list(mirror.columns)[1] if len(mirror.columns) > 1 else "Value"): [
+            "",
+            f"{total_sf:,.2f}",
+            f"{sf40:,.2f}",
+            f"{pct40:.3f}%",
+            f"{wavg:.3f}%",
+            best_label
+        ]
+    })
+    mirror_out = pd.concat([mirror, footer], ignore_index=True)
+
+    return full, aff_br, metrics_out, mirror_out, best_label
+
     # ... (rest identical to the previous full version you pasted)
 # ami_core.py — unified, optimized allocator
 # - Any band allowed: {0.40,0.60,0.70,0.80,0.90,1.00}
