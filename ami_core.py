@@ -8,13 +8,13 @@ import io
 
 try:
     import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))  
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 except ImportError:
     genai = None
 
 DEFAULT_TIMELIMIT = int(os.getenv("MILP_TIMELIMIT_SEC", "30"))
 ALLOWED_BANDS = [0.40, 0.60, 0.70, 0.80, 0.90, 1.00]
-FLEX_HEADERS = {  
+FLEX_HEADERS = {
     "NET SF": {"net sf", "netsf", "sqft", "area", "square feet"},
     "AMI": {"ami", "aff ami", "assigned_ami"},
     "FLOOR": {"floor", "story", "level"},
@@ -64,8 +64,8 @@ def validate_selection(df: pd.DataFrame, required_sf: float) -> Dict:
     return {"valid": True}
 
 def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: float = 0.20) -> Tuple[np.ndarray, Dict]:
-    aff = aff.sort_values(by=["FLOOR", "NET SF"])  
-    assigned = np.full(len(aff), bands[-1])  
+    aff = aff.sort_values(by=["FLOOR", "NET SF"])
+    assigned = np.full(len(aff), bands[-1])
     total_sf = aff["NET SF"].sum()
     if 0.40 in bands and required_40_pct > 0:
         cum_sf = 0
@@ -74,7 +74,7 @@ def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: flo
             assigned[i] = 0.40
             if cum_sf >= required_40_pct * total_sf:
                 break
-    assigned[assigned == bands[-1]] = bands[len(bands) // 2]  
+    assigned[assigned == bands[-1]] = bands[len(bands) // 2]
     metrics = {
         "wavg": np.dot(assigned, aff["NET SF"]) / total_sf,
         "pct40": (aff["NET SF"][assigned == 0.40].sum() / total_sf) if 0.40 in bands else 0,
@@ -84,7 +84,7 @@ def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: flo
 
 def milp_assign_ami(aff: pd.DataFrame, bands: List[float], required_40_pct: float = 0.20) -> Tuple[np.ndarray, Dict]:
     n = len(aff)
-    if n > 500:  
+    if n > 500:
         return heuristic_assign(aff, bands, required_40_pct)
     prob = LpProblem("AMI_Assignment", LpMaximize)
     assign = [[LpVariable(f"assign_{i}_{j}", cat='Binary') for j in range(len(bands))] for i in range(n)]
@@ -96,11 +96,11 @@ def milp_assign_ami(aff: pd.DataFrame, bands: List[float], required_40_pct: floa
         sf_40 = lpSum(assign[i][bands.index(0.40)] * sf[i] for i in range(n))
         prob += sf_40 >= required_40_pct * total_sf
         prob += sf_40 <= 0.21 * total_sf
-        prob += sf_40 >= 0.20 * total_sf  # Enforce not below 20% for large
+        prob += sf_40 >= 0.2001 * total_sf  # Slightly above 20% if needed for decimal
     wavg = lpSum(lpSum(assign[i][j] * bands[j] * sf[i] for j in range(len(bands))) for i in range(n)) / total_sf
     prob += wavg <= 0.60
     revenue = aff.apply(calculate_revenue_weight, axis=1).to_numpy()
-    obj = (wavg * 200) - abs(0.60 - wavg) * 100 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50
+    obj = wavg * 200 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50  # Removed abs - use post-score
     prob += obj
     prob.solve(time_limit=DEFAULT_TIMELIMIT)
     if LpStatus[prob.status] != 'Optimal':
@@ -121,9 +121,10 @@ def generate_scenarios(df: pd.DataFrame, required_sf: float, prefs: Dict) -> Dic
     aff = df[df["AMI"].notna()].copy()
     aff = aff.sort_values(by=["FLOOR", "NET SF"])  # Low/small first for 40%
     required_40_pct = 0.20 if required_sf > 10000 else 0
-    min_bands = 2 if required_sf <= 10000 else 3  # Intelligent choice
+    max_bands = prefs.get("max_bands", 3)  # From toggle
+    min_bands = 2 if required_sf <= 10000 else 3
     band_subsets = []
-    for r in range(min_bands, 4):
+    for r in range(min_bands, max_bands + 1):
         if required_40_pct > 0:
             for combo in combinations([b for b in ALLOWED_BANDS if b > 0.40], r-1):
                 band_subsets.append([0.40] + list(combo))
