@@ -1,5 +1,4 @@
 import io
-import os
 import zipfile
 from fastapi import FastAPI, UploadFile, Request, File
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -12,19 +11,15 @@ templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        return HTMLResponse(content="<h1>Error: Template not found. Check deployment.</h1><p>" + str(e) + "</p>")
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/assign_ami")
 async def assign_ami(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents)) if file.filename.endswith(('.xlsx', '.xls', '.xlsb')) else pd.DataFrame()
-        # Auto-detect required_sf from selected units
-        required_sf = df[df["AMI"].notna()]["NET SF"].sum() if "NET SF" in df and "AMI" in df else 0
-        prefs_dict = {}  # Bake rules in ami_core - no user prefs
+        required_sf = df[df["AMI"].notna()]["NET SF"].sum() if "NET SF" in df and "AMI" in df else 0  # Auto-detect
+        prefs_dict = {}  # Baked rules - no input
         scen, aff = generate_scenarios(df, required_sf, prefs_dict)
         outputs = build_outputs(df, scen, aff, prefs_dict)
         
