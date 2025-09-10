@@ -4,13 +4,11 @@ import zipfile
 from fastapi import FastAPI, UploadFile, Form, Request
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 import pandas as pd
 from ami_core import generate_scenarios, build_outputs  # Import from your core logic
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -35,4 +33,4 @@ async def assign_ami(file: UploadFile = File(...), required_sf: float = Form(...
         
         return StreamingResponse(zip_buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=optimized_ami.zip"})
     except Exception as e:
-        return {"error": str(e)}  # Now safe, as not in generator
+        return {"error": str(e)}
