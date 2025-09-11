@@ -102,10 +102,7 @@ def milp_assign_ami(aff: pd.DataFrame, bands: List[float], required_40_pct: floa
     revenue = aff.apply(calculate_revenue_weight, axis=1).to_numpy()
     obj = wavg * 200 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50  # Removed abs - use post-score
     prob += obj
-    try:
-        prob.solve(timeLimit=DEFAULT_TIMELIMIT)  # Fallback to timeLimit for older CBC
-    except TypeError:
-        prob.solve(time_limit=DEFAULT_TIMELIMIT)  # Try modern syntax
+    prob.solve(timeLimit=DEFAULT_TIMELIMIT)  # Changed to timeLimit (capital L, no underscore) for compatibility
     if LpStatus[prob.status] != 'Optimal':
         return heuristic_assign(aff, bands, required_40_pct)
     assigned = np.array([bands[j] for i in range(n) for j in range(len(bands)) if value(assign[i][j]) == 1])
