@@ -65,7 +65,7 @@ def validate_selection(df: pd.DataFrame, required_sf: float) -> Dict:
 
 def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: float = 0.20) -> Tuple[np.ndarray, Dict]:
     aff = aff.sort_values(by=["FLOOR", "NET SF"])
-    assigned = np.full(len(aff), bands[-1])
+    assigned = np.full(len(aff), bands[-1])  # Start with highest
     total_sf = aff["NET SF"].sum()
     if 0.40 in bands and required_40_pct > 0:
         cum_sf = 0
@@ -74,17 +74,13 @@ def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: flo
             assigned[i] = 0.40
             if cum_sf >= required_40_pct * total_sf:
                 break
-    # Enforce wavg <=0.6: If >0.6, reassign largest units to lower bands
+    # Enforce wavg <=0.6 with mix: Reassign to 0.6 if over
     wavg = np.dot(assigned, aff["NET SF"]) / total_sf
     if wavg > 0.6:
-        sorted_indices = np.argsort(aff["NET SF"])[::-1]  # Largest first
-        cum_adjust = 0
-        lower_band = bands[0] if required_40_pct > 0 else bands[len(bands)//2]  # Lowest or mid
+        sorted_indices = np.argsort(aff.apply(calculate_revenue_weight, axis=1))[::-1]  # Highest revenue first
         for i in sorted_indices:
             if assigned[i] > 0.6:
-                old = assigned[i]
-                assigned[i] = lower_band
-                cum_adjust += aff.iloc[i]["NET SF"] * (old - assigned[i])
+                assigned[i] = 0.60  # Reassign to 0.6
                 wavg = np.dot(assigned, aff["NET SF"]) / total_sf
                 if wavg <= 0.6:
                     break
@@ -109,17 +105,17 @@ def milp_assign_ami(aff: pd.DataFrame, bands: List[float], required_40_pct: floa
         sf_40 = lpSum(assign[i][bands.index(0.40)] * sf[i] for i in range(n))
         prob += sf_40 >= required_40_pct * total_sf
         prob += sf_40 <= 0.21 * total_sf
-        prob += sf_40 >= 0.2001 * total_sf  # Slightly above 20% if needed for decimal
+        prob += sf_40 >= 0.2001 * total_sf  # Slightly above 20% if needed
     wavg = lpSum(lpSum(assign[i][j] * bands[j] * sf[i] for j in range(len(bands))) for i in range(n)) / total_sf
-    prob += wavg <= 0.60
+    prob += wavg <= 0.60  # Constraint to keep avg <=0.6
     revenue = aff.apply(calculate_revenue_weight, axis=1).to_numpy()
-    obj = wavg * 200 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50  # Removed abs - use post-score
+    obj = wavg * 100 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50  # Lowered wavg weight
     prob += obj
     try:
-        prob.solve(timeLimit=DEFAULT_TIMELIMIT)  # Old keyword first
+        prob.solve(timeLimit=DEFAULT_TIMELIMIT)
     except:
         try:
-            prob.solve(time_limit=DEFAULT_TIMELIMIT)  # Modern if old fails
+            prob.solve(time_limit=DEFAULT_TIMELIMIT)
         except:
             return heuristic_assign(aff, bands, required_40_pct)
     if LpStatus[prob.status] != 'Optimal':
@@ -138,10 +134,12 @@ def generate_scenarios(df: pd.DataFrame, required_sf: float, prefs: Dict) -> Dic
     if not valid["valid"]:
         raise ValueError(valid["message"])
     aff = df[df["AMI"].notna()].copy()
-    aff = aff.sort_values(by=["FLOOR", "NET SF"])  # Low/small first for 40%
-    required_40_pct = 0.20 if required_sf > 10000 else 0
-    max_bands = prefs.get("max_bands", 3)  # From toggle
-    min_bands = 2 if required_sf <= 10000 else 3
+    aff = aff.sort_values(by=["FLOOR", "NET SF"])  # Low/small first
+    required_40_pct = 0.20 if required_sf > 0 and aff["NET SF"].sum() > 10000 else 0  # Trigger 40% if any SF >10k
+    max_bands = prefs.get("max_bands", 3)
+    min_bands = 2  # Default to 2, adjust if 40% needed
+    if required_40_pct > 0:
+        min_bands = 3  # Force 3 if 40% required
     band_subsets = []
     for r in range(min_bands, max_bands + 1):
         if required_40_pct > 0:
@@ -156,7 +154,7 @@ def generate_scenarios(df: pd.DataFrame, required_sf: float, prefs: Dict) -> Dic
         if assigned is not None:
             scen[f"Opt{len(scen)+1}"] = {"assigned": assigned, "metrics": metrics}
     if not scen:
-        raise ValueError("No valid scenarios")
+        raise ValueError("No valid scenarios - check constraints or input data")
     def score(m): return (m["wavg"] * 200) - abs(m["wavg"] - 0.60)*100 - abs(m["pct40"] - 0.20)*50 - (m["bands_count"] - min_bands)*30
     top_labels = sorted(scen, key=lambda k: score(scen[k]["metrics"]), reverse=True)[:2]
     return {k: scen[k] for k in top_labels}, aff
@@ -165,11 +163,11 @@ def build_outputs(df: pd.DataFrame, scen: Dict, aff: pd.DataFrame, prefs: Dict) 
     outputs = []
     for label, data in scen.items():
         out_df = df.copy()
-        out_df.loc[aff.index, "AMI"] = data["assigned"]
+        out_df.loc[aff.index, "AMI_RAW"] = data["assigned"]  # Match column name
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine='openpyxl') as writer:
             out_df.to_excel(writer, sheet_name="Master", index=False)
-            aff.assign(AMI=data["assigned"]).to_excel(writer, sheet_name="Affordable Breakdown", index=False)
+            aff.assign(AMI_RAW=data["assigned"]).to_excel(writer, sheet_name="Affordable Breakdown", index=False)
             metrics_df = pd.DataFrame([data["metrics"]])
             metrics_df.to_excel(writer, sheet_name="Summary", index=False)
             if genai:
