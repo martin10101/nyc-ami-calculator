@@ -74,6 +74,17 @@ def heuristic_assign(aff: pd.DataFrame, bands: List[float], required_40_pct: flo
             assigned[i] = 0.40
             if cum_sf >= required_40_pct * total_sf:
                 break
+    # Enforce wavg <=0.6: If >0.6, reassign some to lower bands
+    wavg = np.dot(assigned, aff["NET SF"]) / total_sf
+    if wavg > 0.6:
+        sorted_indices = np.argsort(aff["NET SF"])[::-1]  # Largest first for reassign to lower
+        cum_adjust = 0
+        for i in sorted_indices:
+            if assigned[i] > 0.6:
+                assigned[i] = bands[len(bands)//2]  # Mid band
+                cum_adjust += aff.iloc[i]["NET SF"] * (assigned[i] - bands[-1])
+                if (np.dot(assigned, aff["NET SF"]) / total_sf) <= 0.6:
+                    break
     assigned[assigned == bands[-1]] = bands[len(bands) // 2]
     metrics = {
         "wavg": np.dot(assigned, aff["NET SF"]) / total_sf,
