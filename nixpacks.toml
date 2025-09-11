@@ -1,3 +1,11 @@
 [phases.setup]
-# Add Python & pip so "python -m venv" works during build
 nixPkgs = ['python311', 'python311Packages.pip', 'cbc']
+
+[phases.build]
+cmds = [
+    "pip install --no-cache-dir -r requirements.txt",
+    "pip check"  # Verify dependency consistency
+]
+
+[phases.install]
+nixPkgs = []  # No additional pkgs needed here
