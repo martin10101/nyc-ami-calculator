@@ -103,12 +103,12 @@ def milp_assign_ami(aff: pd.DataFrame, bands: List[float], required_40_pct: floa
     obj = wavg * 200 + (lpSum(lpSum(assign[i][j] * bands[j] * revenue[i] for j in range(len(bands))) for i in range(n)) / n) * 50  # Removed abs - use post-score
     prob += obj
     try:
-        prob.solve(time_limit=DEFAULT_TIMELIMIT)  # Try modern keyword first
+        prob.solve(timeLimit=DEFAULT_TIMELIMIT)  # Old keyword first
     except:
         try:
-            prob.solve(timeLimit=DEFAULT_TIMELIMIT)  # Fallback to old keyword
+            prob.solve(time_limit=DEFAULT_TIMELIMIT)  # Modern if old fails
         except:
-            return heuristic_assign(aff, bands, required_40_pct)  # If both fail, heuristic
+            return heuristic_assign(aff, bands, required_40_pct)
     if LpStatus[prob.status] != 'Optimal':
         return heuristic_assign(aff, bands, required_40_pct)
     assigned = np.array([bands[j] for i in range(n) for j in range(len(bands)) if value(assign[i][j]) == 1])
