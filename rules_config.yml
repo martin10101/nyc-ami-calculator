@@ -1,0 +1,22 @@
+# NYC Housing Guide Rules
+nyc_rules:
+  validation_checks:
+    size_minima:
+      studio: 400
+      one_bedroom: 575
+      two_bedroom: 775
+    mix_checks:
+      max_studio_percent: 25
+      min_two_br_plus_percent: 50
+# Developer Preferences
+developer_preferences:
+  premium_score_weights:
+    floor: 0.45
+    net_sf: 0.30
+    bedrooms: 0.15
+    balcony: 0.10
+# Core Optimization Constraints
+optimization_rules:
+  waami_cap_percent: 60.0
+  max_bands_per_scenario: 3
+  deep_affordability_sf_threshold: 10000
