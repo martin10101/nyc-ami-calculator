@@ -52,11 +52,12 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     """
     # Increase the WAAMI cap for this test to make both outcomes valid, forcing the solver to optimize.
     sample_config['optimization_rules']['waami_cap_percent'] = 70.0
-    scenarios_dict = find_optimal_scenarios(sample_affordable_df, sample_config)
+    solver_results = find_optimal_scenarios(sample_affordable_df, sample_config)
+    scenarios = solver_results["scenarios"]
 
-    assert scenarios_dict.get("absolute_best"), "Solver should have found an absolute_best solution."
+    assert scenarios.get("absolute_best"), "Solver should have found an absolute_best solution."
 
-    top_scenario = scenarios_dict["absolute_best"][0]
+    top_scenario = scenarios["absolute_best"][0]
     assert top_scenario['status'] == 'OPTIMAL'
     assert top_scenario['bands'] == [40, 80]
 
@@ -73,8 +74,8 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     assert abs(top_scenario['waami'] - expected_waami) < 1e-9
 
     # Check that the best_2_band scenario was found
-    assert "best_2_band" in scenarios_dict
-    assert len(scenarios_dict["best_2_band"]["bands"]) == 2
+    assert "best_2_band" in scenarios
+    assert len(scenarios["best_2_band"]["bands"]) == 2
 
 
 def test_no_solution_found(sample_affordable_df, sample_config):
@@ -84,10 +85,11 @@ def test_no_solution_found(sample_affordable_df, sample_config):
     # Set an impossibly low WAAMI cap
     sample_config['optimization_rules']['waami_cap_percent'] = 30.0
 
-    scenarios_dict = find_optimal_scenarios(sample_affordable_df, sample_config)
+    solver_results = find_optimal_scenarios(sample_affordable_df, sample_config)
+    scenarios = solver_results["scenarios"]
 
-    assert not scenarios_dict.get("absolute_best"), "Solver should not find an absolute_best solution."
-    assert not scenarios_dict.get("client_oriented"), "Solver should not find a client_oriented solution."
+    assert not scenarios.get("absolute_best"), "Solver should not find an absolute_best solution."
+    assert not scenarios.get("client_oriented"), "Solver should not find a client_oriented solution."
 
 def test_deep_affordability_constraint(sample_config):
     """
@@ -108,11 +110,12 @@ def test_deep_affordability_constraint(sample_config):
     sample_config['optimization_rules']['potential_bands'] = [40, 100]
     sample_config['optimization_rules']['deep_affordability_sf_threshold'] = 10000
 
-    scenarios_dict = find_optimal_scenarios(df, sample_config)
+    solver_results = find_optimal_scenarios(df, sample_config)
+    scenarios = solver_results["scenarios"]
 
-    assert scenarios_dict.get("absolute_best"), "A solution should be found."
+    assert scenarios.get("absolute_best"), "A solution should be found."
 
-    top_scenario = scenarios_dict["absolute_best"][0]
+    top_scenario = scenarios["absolute_best"][0]
 
     # Count units assigned to the 40% AMI band
     low_band_units = [u for u in top_scenario['assignments'] if u['assigned_ami'] <= 0.40]
@@ -143,10 +146,11 @@ def test_client_oriented_scenario_logic(sample_config):
     sample_config['optimization_rules']['potential_bands'] = [50, 100]
     sample_config['optimization_rules']['waami_cap_percent'] = 80.0
 
-    scenarios_dict = find_optimal_scenarios(df, sample_config)
+    solver_results = find_optimal_scenarios(df, sample_config)
+    scenarios = solver_results["scenarios"]
 
-    abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios_dict['absolute_best'][0]['assignments']}
-    client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios_dict['client_oriented'][0]['assignments']}
+    abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['absolute_best'][0]['assignments']}
+    client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['client_oriented'][0]['assignments']}
 
     # Assert that the absolute_best scenario maximized SF * AMI
     assert abs_best_assignments['B'] == 1.0

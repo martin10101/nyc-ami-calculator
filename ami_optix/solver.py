@@ -141,11 +141,9 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
 
 def find_optimal_scenarios(df_affordable, config):
     """
-    Main orchestrator for the solver module. It runs the solver in two modes:
-    1. Absolute Best: Finds the highest possible WAAMI, pure math.
-    2. Client Oriented: Balances WAAMI with an intuitive rent structure.
-
-    Returns a dictionary containing the results from each mode.
+    Main orchestrator for the solver module. It runs the solver in two modes,
+    filters for a 2-band option, and returns the results along with
+    explanatory notes.
     """
     optimization_rules = config['optimization_rules']
     dev_preferences = config['developer_preferences']
@@ -159,10 +157,8 @@ def find_optimal_scenarios(df_affordable, config):
     band_combos = list(itertools.combinations(potential_bands, 2)) + \
                   list(itertools.combinations(potential_bands, max_bands))
 
-    final_results = {
-        "absolute_best": [],
-        "client_oriented": []
-    }
+    scenarios = {}
+    notes = []
 
     # --- Run 1: Absolute Best (WAAMI Maximization) ---
     absolute_best_results = []
@@ -175,7 +171,7 @@ def find_optimal_scenarios(df_affordable, config):
 
     if absolute_best_results:
         absolute_best_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
-        final_results["absolute_best"] = absolute_best_results
+        scenarios["absolute_best"] = absolute_best_results
 
     # --- Run 2: Client Oriented (Preference-Weighted) ---
     client_oriented_results = []
@@ -188,15 +184,21 @@ def find_optimal_scenarios(df_affordable, config):
 
     if client_oriented_results:
         client_oriented_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
-        final_results["client_oriented"] = client_oriented_results
+        # Only add the client-oriented scenario if it's meaningfully different from the absolute best
+        if scenarios.get("absolute_best") and client_oriented_results[0]['assignments'] != scenarios["absolute_best"][0]['assignments']:
+            scenarios["client_oriented"] = client_oriented_results
+        else:
+            notes.append("The 'Client Oriented' scenario was not shown because its optimal solution was identical to the 'Absolute Best' scenario.")
 
     # --- Find Best 2-Band Scenario from the 'Absolute Best' results ---
-    if final_results["absolute_best"]:
-        two_band_scenarios = [s for s in final_results["absolute_best"] if len(s['bands']) == 2]
+    if scenarios.get("absolute_best"):
+        two_band_scenarios = [s for s in scenarios["absolute_best"] if len(s['bands']) == 2]
         if two_band_scenarios:
-            final_results["best_2_band"] = two_band_scenarios[0] # The list is already sorted
+            scenarios["best_2_band"] = two_band_scenarios[0]
+        else:
+            notes.append("No viable 2-band solution was found that could meet the project's financial and compliance constraints.")
 
-    return final_results
+    return {"scenarios": scenarios, "notes": notes}
 
 def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affordable_sf, optimization_rules):
     """
