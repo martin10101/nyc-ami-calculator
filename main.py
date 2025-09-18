@@ -1,11 +1,25 @@
 import sys
 import json
 import pandas as pd
+import numpy as np
 
 from ami_optix.parser import Parser
 from ami_optix.config_loader import load_config
 from ami_optix.solver import find_optimal_scenarios
 from ami_optix.validator import run_compliance_checks
+
+def default_converter(o):
+    """
+    A default converter for json.dumps to handle numpy types that pandas uses.
+    """
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    # Let the default error handler raise the TypeError
+    raise TypeError
 
 def main(file_path):
     """
@@ -63,8 +77,8 @@ def main(file_path):
                 "assignments": scenario2['assignments'],
             }
 
-        # Final cleanup for JSON serialization if needed (though assignments are dicts)
-        print(json.dumps(output, indent=2))
+        # Use the custom converter to handle numpy types during JSON serialization
+        print(json.dumps(output, indent=2, default=default_converter))
 
     except (FileNotFoundError, ValueError, IOError) as e:
         print(json.dumps({"error": str(e)}))

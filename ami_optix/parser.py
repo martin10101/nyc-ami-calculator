@@ -7,7 +7,7 @@ HEADER_MAPPING = {
     "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA"],
     "floor": ["FLOOR", "STORY", "LEVEL"],
     "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
-    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF"],
+    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT"],
 }
 
 class Parser:
@@ -118,9 +118,9 @@ class Parser:
                 unit_ids = invalid_rows['unit_id'].tolist()
                 raise ValueError(f"Error: Invalid non-numeric data found in required column '{col}' for units: {unit_ids}")
 
-            if (affordable_df[col] <= 0).any():
-                invalid_rows = affordable_df[affordable_df[col] <= 0]
+            if (affordable_df[col] < 0).any():
+                invalid_rows = affordable_df[affordable_df[col] < 0]
                 unit_ids = invalid_rows['unit_id'].tolist()
-                raise ValueError(f"Error: Column '{col}' must contain positive values. Found non-positive values for units: {unit_ids}")
+                raise ValueError(f"Error: Column '{col}' must contain non-negative values. Found negative values for units: {unit_ids}")
 
         return affordable_df
