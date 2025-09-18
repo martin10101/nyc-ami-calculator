@@ -74,11 +74,10 @@ def main(file_path):
         if s4_best_2_band:
             output["scenario_best_2_band"] = {"waami": s4_best_2_band['waami'], "bands": s4_best_2_band['bands'], "assignments": s4_best_2_band['assignments']}
 
-        print(json.dumps(output, indent=2, default=default_converter))
+        return output
 
     except (FileNotFoundError, ValueError, IOError) as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(1)
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -86,4 +85,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     file_path_arg = sys.argv[1]
-    main(file_path_arg)
+    result = main(file_path_arg)
+
+    print(json.dumps(result, indent=2, default=default_converter))
+
+    if "error" in result:
+        sys.exit(1)
