@@ -116,3 +116,22 @@ def test_missing_unit_id_value(temp_dir):
     with pytest.raises(ValueError) as excinfo:
         parser.get_affordable_units()
     assert "missing Unit ID" in str(excinfo.value)
+
+def test_ami_column_with_percentages(temp_dir):
+    """Tests that the parser correctly handles AMI values as percentages and decimals."""
+    headers = ['unit id', 'bedrooms', 'net sf', 'AMI'] # Use a header from the mapping
+    data = [
+        ['1A', 1, 600, '60%'],      # Percentage
+        ['1B', 2, 800, ' 80 % '],   # Percentage with whitespace
+        ['2A', 0, 450, 0.5],        # Decimal
+        ['2B', 1, 650, 'N/A'],      # Not affordable
+    ]
+    filepath = create_csv(temp_dir, "percentages.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert len(df) == 3
+    assert df.loc[df['unit_id'] == '1A', 'client_ami'].iloc[0] == 0.6
+    assert df.loc[df['unit_id'] == '1B', 'client_ami'].iloc[0] == 0.8
+    assert df.loc[df['unit_id'] == '2A', 'client_ami'].iloc[0] == 0.5

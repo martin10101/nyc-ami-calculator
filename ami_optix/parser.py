@@ -95,8 +95,17 @@ class Parser:
         if 'client_ami' not in df.columns:
             raise ValueError("Error: The 'Client AMI' column (e.g., 'AMI', 'AFF %') is required to identify affordable units, but it was not found.")
 
-        # Coerce to numeric, turning non-numeric values into NaN
-        df['client_ami'] = pd.to_numeric(df['client_ami'], errors='coerce')
+        # Clean and convert the client_ami column, handling percentages and decimals
+        ami_series = df['client_ami'].astype(str).str.strip()
+        is_percent = ami_series.str.contains('%', na=False)
+
+        numeric_vals = pd.to_numeric(ami_series.str.replace('%', '', regex=False), errors='coerce')
+
+        # Where it was a percentage, divide by 100 to normalize
+        numeric_vals[is_percent] = numeric_vals[is_percent] / 100.0
+
+        df['client_ami'] = numeric_vals
+
         # Filter for rows where client_ami is a positive number
         affordable_df = df[df['client_ami'] > 0].copy()
 

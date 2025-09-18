@@ -56,12 +56,15 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     waami_cap = optimization_rules['waami_cap_percent'] / 100.0
     bands = [b / 100.0 for b in bands_to_test]  # Convert bands from % to decimal
 
+    # Scale SF to integers to avoid float issues in the solver, preserving 2 decimal places.
+    sf_coeffs_int = (df_affordable['net_sf'] * 100).astype(int)
+    total_sf_int = int(sf_coeffs_int.sum())
+
     model = cp_model.CpModel()
     num_units = len(df_affordable)
     num_bands = len(bands)
 
     # --- Decision Variables ---
-    # x[i][j] is a boolean variable, true if unit i is assigned band j
     x = [[model.NewBoolVar(f'x_{i}_{j}') for j in range(num_bands)] for i in range(num_units)]
 
     # --- Constraints ---
@@ -70,21 +73,23 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
         model.AddExactlyOne(x[i])
 
     # 2. The WAAMI must be strictly less than the cap.
-    # We use integer arithmetic with a scaling factor to avoid floating point errors.
-    total_ami_sf_scaled = model.NewIntVar(0, int(waami_cap * total_affordable_sf * SCALE_FACTOR), 'total_ami_sf_scaled')
+    # We use integer arithmetic with scaling factors to avoid floating point errors.
+    cap_scaled = int(waami_cap * total_sf_int)
+    total_ami_sf_scaled = model.NewIntVar(0, cap_scaled, 'total_ami_sf_scaled')
 
-    # Pre-calculate scaled values
     bands_scaled = [int(b * SCALE_FACTOR) for b in bands]
 
-    # Expression for the sum of (unit_sf * assigned_band_ami) across all units, scaled.
+    # Expression for the sum of (unit_sf * assigned_band_ami) across all units.
+    # Both sf and ami are scaled to integers before being passed to the solver.
     total_ami_expr_scaled = sum(
-        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * df_affordable['net_sf'].iloc[i]
+        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * sf_coeffs_int.iloc[i]
         for i in range(num_units)
     )
 
-    model.Add(total_ami_sf_scaled == total_ami_expr_scaled)
+    # We need to divide the expression by SCALE_FACTOR to match the scale of total_ami_sf_scaled
+    model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
     # The strict inequality is handled by making the upper bound of the variable one less than the cap.
-    model.Add(total_ami_sf_scaled < int(waami_cap * total_affordable_sf * SCALE_FACTOR))
+    model.Add(total_ami_sf_scaled < cap_scaled)
 
     # 3. Deep Affordability Constraint (if applicable)
     deep_affordability_threshold = optimization_rules.get('deep_affordability_sf_threshold', 10000)
@@ -123,8 +128,7 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
                     break
 
         # Calculate final WAAMI from the solver's objective value
-        # The objective value is already scaled by (total_sf * SCALE_FACTOR), so we just reverse that.
-        final_waami = solver.Value(total_ami_sf_scaled) / (total_affordable_sf * SCALE_FACTOR)
+        final_waami = solver.Value(total_ami_sf_scaled) / total_sf_int
 
         return {
             "status": "OPTIMAL",
@@ -202,6 +206,10 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
     waami_cap = optimization_rules['waami_cap_percent'] / 100.0
     bands = [b / 100.0 for b in bands_to_test]
 
+    # Scale SF to integers to avoid float issues in the solver, preserving 2 decimal places.
+    sf_coeffs_int = (df_affordable['net_sf'] * 100).astype(int)
+    total_sf_int = int(sf_coeffs_int.sum())
+
     model = cp_model.CpModel()
     num_units = len(df_affordable)
     num_bands = len(bands)
@@ -211,33 +219,35 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
     for i in range(num_units):
         model.AddExactlyOne(x[i])
 
-    total_ami_sf_scaled = model.NewIntVar(0, int(waami_cap * total_affordable_sf * SCALE_FACTOR), 'total_ami_sf_scaled')
+    cap_scaled = int(waami_cap * total_sf_int)
+    total_ami_sf_scaled = model.NewIntVar(0, cap_scaled, 'total_ami_sf_scaled')
     bands_scaled = [int(b * SCALE_FACTOR) for b in bands]
 
     total_ami_expr_scaled = sum(
-        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * df_affordable['net_sf'].iloc[i]
+        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * sf_coeffs_int.iloc[i]
         for i in range(num_units)
     )
-    model.Add(total_ami_sf_scaled == total_ami_expr_scaled)
-    model.Add(total_ami_sf_scaled < int(waami_cap * total_affordable_sf * SCALE_FACTOR))
+    model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
+    model.Add(total_ami_sf_scaled < cap_scaled)
 
     # --- Multi-Part Objective Function ---
     # This objective balances maximizing revenue with aligning higher rents to premium units.
+    # We create a weighted objective where the premium score alignment is the primary driver.
 
     # 1. Premium Score Alignment Component
-    # We reward assigning higher bands to units with higher premium scores.
-    # The premium_score (0-1) is scaled up to be significant next to the WAAMI term.
-    premium_scores_scaled = [int(s * SCALE_FACTOR) for s in df_affordable['premium_score']]
+    # We scale the 0-1 premium score to make it a significant integer.
+    premium_scores_int = (df_affordable['premium_score'] * 1000).astype(int)
     premium_alignment_expr = sum(
-        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * premium_scores_scaled[i]
+        sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * premium_scores_int.iloc[i]
         for i in range(num_units)
     )
 
     # 2. Combined Objective
-    # The WAAMI term is weighted much more heavily than the premium alignment term.
-    # This ensures the primary goal is still financial, with premium as a strong "nudge".
-    # A simple way to achieve this is to use the total SF as a weight for the main objective.
-    final_objective = (total_ami_expr_scaled * int(total_affordable_sf)) + premium_alignment_expr
+    # The premium alignment term is weighted heavily to make it the primary objective.
+    # The WAAMI-maximization term (total_ami_expr_scaled) acts as the tie-breaker.
+    # The weight (2000) is a heuristic chosen to be larger than any likely SF value.
+    WEIGHT = 2000
+    final_objective = (premium_alignment_expr * WEIGHT) + total_ami_expr_scaled
     model.Maximize(final_objective)
 
     solver = cp_model.CpSolver()
@@ -254,7 +264,7 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
                     assignments.append(unit_data)
                     break
 
-        final_waami = solver.Value(total_ami_sf_scaled) / (total_affordable_sf * SCALE_FACTOR)
+        final_waami = solver.Value(total_ami_sf_scaled) / total_sf_int
 
         return {
             "status": "OPTIMAL",
