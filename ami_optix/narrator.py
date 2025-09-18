@@ -3,15 +3,42 @@ import os
 from openai import OpenAI
 from groq import Groq
 
+def generate_internal_summary(analysis_json):
+    """
+    Generates a simple, fact-based text summary of the analysis results
+    without using an external LLM.
+    """
+    summary_parts = []
+
+    abs_best = analysis_json.get("scenario_absolute_best")
+    if abs_best:
+        waami = abs_best['waami'] * 100
+        summary_parts.append(f"The analysis found an optimal scenario with a WAAMI of {waami:.4f}%.")
+    else:
+        summary_parts.append("No optimal scenario was found.")
+
+    notes = analysis_json.get("analysis_notes", [])
+    if notes:
+        summary_parts.append("\nAnalysis Notes:")
+        for note in notes:
+            summary_parts.append(f"- {note}")
+
+    flagged_reports = [r['details'] for r in analysis_json.get('compliance_report', []) if r['status'] == 'FLAGGED']
+    if flagged_reports:
+        summary_parts.append("\nCompliance Issues Found:")
+        for report in flagged_reports:
+            summary_parts.append(f"- {report}")
+
+    return "\n".join(summary_parts)
+
 def _format_scenario_summary(scenario_name, scenario_data):
-    """Creates a formatted string summary for a single scenario."""
+    """Creates a formatted string summary for a single scenario for the LLM prompt."""
     if not scenario_data:
         return ""
 
     waami = scenario_data['waami'] * 100
     bands = ", ".join(map(str, scenario_data['bands']))
 
-    # Using a simpler format to avoid hidden character issues
     summary = f"### {scenario_name}:\n"
     summary += f"- Final WAAMI: {waami}\n"
     summary += f"- Bands Used: {bands}\n"
@@ -56,7 +83,7 @@ def _build_prompt(analysis_json):
     prompt += "Begin your two-paragraph strategic analysis now:"
     return prompt
 
-def generate_narrative(analysis_json, provider, model_name):
+def generate_llm_narrative(analysis_json, provider, model_name):
     """
     Generates a narrative analysis by calling the specified LLM provider.
     """

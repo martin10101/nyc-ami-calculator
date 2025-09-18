@@ -1,30 +1,25 @@
 "use client";
 
 import { useState, useMemo } from 'react';
-import { FiUploadCloud, FiChevronDown, FiSun, FiMoon, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
+import { FiUploadCloud, FiChevronDown, FiSun, FiMoon, FiCheckCircle, FiAlertTriangle, FiDownload } from 'react-icons/fi';
 
 // --- Reusable Components ---
 
-const ScenarioCard = ({ title, scenario, isFlagged }: { title: string, scenario: any, isFlagged: boolean }) => {
+const ScenarioCard = ({ title, scenario }: { title: string, scenario: any }) => {
   if (!scenario) return null;
 
   const [isOpen, setIsOpen] = useState(true);
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg mb-4">
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg mb-4 bg-gray-50/50 dark:bg-gray-800/20">
       <button
-        className="w-full text-left p-4 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-600/50 flex justify-between items-center"
+        className="w-full text-left p-4 bg-gray-100 dark:bg-gray-700/50 hover:bg-gray-200 dark:hover:bg-gray-600/50 flex justify-between items-center rounded-t-lg"
         onClick={() => setIsOpen(!isOpen)}
       >
         <div className="flex items-center">
-          {isFlagged ? (
-            <FiAlertTriangle className="text-yellow-500 mr-3" />
-          ) : (
-            <FiCheckCircle className="text-green-500 mr-3" />
-          )}
-          <h4 className="font-semibold text-lg">{title}</h4>
+          <h4 className="font-semibold text-lg text-gray-800 dark:text-gray-200">{title}</h4>
         </div>
-        <FiChevronDown className={`transform transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <FiChevronDown className={`transform transition-transform text-gray-500 dark:text-gray-400 ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
         <div className="p-4">
@@ -46,11 +41,10 @@ const ScenarioCard = ({ title, scenario, isFlagged }: { title: string, scenario:
 };
 
 const AssignmentsTable = ({ assignments }: { assignments: any[] }) => {
-  // Simple table for now, can be enhanced with sorting/filtering
   return (
-    <div className="overflow-x-auto max-h-60">
+    <div className="overflow-x-auto max-h-60 border dark:border-gray-700 rounded-md">
       <table className="w-full text-sm text-left">
-        <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <thead className="text-xs text-gray-700 uppercase bg-gray-100 dark:bg-gray-700 dark:text-gray-400">
           <tr>
             <th scope="col" className="px-4 py-2">Unit ID</th>
             <th scope="col" className="px-4 py-2">Bedrooms</th>
@@ -60,7 +54,7 @@ const AssignmentsTable = ({ assignments }: { assignments: any[] }) => {
         </thead>
         <tbody>
           {assignments.map((unit, index) => (
-            <tr key={index} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+            <tr key={index} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/20">
               <td className="px-4 py-2 font-medium">{unit.unit_id}</td>
               <td className="px-4 py-2">{unit.bedrooms}</td>
               <td className="px-4 py-2">{unit.net_sf}</td>
@@ -69,6 +63,28 @@ const AssignmentsTable = ({ assignments }: { assignments: any[] }) => {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+};
+
+const ComplianceReport = ({ report }: { report: any[] }) => {
+  const flagged = report.filter(r => r.status === 'FLAGGED');
+  if (flagged.length === 0) {
+    return (
+      <div className="flex items-center text-green-500">
+        <FiCheckCircle className="mr-2" />
+        <p>All compliance checks passed.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {flagged.map((item, i) => (
+        <div key={i} className="flex items-start text-yellow-500 text-sm">
+          <FiAlertTriangle className="mr-2 mt-1 flex-shrink-0" />
+          <span><strong>{item.check}:</strong> {item.details}</span>
+        </div>
+      ))}
     </div>
   );
 };
@@ -86,6 +102,8 @@ export default function Home() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       setFile(e.target.files[0]);
+      setError(null);
+      setAnalysisResult(null);
     }
   };
 
@@ -94,6 +112,8 @@ export default function Home() {
     e.stopPropagation();
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0]);
+      setError(null);
+      setAnalysisResult(null);
     }
   };
 
@@ -109,8 +129,6 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('provider', 'openai'); // These will be dynamic later
-    formData.append('model_name', 'gpt-4');
 
     try {
       const response = await fetch('/api/analyze', {
@@ -132,11 +150,6 @@ export default function Home() {
     }
   };
 
-  const complianceHasFlags = useMemo(() => {
-    if (!analysisResult?.compliance_report) return false;
-    return analysisResult.compliance_report.some((check: any) => check.status === 'FLAGGED');
-  }, [analysisResult]);
-
   return (
     <div className={isDarkMode ? 'dark' : ''}>
       <main className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors duration-300 font-sans">
@@ -153,7 +166,7 @@ export default function Home() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-            <div className="lg:col-span-1 bg-white dark:bg-gray-800/50 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-gray-700">
+            <div className="lg:col-span-1 bg-white dark:bg-gray-800/50 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-gray-700 self-start">
               <h2 className="text-2xl font-semibold mb-4 text-gray-800 dark:text-gray-200">Controls</h2>
 
               <div
@@ -169,8 +182,6 @@ export default function Home() {
                 <input id="file-upload" type="file" className="hidden" onChange={handleFileChange} accept=".xlsx, .csv" />
               </div>
 
-              {/* LLM Options will go here */}
-
               <button
                 onClick={handleRunAnalysis}
                 disabled={isUploading || !file}
@@ -180,6 +191,16 @@ export default function Home() {
               </button>
 
               {error && <p className="text-red-500 mt-4 text-sm">{error}</p>}
+
+              {analysisResult && analysisResult.download_link && (
+                <a
+                  href={analysisResult.download_link}
+                  className="w-full mt-4 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-center"
+                >
+                  <FiDownload className="mr-2" />
+                  Download Reports (.zip)
+                </a>
+              )}
             </div>
 
             <div className="lg:col-span-2 bg-white dark:bg-gray-800/50 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-gray-700">
@@ -195,19 +216,29 @@ export default function Home() {
                 </div>
               )}
               {analysisResult && (
-                <div>
-                  <div className="mb-6">
-                    <h3 className="text-xl font-semibold mb-2">Strategic Narrative</h3>
-                    <div className="text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/70 p-4 rounded-md text-sm leading-relaxed">
-                      {analysisResult.narrative_analysis || "Narrative will be generated here."}
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">Internal Summary</h3>
+                    <div className="text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/70 p-4 rounded-md text-sm leading-relaxed whitespace-pre-wrap">
+                      {analysisResult.narrative_analysis || "No summary generated."}
                     </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <ScenarioCard title="Absolute Best" scenario={analysisResult.scenario_absolute_best} isFlagged={complianceHasFlags} />
-                    <ScenarioCard title="Alternative" scenario={analysisResult.scenario_alternative} isFlagged={complianceHasFlags} />
-                    <ScenarioCard title="Client Oriented" scenario={analysisResult.scenario_client_oriented} isFlagged={complianceHasFlags} />
-                    <ScenarioCard title="Best 2-Band" scenario={analysisResult.scenario_best_2_band} isFlagged={complianceHasFlags} />
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">Compliance Report</h3>
+                    <div className="bg-gray-100 dark:bg-gray-900/70 p-4 rounded-md">
+                      <ComplianceReport report={analysisResult.compliance_report || []} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">Scenario Details</h3>
+                     <div className="space-y-4">
+                      <ScenarioCard title="Absolute Best" scenario={analysisResult.scenario_absolute_best} />
+                      <ScenarioCard title="Client Oriented" scenario={analysisResult.scenario_client_oriented} />
+                      <ScenarioCard title="Best 2-Band" scenario={analysisResult.scenario_best_2_band} />
+                      <ScenarioCard title="Alternative" scenario={analysisResult.scenario_alternative} />
+                    </div>
                   </div>
                 </div>
               )}
