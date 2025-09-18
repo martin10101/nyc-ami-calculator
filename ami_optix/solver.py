@@ -186,6 +186,12 @@ def find_optimal_scenarios(df_affordable, config):
         client_oriented_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
         final_results["client_oriented"] = client_oriented_results
 
+    # --- Find Best 2-Band Scenario from the 'Absolute Best' results ---
+    if final_results["absolute_best"]:
+        two_band_scenarios = [s for s in final_results["absolute_best"] if len(s['bands']) == 2]
+        if two_band_scenarios:
+            final_results["best_2_band"] = two_band_scenarios[0] # The list is already sorted
+
     return final_results
 
 def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affordable_sf, optimization_rules):

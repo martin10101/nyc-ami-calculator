@@ -79,6 +79,15 @@ def main(file_path):
                 "assignments": s3_client_oriented['assignments'],
             }
 
+        # Scenario 4: The 'Best 2-Band' scenario
+        s4_best_2_band = scenarios_dict.get("best_2_band")
+        if s4_best_2_band:
+            output["scenario_best_2_band"] = {
+                "waami": s4_best_2_band['waami'],
+                "bands": s4_best_2_band['bands'],
+                "assignments": s4_best_2_band['assignments'],
+            }
+
         print(json.dumps(output, indent=2, default=default_converter))
 
     except (FileNotFoundError, ValueError, IOError) as e:

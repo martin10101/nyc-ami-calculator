@@ -72,6 +72,10 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     expected_waami = ((800 * 0.80) + (600 * 0.40)) / (800 + 600)
     assert abs(top_scenario['waami'] - expected_waami) < 1e-9
 
+    # Check that the best_2_band scenario was found
+    assert "best_2_band" in scenarios_dict
+    assert len(scenarios_dict["best_2_band"]["bands"]) == 2
+
 
 def test_no_solution_found(sample_affordable_df, sample_config):
     """
