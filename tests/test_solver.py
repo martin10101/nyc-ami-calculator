@@ -52,11 +52,11 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     """
     # Increase the WAAMI cap for this test to make both outcomes valid, forcing the solver to optimize.
     sample_config['optimization_rules']['waami_cap_percent'] = 70.0
-    scenarios = find_optimal_scenarios(sample_affordable_df, sample_config)
+    scenarios_dict = find_optimal_scenarios(sample_affordable_df, sample_config)
 
-    assert len(scenarios) > 0, "Solver should have found at least one solution."
+    assert scenarios_dict.get("absolute_best"), "Solver should have found an absolute_best solution."
 
-    top_scenario = scenarios[0]
+    top_scenario = scenarios_dict["absolute_best"][0]
     assert top_scenario['status'] == 'OPTIMAL'
     assert top_scenario['bands'] == [40, 80]
 
@@ -75,11 +75,79 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
 
 def test_no_solution_found(sample_affordable_df, sample_config):
     """
-    Tests that the solver returns an empty list when no solution is possible.
+    Tests that the solver returns an empty dictionary when no solution is possible.
     """
     # Set an impossibly low WAAMI cap
     sample_config['optimization_rules']['waami_cap_percent'] = 30.0
 
-    scenarios = find_optimal_scenarios(sample_affordable_df, sample_config)
+    scenarios_dict = find_optimal_scenarios(sample_affordable_df, sample_config)
 
-    assert scenarios == [], "Solver should return an empty list for an unsolvable problem."
+    assert not scenarios_dict.get("absolute_best"), "Solver should not find an absolute_best solution."
+    assert not scenarios_dict.get("client_oriented"), "Solver should not find a client_oriented solution."
+
+def test_deep_affordability_constraint(sample_config):
+    """
+    Tests that the deep affordability constraint is applied when total SF > 10,000.
+    """
+    # 10 units, total SF = 10,010, which is over the threshold
+    data = {
+        'unit_id': [f'U{i}' for i in range(10)],
+        'bedrooms': [1] * 10,
+        'net_sf': [1001] * 10,
+        'floor': [1] * 10,
+        'balcony': [0] * 10,
+        'client_ami': [1.0] * 10
+    }
+    df = pd.DataFrame(data)
+
+    # Use bands that include a low-affordability option
+    sample_config['optimization_rules']['potential_bands'] = [40, 100]
+    sample_config['optimization_rules']['deep_affordability_sf_threshold'] = 10000
+
+    scenarios_dict = find_optimal_scenarios(df, sample_config)
+
+    assert scenarios_dict.get("absolute_best"), "A solution should be found."
+
+    top_scenario = scenarios_dict["absolute_best"][0]
+
+    # Count units assigned to the 40% AMI band
+    low_band_units = [u for u in top_scenario['assignments'] if u['assigned_ami'] <= 0.40]
+
+    # 20% of 10 units is 2. The constraint should force at least 2 units into the 40% band.
+    assert len(low_band_units) >= 2
+
+def test_client_oriented_scenario_logic(sample_config):
+    """
+    Tests that the client-oriented scenario prioritizes premium scores, even at a
+    slight WAAMI cost compared to the absolute best.
+    """
+    # Unit A: High premium score, medium SF
+    # Unit B: Low premium score, high SF
+    data = {
+        'unit_id': ['A', 'B'],
+        'bedrooms': [3, 1], # Contributes to premium
+        'net_sf': [800, 850], # B has higher SF
+        'floor': [10, 1], # A is on a higher floor
+        'balcony': [1, 0], # A has a balcony
+        'client_ami': [1.0, 1.0]
+    }
+    df = pd.DataFrame(data)
+
+    # With these weights, Unit A will have a much higher premium score.
+    # The absolute_best solver should give the 100% band to Unit B (more SF).
+    # The client_oriented solver should give the 100% band to Unit A (more premium).
+    sample_config['optimization_rules']['potential_bands'] = [50, 100]
+    sample_config['optimization_rules']['waami_cap_percent'] = 80.0
+
+    scenarios_dict = find_optimal_scenarios(df, sample_config)
+
+    abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios_dict['absolute_best'][0]['assignments']}
+    client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios_dict['client_oriented'][0]['assignments']}
+
+    # Assert that the absolute_best scenario maximized SF * AMI
+    assert abs_best_assignments['B'] == 1.0
+    assert abs_best_assignments['A'] == 0.5
+
+    # Assert that the client_oriented scenario was nudged to prefer the premium unit
+    assert client_oriented_assignments['A'] == 1.0
+    assert client_oriented_assignments['B'] == 0.5

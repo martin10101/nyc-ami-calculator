@@ -87,7 +87,7 @@ def test_non_positive_data_in_required_column(temp_dir):
     parser = Parser(filepath)
     with pytest.raises(ValueError) as excinfo:
         parser.get_affordable_units()
-    assert "must contain positive values" in str(excinfo.value)
+    assert "must contain non-negative values" in str(excinfo.value)
     assert "'net_sf'" in str(excinfo.value)
     assert "1B" in str(excinfo.value)
 
