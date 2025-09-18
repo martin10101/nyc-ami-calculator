@@ -1,6 +1,7 @@
 import pandas as pd
 from ortools.sat.python import cp_model
 import itertools
+import copy
 
 # A large integer scaling factor to handle floating-point arithmetic for currency and percentages.
 # This avoids precision issues when dealing with constraints in the CP-SAT solver.
@@ -91,6 +92,12 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     # The strict inequality is handled by making the upper bound of the variable one less than the cap.
     model.Add(total_ami_sf_scaled < cap_scaled)
 
+    # Add WAAMI floor constraint if a relaxed search is triggered
+    waami_floor = optimization_rules.get('waami_floor')
+    if waami_floor:
+        floor_scaled = int(waami_floor * total_sf_int)
+        model.Add(total_ami_sf_scaled >= floor_scaled)
+
     # 3. Deep Affordability Constraint (if applicable)
     deep_affordability_threshold = optimization_rules.get('deep_affordability_sf_threshold', 10000)
     if total_affordable_sf >= deep_affordability_threshold:
@@ -139,13 +146,16 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     else:
         return {"status": "NO_SOLUTION"}
 
-def find_optimal_scenarios(df_affordable, config):
+def find_optimal_scenarios(df_affordable, config, relaxed_floor=None):
     """
     Main orchestrator for the solver module. It runs the solver in two modes,
     filters for a 2-band option, and returns the results along with
     explanatory notes.
     """
-    optimization_rules = config['optimization_rules']
+    optimization_rules = copy.deepcopy(config['optimization_rules'])
+    if relaxed_floor:
+        optimization_rules['waami_floor'] = relaxed_floor
+
     dev_preferences = config['developer_preferences']
 
     df_with_scores = calculate_premium_scores(df_affordable, dev_preferences)
@@ -165,8 +175,9 @@ def find_optimal_scenarios(df_affordable, config):
     for combo in band_combos:
         result = _solve_single_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
         if result['status'] == 'OPTIMAL':
-            premium_score = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
-            result['premium_score'] = premium_score
+            result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
+            # Add a canonical representation for robust comparison
+            result['canonical_assignments'] = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in result['assignments']))
             absolute_best_results.append(result)
 
     if absolute_best_results:
@@ -178,14 +189,14 @@ def find_optimal_scenarios(df_affordable, config):
     for combo in band_combos:
         result = _solve_preference_weighted_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
         if result['status'] == 'OPTIMAL':
-            premium_score = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
-            result['premium_score'] = premium_score
+            result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
+            result['canonical_assignments'] = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in result['assignments']))
             client_oriented_results.append(result)
 
     if client_oriented_results:
         client_oriented_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
         # Only add the client-oriented scenario if it's meaningfully different from the absolute best
-        if scenarios.get("absolute_best") and client_oriented_results[0]['assignments'] != scenarios["absolute_best"][0]['assignments']:
+        if scenarios.get("absolute_best") and client_oriented_results[0]['canonical_assignments'] != scenarios["absolute_best"][0]['canonical_assignments']:
             scenarios["client_oriented"] = client_oriented_results
         else:
             notes.append("The 'Client Oriented' scenario was not shown because its optimal solution was identical to the 'Absolute Best' scenario.")
@@ -231,6 +242,12 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
     )
     model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
     model.Add(total_ami_sf_scaled < cap_scaled)
+
+    # Add WAAMI floor constraint if a relaxed search is triggered
+    waami_floor = optimization_rules.get('waami_floor')
+    if waami_floor:
+        floor_scaled = int(waami_floor * total_sf_int)
+        model.Add(total_ami_sf_scaled >= floor_scaled)
 
     # --- Multi-Part Objective Function ---
     # This objective balances maximizing revenue with aligning higher rents to premium units.

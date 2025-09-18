@@ -23,3 +23,6 @@ optimization_rules:
   max_bands_per_scenario: 3
   potential_bands: [40, 50, 60, 70, 80, 90, 100]
   deep_affordability_sf_threshold: 10000
+  # "Smart Search" fallback rules for small projects
+  small_project_unit_threshold: 10
+  relaxed_search_waami_floor: 59.7

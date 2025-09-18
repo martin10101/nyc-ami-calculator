@@ -159,3 +159,18 @@ def test_client_oriented_scenario_logic(sample_config):
     # Assert that the client_oriented scenario was nudged to prefer the premium unit
     assert client_oriented_assignments['A'] == 1.0
     assert client_oriented_assignments['B'] == 0.5
+
+def test_waami_floor_constraint(sample_affordable_df, sample_config):
+    """Tests that the waami_floor constraint correctly finds solutions above a certain floor."""
+    # Set a high cap but a floor that is also high, forcing a specific result.
+    sample_config['optimization_rules']['waami_cap_percent'] = 80.0
+
+    # The optimal WAAMI is ~62.8%. A floor of 70% should be impossible.
+    solver_results_impossible = find_optimal_scenarios(sample_affordable_df, sample_config, relaxed_floor=0.70)
+    assert not solver_results_impossible["scenarios"].get("absolute_best")
+
+    # A floor of 60% should be possible.
+    solver_results_possible = find_optimal_scenarios(sample_affordable_df, sample_config, relaxed_floor=0.60)
+    assert solver_results_possible["scenarios"].get("absolute_best")
+    # Check that the result respects the floor
+    assert solver_results_possible["scenarios"]["absolute_best"][0]["waami"] >= 0.60
