@@ -89,8 +89,8 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
 
     # We need to divide the expression by SCALE_FACTOR to match the scale of total_ami_sf_scaled
     model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
-    # The strict inequality is handled by making the upper bound of the variable one less than the cap.
-    model.Add(total_ami_sf_scaled < cap_scaled)
+    # The inclusive inequality allows solutions exactly at the cap.
+    model.Add(total_ami_sf_scaled <= cap_scaled)
 
     # Add WAAMI floor constraint if a relaxed search is triggered
     waami_floor = optimization_rules.get('waami_floor')
@@ -241,7 +241,7 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
         for i in range(num_units)
     )
     model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
-    model.Add(total_ami_sf_scaled < cap_scaled)
+    model.Add(total_ami_sf_scaled <= cap_scaled)
 
     # Add WAAMI floor constraint if a relaxed search is triggered
     waami_floor = optimization_rules.get('waami_floor')

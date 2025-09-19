@@ -162,15 +162,39 @@ def test_client_oriented_scenario_logic(sample_config):
 
 def test_waami_floor_constraint(sample_affordable_df, sample_config):
     """Tests that the waami_floor constraint correctly finds solutions above a certain floor."""
-    # Set a high cap but a floor that is also high, forcing a specific result.
     sample_config['optimization_rules']['waami_cap_percent'] = 80.0
+    sample_config['optimization_rules']['potential_bands'] = [40, 80]
 
-    # The optimal WAAMI is ~62.8%. A floor of 70% should be impossible.
-    solver_results_impossible = find_optimal_scenarios(sample_affordable_df, sample_config, relaxed_floor=0.70)
-    assert not solver_results_impossible["scenarios"].get("absolute_best")
+    # With a floor of 75%, the only possible solution is to assign 80% to both units.
+    solver_results = find_optimal_scenarios(sample_affordable_df, sample_config, relaxed_floor=0.75)
 
-    # A floor of 60% should be possible.
-    solver_results_possible = find_optimal_scenarios(sample_affordable_df, sample_config, relaxed_floor=0.60)
-    assert solver_results_possible["scenarios"].get("absolute_best")
-    # Check that the result respects the floor
-    assert solver_results_possible["scenarios"]["absolute_best"][0]["waami"] >= 0.60
+    assert solver_results["scenarios"].get("absolute_best"), "A solution should have been found."
+    top_scenario = solver_results["scenarios"]["absolute_best"][0]
+
+    # The WAAMI should be exactly 80%
+    assert abs(top_scenario['waami'] - 0.80) < 1e-9
+
+def test_finds_exact_60_percent_solution(sample_config):
+    """
+    Tests that the solver can find a solution exactly at the 60% cap,
+    using the user-provided 5-unit ground truth case.
+    """
+    data = {
+        'unit_id': ['2A', '3A', '4A', '5A', '6E'],
+        'bedrooms': [0, 0, 0, 0, 0],
+        'net_sf': [370, 370, 370, 370, 309],
+        'floor': [2, 3, 4, 5, 6],
+        'client_ami': [0.6] * 5
+    }
+    df = pd.DataFrame(data)
+
+    sample_config['optimization_rules']['potential_bands'] = [40, 60, 100]
+
+    solver_results = find_optimal_scenarios(df, sample_config)
+    scenarios = solver_results["scenarios"]
+
+    assert scenarios.get("absolute_best"), "A solution should be found."
+    top_scenario = scenarios["absolute_best"][0]
+
+    # Check that the WAAMI is exactly 0.6, allowing for tiny float precision errors
+    assert abs(top_scenario['waami'] - 0.600000) < 1e-9
