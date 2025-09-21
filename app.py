@@ -4,38 +4,14 @@ import tempfile
 import zipfile
 import json
 import numpy as np
-import math
-from flask import Flask, request, jsonify, send_from_directory
-from flask.json.provider import JSONProvider
+import pandas as pd
+from flask import Flask, request, jsonify, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 
-# Solution for "TypeError: Object of type int64 is not JSON serializable"
-# https://stackoverflow.com/questions/50916422/python-typeerror-object-of-type-int64-is-not-json-serializable
-class CustomJSONProvider(JSONProvider):
-    def dumps(self, obj, **kwargs):
-        return json.dumps(obj, **kwargs, default=self.default)
-
-    def loads(self, s, **kwargs):
-        return json.loads(s, **kwargs)
-
-    @staticmethod
-    def default(o):
-        # This ordering is important, as np.nan is a float.
-        if isinstance(o, (float, np.floating)) and math.isnan(o):
-            return None
-        if isinstance(o, np.integer):
-            return int(o)
-        if isinstance(o, np.floating):
-            return float(o)
-        if isinstance(o, np.ndarray):
-            return o.tolist()
-        raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
-
 app = Flask(__name__)
-app.json = CustomJSONProvider(app)
 
 @app.route('/')
 def home():
@@ -174,7 +150,9 @@ def analyze_file():
                 os.makedirs(uploads_dir, exist_ok=True)
                 shutil.move(zip_filepath, os.path.join(uploads_dir, zip_filename))
 
-                return jsonify(analysis_dict)
+                # Use pandas' built-in JSON serialization which handles NaN and numpy types correctly
+                json_response = pd.io.json.dumps(analysis_dict)
+                return Response(json_response, mimetype='application/json')
 
             except Exception as e:
                 return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
