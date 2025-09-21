@@ -36,7 +36,7 @@ class Parser:
                 self.data = pd.read_excel(self.file_path)
 
             # Normalize column headers to lowercase for easier matching
-            self.data.columns = [str(col).lower() for col in self.data.columns]
+            self.data.columns = [str(col).strip().lower() for col in self.data.columns]
         except FileNotFoundError:
             raise FileNotFoundError(f"Error: The file '{self.file_path}' was not found.")
         except Exception as e:

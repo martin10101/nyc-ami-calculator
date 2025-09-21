@@ -101,7 +101,7 @@ def test_missing_required_header(temp_dir):
     with pytest.raises(ValueError) as excinfo:
         parser.get_affordable_units()
     assert "Missing required column" in str(excinfo.value)
-    assert "'net_sf'" in str(excinfo.value)
+    assert "net_sf" in str(excinfo.value)
 
 def test_missing_unit_id_value(temp_dir):
     """Tests that an error is raised for affordable units with empty unit IDs."""
@@ -135,3 +135,20 @@ def test_ami_column_with_percentages(temp_dir):
     assert df.loc[df['unit_id'] == '1A', 'client_ami'].iloc[0] == 0.6
     assert df.loc[df['unit_id'] == '1B', 'client_ami'].iloc[0] == 0.8
     assert df.loc[df['unit_id'] == '2A', 'client_ami'].iloc[0] == 0.5
+
+def test_header_with_leading_trailing_whitespace(temp_dir):
+    """Tests that headers with surrounding whitespace are correctly mapped."""
+    # Note the leading/trailing spaces around the header names
+    headers = ['  APT #  ', 'BEDS', '  net sf  ', 'AFF %']
+    data = [
+        ['1A', 1, 600, 0.8],
+    ]
+    filepath = create_csv(temp_dir, "whitespace_headers.csv", headers, data)
+
+    parser = Parser(filepath)
+    # This should not raise an error
+    affordable_df = parser.get_affordable_units()
+
+    assert len(affordable_df) == 1
+    assert 'net_sf' in affordable_df.columns
+    assert affordable_df.iloc[0]['net_sf'] == 600
