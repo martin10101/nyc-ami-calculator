@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import zipfile
 from flask import Flask, request, jsonify, send_from_directory
@@ -144,7 +145,7 @@ def analyze_file():
                 # This is a simplification for this environment. A real app would use a shared file store.
                 uploads_dir = 'uploads'
                 os.makedirs(uploads_dir, exist_ok=True)
-                os.rename(zip_filepath, os.path.join(uploads_dir, zip_filename))
+                shutil.move(zip_filepath, os.path.join(uploads_dir, zip_filename))
 
                 return jsonify(analysis_dict)
 
