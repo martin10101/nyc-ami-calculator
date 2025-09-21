@@ -8,15 +8,6 @@ from ami_optix.config_loader import load_config
 from ami_optix.solver import find_optimal_scenarios
 from ami_optix.validator import run_compliance_checks
 
-def default_converter(o):
-    """A default converter for json.dumps to handle numpy types."""
-    if isinstance(o, np.integer):
-        return int(o)
-    if isinstance(o, np.floating):
-        return float(o)
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    raise TypeError
 
 def main(file_path):
     """
@@ -87,7 +78,7 @@ if __name__ == "__main__":
     file_path_arg = sys.argv[1]
     result = main(file_path_arg)
 
-    print(json.dumps(result, indent=2, default=default_converter))
+    print(json.dumps(result, indent=2))
 
     if "error" in result:
         sys.exit(1)

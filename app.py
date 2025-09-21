@@ -2,13 +2,36 @@ import os
 import shutil
 import tempfile
 import zipfile
+import json
+import numpy as np
 from flask import Flask, request, jsonify, send_from_directory
+from flask.json.provider import JSONProvider
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 
+# Solution for "TypeError: Object of type int64 is not JSON serializable"
+# https://stackoverflow.com/questions/50916422/python-typeerror-object-of-type-int64-is-not-json-serializable
+class CustomJSONProvider(JSONProvider):
+    def dumps(self, obj, **kwargs):
+        return json.dumps(obj, **kwargs, default=self.default)
+
+    def loads(self, s, **kwargs):
+        return json.loads(s, **kwargs)
+
+    @staticmethod
+    def default(o):
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
 app = Flask(__name__)
+app.json = CustomJSONProvider(app)
 
 @app.route('/')
 def home():
