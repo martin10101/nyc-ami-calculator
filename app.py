@@ -142,7 +142,9 @@ def analyze_file():
 
                 # Store the zip file path in a temporary location accessible by the download endpoint
                 # This is a simplification for this environment. A real app would use a shared file store.
-                os.rename(zip_filepath, os.path.join('uploads', zip_filename))
+                uploads_dir = 'uploads'
+                os.makedirs(uploads_dir, exist_ok=True)
+                os.rename(zip_filepath, os.path.join(uploads_dir, zip_filename))
 
                 return jsonify(analysis_dict)
 
