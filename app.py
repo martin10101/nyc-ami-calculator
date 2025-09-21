@@ -27,7 +27,17 @@ def home():
         <p>Welcome to the NYC Area Median Income (AMI) Calculator API. This service helps analyze affordable housing projects in New York City.</p>
         
         <div class="api-info">
-            <h3>Available Endpoints:</h3>
+            <h3>Upload File for Analysis:</h3>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" required style="margin: 10px 0; padding: 10px; width: 100%; border: 2px dashed #ccc; border-radius: 4px;">
+                <br>
+                <button type="submit" style="background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">Analyze File</button>
+            </form>
+            <div id="results" style="margin-top: 20px; display: none;"></div>
+        </div>
+        
+        <div class="api-info">
+            <h3>API Endpoints:</h3>
             <div class="endpoint">
                 <strong>POST /api/analyze</strong><br>
                 Upload a CSV or Excel file for AMI analysis. Returns optimized scenarios and compliance reports.
@@ -39,6 +49,53 @@ def home():
         </div>
         
         <p><strong>Status:</strong> ✅ Service is running and ready to process files!</p>
+        
+        <script>
+            document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const fileInput = document.getElementById('fileInput');
+                const resultsDiv = document.getElementById('results');
+                
+                if (!fileInput.files[0]) {
+                    alert('Please select a file');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                
+                resultsDiv.innerHTML = '<p>⏳ Analyzing file... This may take a few minutes.</p>';
+                resultsDiv.style.display = 'block';
+                
+                try {
+                    const response = await fetch('/api/analyze', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        resultsDiv.innerHTML = `
+                            <h4>✅ Analysis Complete!</h4>
+                            <p><strong>Total Units:</strong> ${data.project_summary.total_affordable_units}</p>
+                            <p><strong>Total SF:</strong> ${data.project_summary.total_affordable_sf.toLocaleString()} sq ft</p>
+                            <p><strong>WAAMI:</strong> ${data.scenario_absolute_best.waami.toFixed(2)}%</p>
+                            <p><strong>Bands:</strong> ${data.scenario_absolute_best.bands.join(', ')}</p>
+                            ${data.download_link ? `<p><a href="${data.download_link}" style="color: #007bff;">📥 Download Excel Reports</a></p>` : ''}
+                            <details style="margin-top: 10px;">
+                                <summary>View Full Results</summary>
+                                <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto;">${JSON.stringify(data, null, 2)}</pre>
+                            </details>
+                        `;
+                    } else {
+                        resultsDiv.innerHTML = `<p style="color: red;">❌ Error: ${data.error}</p>`;
+                    }
+                } catch (error) {
+                    resultsDiv.innerHTML = `<p style="color: red;">❌ Error: ${error.message}</p>`;
+                }
+            });
+        </script>
     </body>
     </html>
     '''
