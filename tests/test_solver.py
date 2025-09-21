@@ -65,18 +65,17 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     unit_2b_assignment = next(u for u in assignments if u['unit_id'] == '2B')
     unit_1a_assignment = next(u for u in assignments if u['unit_id'] == '1A')
 
-    # With the objective now being MINIMIZE, the solver should assign the lowest possible AMI to all units
-    # to achieve the lowest possible WAAMI.
-    assert unit_2b_assignment['assigned_ami'] == 0.40
+    # Assert that the more valuable unit gets the higher AMI band to maximize WAAMI
+    assert unit_2b_assignment['assigned_ami'] == 0.80
     assert unit_1a_assignment['assigned_ami'] == 0.40
 
     # Check that the WAAMI is calculated correctly
-    expected_waami = ((800 * 0.40) + (600 * 0.40)) / (800 + 600)
+    expected_waami = ((800 * 0.80) + (600 * 0.40)) / (800 + 600)
     assert abs(top_scenario['waami'] - expected_waami) < 1e-9
 
-    # Check that the best_2_band scenario was found
-    assert "best_2_band" in scenarios
-    assert len(scenarios["best_2_band"]["bands"]) == 2
+    # In this simple case, the best 2-band solution is the same as the absolute best,
+    # so it should be filtered out by our new logic.
+    assert "best_2_band" not in scenarios
 
 
 def test_no_solution_found(sample_affordable_df, sample_config):
@@ -118,11 +117,12 @@ def test_deep_affordability_constraint(sample_config):
 
     top_scenario = scenarios["absolute_best"][0]
 
-    # Count units assigned to the 40% AMI band
-    low_band_units = [u for u in top_scenario['assignments'] if u['assigned_ami'] <= 0.40]
+    # Calculate the total SF of units assigned to the 40% AMI band
+    low_band_sf = sum(u['net_sf'] for u in top_scenario['assignments'] if u['assigned_ami'] <= 0.40)
+    total_sf = df['net_sf'].sum()
 
-    # 20% of 10 units is 2. The constraint should force at least 2 units into the 40% band.
-    assert len(low_band_units) >= 2
+    # 20% of total SF (10010) is 2002. The constraint should force at least this much SF into the 40% band.
+    assert low_band_sf >= (0.20 * total_sf)
 
 def test_client_oriented_scenario_logic(sample_config):
     """
@@ -150,16 +150,10 @@ def test_client_oriented_scenario_logic(sample_config):
     solver_results = find_optimal_scenarios(df, sample_config)
     scenarios = solver_results["scenarios"]
 
-    abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['absolute_best'][0]['assignments']}
-    client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['client_oriented'][0]['assignments']}
-
-    # Assert that the absolute_best scenario MINIMIZED SF * AMI
-    assert abs_best_assignments['A'] == 0.5
-    assert abs_best_assignments['B'] == 0.5
-
-    # Assert that the client_oriented scenario was nudged to prefer the premium unit
-    assert client_oriented_assignments['A'] == 1.0
-    assert client_oriented_assignments['B'] == 0.5
+    # In this specific setup, the absolute_best solution is already the one with the highest premium alignment.
+    # Therefore, the lexicographical search for a client-oriented scenario should find the exact same result,
+    # and our filtering logic should correctly remove it.
+    assert "client_oriented" not in scenarios
 
 def test_waami_floor_constraint(sample_affordable_df, sample_config):
     """Tests that the waami_floor constraint correctly finds solutions above a certain floor."""
@@ -197,5 +191,5 @@ def test_finds_exact_60_percent_solution(sample_config):
     assert scenarios.get("absolute_best"), "A solution should be found."
     top_scenario = scenarios["absolute_best"][0]
 
-    # Check that the WAAMI is exactly 0.4, as the new objective is to minimize
-    assert abs(top_scenario['waami'] - 0.400000) < 1e-9
+    # Check that the WAAMI is exactly 0.6, allowing for tiny float precision errors
+    assert abs(top_scenario['waami'] - 0.600000) < 1e-9

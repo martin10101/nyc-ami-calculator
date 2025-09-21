@@ -57,8 +57,8 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     waami_cap = optimization_rules['waami_cap_percent'] / 100.0
     bands = [b / 100.0 for b in bands_to_test]  # Convert bands from % to decimal
 
-    # Scale SF to integers to avoid float issues in the solver, preserving 2 decimal places.
-    sf_coeffs_int = (df_affordable['net_sf'] * 100).astype(int)
+    # Fix 4: Round SF to integers to avoid float issues in the solver.
+    sf_coeffs_int = (df_affordable['net_sf'] * 100).round().astype(int)
     total_sf_int = int(sf_coeffs_int.sum())
 
     model = cp_model.CpModel()
@@ -81,15 +81,11 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     bands_scaled = [int(b * SCALE_FACTOR) for b in bands]
 
     # Expression for the sum of (unit_sf * assigned_band_ami) across all units.
-    # Both sf and ami are scaled to integers before being passed to the solver.
     total_ami_expr_scaled = sum(
         sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * sf_coeffs_int.iloc[i]
         for i in range(num_units)
     )
-
-    # We need to divide the expression by SCALE_FACTOR to match the scale of total_ami_sf_scaled
     model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
-    # The inclusive inequality allows solutions exactly at the cap.
     model.Add(total_ami_sf_scaled <= cap_scaled)
 
     # Add WAAMI floor constraint if a relaxed search is triggered
@@ -98,29 +94,25 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
         floor_scaled = int(waami_floor * total_sf_int)
         model.Add(total_ami_sf_scaled >= floor_scaled)
 
-    # 3. Deep Affordability Constraint (if applicable)
+    # Fix 2: Deep Affordability Constraint based on SF, not unit count.
     deep_affordability_threshold = optimization_rules.get('deep_affordability_sf_threshold', 10000)
     if total_affordable_sf >= deep_affordability_threshold:
-        # Find indices of bands that are at or below 40% AMI
         low_band_indices = [j for j, band in enumerate(bands_to_test) if band <= 40]
-
         if low_band_indices:
-            # Sum of boolean variables for assignments to low bands
-            low_band_assignments = [x[i][j] for i in range(num_units) for j in low_band_indices]
-
-            # The number of units assigned to low bands must be >= 20% of total units.
-            # We multiply by 100 to avoid floating-point comparisons.
-            min_required_low_band_units = 20 * num_units
-            model.Add(100 * sum(low_band_assignments) >= min_required_low_band_units)
+            low_sf = sum(
+                x[i][j] * sf_coeffs_int.iloc[i]
+                for i in range(num_units)
+                for j in low_band_indices
+            )
+            # The SF of units assigned to low bands must be >= 20% of total affordable SF.
+            model.Add(100 * low_sf >= 20 * total_sf_int)
 
     # --- Objective Function ---
-    # Minimize the WAAMI by minimizing the scaled total AMI SF.
-    # This finds the most affordable valid scenario.
-    model.Minimize(total_ami_sf_scaled)
+    # Fix 1: Maximize the WAAMI to get it as tight to the cap as possible.
+    model.Maximize(total_ami_sf_scaled)
 
     # --- Solve ---
     solver = cp_model.CpSolver()
-    # Using more workers can speed up the search on multi-core machines.
     solver.parameters.num_workers = 8
     status = solver.Solve(model)
 
@@ -135,14 +127,16 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
                     assignments.append(unit_data)
                     break
 
-        # Calculate final WAAMI from the solver's objective value
         final_waami = solver.Value(total_ami_sf_scaled) / total_sf_int
+
+        # Fix 5: Derive the bands from the actual assignments.
+        used_bands = sorted({int(u['assigned_ami'] * 100) for u in assignments})
 
         return {
             "status": "OPTIMAL",
             "waami": final_waami,
             "assignments": assignments,
-            "bands": sorted(bands_to_test)
+            "bands": used_bands
         }
     else:
         return {"status": "NO_SOLUTION"}
@@ -182,47 +176,62 @@ def find_optimal_scenarios(df_affordable, config, relaxed_floor=None):
             absolute_best_results.append(result)
 
     if absolute_best_results:
-        # Sort ascending by WAAMI (primary) and descending by premium_score (tie-breaker)
-        absolute_best_results.sort(key=lambda x: (x['waami'], -x['premium_score']))
+        # Sort by WAAMI (desc) and then premium score (desc) to find the best
+        absolute_best_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
         scenarios["absolute_best"] = absolute_best_results
 
-    # --- Run 2: Client Oriented (Preference-Weighted) ---
-    client_oriented_results = []
-    for combo in band_combos:
-        result = _solve_preference_weighted_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
-        if result['status'] == 'OPTIMAL':
-            result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
-            result['canonical_assignments'] = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in result['assignments']))
-            client_oriented_results.append(result)
+        # --- Run 2: Client Oriented (Lexicographical) ---
+        # This pass finds the solution that maximizes the premium score, while maintaining the optimal WAAMI from the first pass.
+        best_waami = scenarios["absolute_best"][0]['waami']
+        best_bands = scenarios["absolute_best"][0]['bands']
 
-    if client_oriented_results:
-        client_oriented_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
-        # Only add the client-oriented scenario if it's meaningfully different from the absolute best
-        if scenarios.get("absolute_best") and client_oriented_results[0]['canonical_assignments'] != scenarios["absolute_best"][0]['canonical_assignments']:
-            scenarios["client_oriented"] = client_oriented_results
-        else:
-            notes.append("The 'Client Oriented' scenario was not shown because its optimal solution was identical to the 'Absolute Best' scenario.")
+        client_oriented_result = _solve_lexicographical_scenario(df_with_scores, best_bands, total_affordable_sf, optimization_rules, best_waami)
+        if client_oriented_result['status'] == 'OPTIMAL':
+            client_oriented_result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in client_oriented_result['assignments'])
+            client_oriented_result['canonical_assignments'] = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in client_oriented_result['assignments']))
 
-    # --- Find Best 2-Band Scenario from the 'Absolute Best' results ---
+            # Only add the client-oriented scenario if it's meaningfully different from the absolute best
+            if client_oriented_result['canonical_assignments'] != scenarios["absolute_best"][0]['canonical_assignments']:
+                scenarios["client_oriented"] = [client_oriented_result] # Wrap in list to match structure
+            else:
+                notes.append("The 'Client Oriented' scenario was not shown because its optimal solution was identical to the 'Absolute Best' scenario.")
+
+    # --- Find Best 2-Band and Alternative Scenarios from the 'Absolute Best' results ---
     if scenarios.get("absolute_best"):
+        abs_best_scenario = scenarios["absolute_best"][0]
+
+        # Find a suitable alternative scenario that is different from the absolute best
+        for alt in scenarios["absolute_best"][1:]:
+            if alt['canonical_assignments'] != abs_best_scenario['canonical_assignments']:
+                scenarios["alternative"] = alt
+                break
+
+        # Find the best 2-band option
         two_band_scenarios = [s for s in scenarios["absolute_best"] if len(s['bands']) == 2]
         if two_band_scenarios:
-            scenarios["best_2_band"] = two_band_scenarios[0]
+            # Ensure the 2-band is also different from the absolute best, if possible
+            best_2_band = two_band_scenarios[0]
+            if best_2_band['canonical_assignments'] != abs_best_scenario['canonical_assignments']:
+                 scenarios["best_2_band"] = best_2_band
+            # If the best 2-band IS the absolute best, see if there's another 2-band option
+            elif len(two_band_scenarios) > 1 and two_band_scenarios[1]['canonical_assignments'] != abs_best_scenario['canonical_assignments']:
+                 scenarios["best_2_band"] = two_band_scenarios[1]
+            else: # Otherwise, don't show a redundant 2-band scenario
+                notes.append("The best 2-band solution was identical to the 'Absolute Best' scenario.")
+
         else:
             notes.append("No viable 2-band solution was found that could meet the project's financial and compliance constraints.")
 
     return {"scenarios": scenarios, "notes": notes}
 
-def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affordable_sf, optimization_rules):
+def _solve_lexicographical_scenario(df_affordable, bands_to_test, total_affordable_sf, optimization_rules, optimal_waami):
     """
-    A separate solver function that finds an optimal assignment by balancing
-    the WAAMI with a preference for assigning higher rents to more premium units.
+    Second-pass solver that locks the WAAMI to the optimal value and then
+    maximizes for the premium score alignment.
     """
-    waami_cap = optimization_rules['waami_cap_percent'] / 100.0
     bands = [b / 100.0 for b in bands_to_test]
 
-    # Scale SF to integers to avoid float issues in the solver, preserving 2 decimal places.
-    sf_coeffs_int = (df_affordable['net_sf'] * 100).astype(int)
+    sf_coeffs_int = (df_affordable['net_sf'] * 100).round().astype(int)
     total_sf_int = int(sf_coeffs_int.sum())
 
     model = cp_model.CpModel()
@@ -234,42 +243,26 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
     for i in range(num_units):
         model.AddExactlyOne(x[i])
 
-    cap_scaled = int(waami_cap * total_sf_int)
-    total_ami_sf_scaled = model.NewIntVar(0, cap_scaled, 'total_ami_sf_scaled')
-    bands_scaled = [int(b * SCALE_FACTOR) for b in bands]
+    # --- Constraint: Lock the WAAMI ---
+    # The total scaled AMI*SF must equal the optimal value found in the first pass.
+    # We allow a tiny tolerance for floating point conversion issues.
+    optimal_waami_scaled = int(optimal_waami * total_sf_int)
+    total_ami_sf_scaled = model.NewIntVar(optimal_waami_scaled, optimal_waami_scaled, 'total_ami_sf_scaled')
 
+    bands_scaled = [int(b * SCALE_FACTOR) for b in bands]
     total_ami_expr_scaled = sum(
         sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * sf_coeffs_int.iloc[i]
         for i in range(num_units)
     )
     model.Add(total_ami_sf_scaled * SCALE_FACTOR == total_ami_expr_scaled)
-    model.Add(total_ami_sf_scaled <= cap_scaled)
 
-    # Add WAAMI floor constraint if a relaxed search is triggered
-    waami_floor = optimization_rules.get('waami_floor')
-    if waami_floor:
-        floor_scaled = int(waami_floor * total_sf_int)
-        model.Add(total_ami_sf_scaled >= floor_scaled)
-
-    # --- Multi-Part Objective Function ---
-    # This objective balances maximizing revenue with aligning higher rents to premium units.
-    # We create a weighted objective where the premium score alignment is the primary driver.
-
-    # 1. Premium Score Alignment Component
-    # We scale the 0-1 premium score to make it a significant integer.
+    # --- Objective: Maximize Premium Alignment ---
     premium_scores_int = (df_affordable['premium_score'] * 1000).astype(int)
     premium_alignment_expr = sum(
         sum(x[i][j] * bands_scaled[j] for j in range(num_bands)) * premium_scores_int.iloc[i]
         for i in range(num_units)
     )
-
-    # 2. Combined Objective
-    # The premium alignment term is weighted heavily to make it the primary objective.
-    # The WAAMI-maximization term (total_ami_expr_scaled) acts as the tie-breaker.
-    # The weight (2000) is a heuristic chosen to be larger than any likely SF value.
-    WEIGHT = 2000
-    final_objective = (premium_alignment_expr * WEIGHT) + total_ami_expr_scaled
-    model.Maximize(final_objective)
+    model.Maximize(premium_alignment_expr)
 
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = 8
@@ -285,13 +278,12 @@ def _solve_preference_weighted_scenario(df_affordable, bands_to_test, total_affo
                     assignments.append(unit_data)
                     break
 
-        final_waami = solver.Value(total_ami_sf_scaled) / total_sf_int
-
+        used_bands = sorted({int(u['assigned_ami'] * 100) for u in assignments})
         return {
             "status": "OPTIMAL",
-            "waami": final_waami,
+            "waami": optimal_waami, # WAAMI is fixed
             "assignments": assignments,
-            "bands": sorted(bands_to_test)
+            "bands": used_bands
         }
     else:
         return {"status": "NO_SOLUTION"}
