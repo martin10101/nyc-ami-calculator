@@ -2,9 +2,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-import json
-import numpy as np
-import pandas as pd
+import orjson
 from flask import Flask, request, jsonify, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis
@@ -150,8 +148,8 @@ def analyze_file():
                 os.makedirs(uploads_dir, exist_ok=True)
                 shutil.move(zip_filepath, os.path.join(uploads_dir, zip_filename))
 
-                # Use pandas' built-in JSON serialization which handles NaN and numpy types correctly
-                json_response = pd.io.json.dumps(analysis_dict)
+                # Use orjson for fast, correct serialization of numpy types and NaN values
+                json_response = orjson.dumps(analysis_dict)
                 return Response(json_response, mimetype='application/json')
 
             except Exception as e:
