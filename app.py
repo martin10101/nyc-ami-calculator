@@ -153,7 +153,17 @@ def analyze_file():
                 return Response(json_response, mimetype='application/json')
 
             except Exception as e:
-                return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
+                import traceback
+                error_type = type(e).__name__
+                error_message = str(e)
+                error_traceback = traceback.format_exc()
+                print(error_traceback) # For server logs
+                return jsonify({
+                    "error": "An unexpected error occurred during analysis.",
+                    "error_type": error_type,
+                    "error_message": error_message,
+                    "traceback": error_traceback # Sending traceback to client for debugging
+                }), 500
 
     return jsonify({"error": "An unknown error occurred"}), 500
 
