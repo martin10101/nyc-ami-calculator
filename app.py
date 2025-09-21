@@ -9,6 +9,40 @@ from ami_optix.report_generator import create_excel_reports
 
 app = Flask(__name__)
 
+@app.route('/')
+def home():
+    return '''
+    <html>
+    <head>
+        <title>NYC AMI Calculator</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+            .header { text-align: center; color: #2c3e50; }
+            .api-info { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
+            .endpoint { background: #e9ecef; padding: 10px; margin: 10px 0; border-radius: 4px; font-family: monospace; }
+        </style>
+    </head>
+    <body>
+        <h1 class="header">🏙️ NYC AMI Calculator</h1>
+        <p>Welcome to the NYC Area Median Income (AMI) Calculator API. This service helps analyze affordable housing projects in New York City.</p>
+        
+        <div class="api-info">
+            <h3>Available Endpoints:</h3>
+            <div class="endpoint">
+                <strong>POST /api/analyze</strong><br>
+                Upload a CSV or Excel file for AMI analysis. Returns optimized scenarios and compliance reports.
+            </div>
+            <div class="endpoint">
+                <strong>GET /api/download/&lt;filename&gt;</strong><br>
+                Download generated Excel reports as a ZIP file.
+            </div>
+        </div>
+        
+        <p><strong>Status:</strong> ✅ Service is running and ready to process files!</p>
+    </body>
+    </html>
+    '''
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze_file():
     if 'file' not in request.files:
