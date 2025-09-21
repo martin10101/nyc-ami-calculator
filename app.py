@@ -4,6 +4,7 @@ import tempfile
 import zipfile
 import json
 import numpy as np
+import math
 from flask import Flask, request, jsonify, send_from_directory
 from flask.json.provider import JSONProvider
 from werkzeug.utils import secure_filename
@@ -22,6 +23,9 @@ class CustomJSONProvider(JSONProvider):
 
     @staticmethod
     def default(o):
+        # This ordering is important, as np.nan is a float.
+        if isinstance(o, (float, np.floating)) and math.isnan(o):
+            return None
         if isinstance(o, np.integer):
             return int(o)
         if isinstance(o, np.floating):
