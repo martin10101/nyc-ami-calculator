@@ -2,12 +2,28 @@ import os
 import shutil
 import tempfile
 import zipfile
-import orjson
-from flask import Flask, request, jsonify, send_from_directory, Response
+import numpy as np
+import pandas as pd
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
+
+def clean_data(data):
+    """Recursively clean data to ensure JSON serialization"""
+    if isinstance(data, dict):
+        return {k: clean_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_data(item) for item in data]
+    elif isinstance(data, np.integer):
+        return int(data)
+    elif isinstance(data, np.floating):
+        return None if np.isnan(data) else float(data)
+    elif pd.isna(data):
+        return None
+    else:
+        return data
 
 app = Flask(__name__)
 
@@ -148,22 +164,12 @@ def analyze_file():
                 os.makedirs(uploads_dir, exist_ok=True)
                 shutil.move(zip_filepath, os.path.join(uploads_dir, zip_filename))
 
-                # Use orjson for fast, correct serialization of numpy types and NaN values
-                json_response = orjson.dumps(analysis_dict)
-                return Response(json_response, mimetype='application/json')
+                # Clean the data for JSON serialization before returning
+                cleaned_analysis_dict = clean_data(analysis_dict)
+                return jsonify(cleaned_analysis_dict)
 
             except Exception as e:
-                import traceback
-                error_type = type(e).__name__
-                error_message = str(e)
-                error_traceback = traceback.format_exc()
-                print(error_traceback) # For server logs
-                return jsonify({
-                    "error": "An unexpected error occurred during analysis.",
-                    "error_type": error_type,
-                    "error_message": error_message,
-                    "traceback": error_traceback # Sending traceback to client for debugging
-                }), 500
+                return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
 
     return jsonify({"error": "An unknown error occurred"}), 500
 
