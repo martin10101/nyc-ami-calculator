@@ -114,8 +114,9 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
             model.Add(100 * sum(low_band_assignments) >= min_required_low_band_units)
 
     # --- Objective Function ---
-    # Maximize the WAAMI by maximizing the scaled total AMI SF.
-    model.Maximize(total_ami_sf_scaled)
+    # Minimize the WAAMI by minimizing the scaled total AMI SF.
+    # This finds the most affordable valid scenario.
+    model.Minimize(total_ami_sf_scaled)
 
     # --- Solve ---
     solver = cp_model.CpSolver()
@@ -181,7 +182,8 @@ def find_optimal_scenarios(df_affordable, config, relaxed_floor=None):
             absolute_best_results.append(result)
 
     if absolute_best_results:
-        absolute_best_results.sort(key=lambda x: (x['waami'], x['premium_score']), reverse=True)
+        # Sort ascending by WAAMI (primary) and descending by premium_score (tie-breaker)
+        absolute_best_results.sort(key=lambda x: (x['waami'], -x['premium_score']))
         scenarios["absolute_best"] = absolute_best_results
 
     # --- Run 2: Client Oriented (Preference-Weighted) ---

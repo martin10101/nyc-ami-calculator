@@ -65,12 +65,13 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     unit_2b_assignment = next(u for u in assignments if u['unit_id'] == '2B')
     unit_1a_assignment = next(u for u in assignments if u['unit_id'] == '1A')
 
-    # Assert that the more valuable unit gets the higher AMI band
-    assert unit_2b_assignment['assigned_ami'] == 0.80
+    # With the objective now being MINIMIZE, the solver should assign the lowest possible AMI to all units
+    # to achieve the lowest possible WAAMI.
+    assert unit_2b_assignment['assigned_ami'] == 0.40
     assert unit_1a_assignment['assigned_ami'] == 0.40
 
     # Check that the WAAMI is calculated correctly
-    expected_waami = ((800 * 0.80) + (600 * 0.40)) / (800 + 600)
+    expected_waami = ((800 * 0.40) + (600 * 0.40)) / (800 + 600)
     assert abs(top_scenario['waami'] - expected_waami) < 1e-9
 
     # Check that the best_2_band scenario was found
@@ -152,9 +153,9 @@ def test_client_oriented_scenario_logic(sample_config):
     abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['absolute_best'][0]['assignments']}
     client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['client_oriented'][0]['assignments']}
 
-    # Assert that the absolute_best scenario maximized SF * AMI
-    assert abs_best_assignments['B'] == 1.0
+    # Assert that the absolute_best scenario MINIMIZED SF * AMI
     assert abs_best_assignments['A'] == 0.5
+    assert abs_best_assignments['B'] == 0.5
 
     # Assert that the client_oriented scenario was nudged to prefer the premium unit
     assert client_oriented_assignments['A'] == 1.0
@@ -196,5 +197,5 @@ def test_finds_exact_60_percent_solution(sample_config):
     assert scenarios.get("absolute_best"), "A solution should be found."
     top_scenario = scenarios["absolute_best"][0]
 
-    # Check that the WAAMI is exactly 0.6, allowing for tiny float precision errors
-    assert abs(top_scenario['waami'] - 0.600000) < 1e-9
+    # Check that the WAAMI is exactly 0.4, as the new objective is to minimize
+    assert abs(top_scenario['waami'] - 0.400000) < 1e-9
