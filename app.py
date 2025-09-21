@@ -147,7 +147,13 @@ def analyze_file():
                 return jsonify(analysis_dict)
 
             except Exception as e:
-                return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
+                import traceback
+                error_details = traceback.format_exc()
+                print(f"Error during analysis: {error_details}")  # Log for debugging
+                return jsonify({
+                    "error": f"An unexpected error occurred during analysis: {str(e)}",
+                    "details": "Please check your file format and try again. Ensure your file has the required columns: unit_id, bedrooms, net_sf"
+                }), 500
 
     return jsonify({"error": "An unknown error occurred"}), 500
 

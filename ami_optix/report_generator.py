@@ -32,15 +32,32 @@ def create_excel_reports(analysis_json, original_file_path, output_dir='reports'
             continue
 
         df = pd.DataFrame(scenario['assignments'])
-        # Select and reorder columns for a clean report
-        report_df = df[['unit_id', 'bedrooms', 'net_sf', 'floor', 'assigned_ami']].copy()
-        report_df.rename(columns={
+        
+        # Select available columns for a clean report (handle missing optional columns)
+        required_cols = ['unit_id', 'bedrooms', 'net_sf', 'assigned_ami']
+        optional_cols = ['floor', 'balcony', 'client_ami']
+        
+        # Start with required columns
+        available_cols = [col for col in required_cols if col in df.columns]
+        # Add optional columns if they exist
+        available_cols.extend([col for col in optional_cols if col in df.columns])
+        
+        report_df = df[available_cols].copy()
+        
+        # Create column mapping for display names
+        column_mapping = {
             'unit_id': 'Unit ID',
             'bedrooms': 'Bedrooms',
             'net_sf': 'Net SF',
             'floor': 'Floor',
+            'balcony': 'Balcony',
+            'client_ami': 'Client AMI',
             'assigned_ami': 'Assigned AMI'
-        }, inplace=True)
+        }
+        
+        # Rename only the columns that exist
+        existing_mapping = {k: v for k, v in column_mapping.items() if k in report_df.columns}
+        report_df.rename(columns=existing_mapping, inplace=True)
 
         # Format the AMI column as a percentage
         report_df['Assigned AMI'] = (report_df['Assigned AMI'] * 100).map('{:.0f}%'.format)

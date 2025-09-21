@@ -13,10 +13,14 @@ def default_converter(o):
     if isinstance(o, np.integer):
         return int(o)
     if isinstance(o, np.floating):
+        if np.isnan(o):
+            return None  # Convert NaN to None for JSON compatibility
         return float(o)
     if isinstance(o, np.ndarray):
         return o.tolist()
-    raise TypeError
+    if pd.isna(o):  # Handle pandas NaN values
+        return None
+    raise TypeError(f"Object of type {type(o)} is not JSON serializable")
 
 def main(file_path):
     """
@@ -61,18 +65,53 @@ def main(file_path):
         # --- Compliance & Output ---
         compliance_report = run_compliance_checks(pd.DataFrame(s1_abs_best['assignments']), config['nyc_rules'])
 
+        # Clean data for JSON serialization
+        def clean_data(data):
+            """Recursively clean data to ensure JSON serialization"""
+            if isinstance(data, dict):
+                return {k: clean_data(v) for k, v in data.items()}
+            elif isinstance(data, list):
+                return [clean_data(item) for item in data]
+            elif isinstance(data, np.integer):
+                return int(data)
+            elif isinstance(data, np.floating):
+                return None if np.isnan(data) else float(data)
+            elif pd.isna(data):
+                return None
+            else:
+                return data
+
         output = {
-            "project_summary": {"total_affordable_sf": df_affordable['net_sf'].sum(), "total_affordable_units": len(df_affordable)},
+            "project_summary": {
+                "total_affordable_sf": float(df_affordable['net_sf'].sum()), 
+                "total_affordable_units": int(len(df_affordable))
+            },
             "analysis_notes": notes,
-            "compliance_report": compliance_report,
-            "scenario_absolute_best": {"waami": s1_abs_best['waami'], "bands": s1_abs_best['bands'], "assignments": s1_abs_best['assignments']},
+            "compliance_report": clean_data(compliance_report),
+            "scenario_absolute_best": clean_data({
+                "waami": float(s1_abs_best['waami']), 
+                "bands": s1_abs_best['bands'], 
+                "assignments": s1_abs_best['assignments']
+            }),
         }
         if s2_alternative:
-            output["scenario_alternative"] = {"waami": s2_alternative['waami'], "bands": s2_alternative['bands'], "assignments": s2_alternative['assignments']}
+            output["scenario_alternative"] = clean_data({
+                "waami": float(s2_alternative['waami']), 
+                "bands": s2_alternative['bands'], 
+                "assignments": s2_alternative['assignments']
+            })
         if s3_client_oriented:
-            output["scenario_client_oriented"] = {"waami": s3_client_oriented['waami'], "bands": s3_client_oriented['bands'], "assignments": s3_client_oriented['assignments']}
+            output["scenario_client_oriented"] = clean_data({
+                "waami": float(s3_client_oriented['waami']), 
+                "bands": s3_client_oriented['bands'], 
+                "assignments": s3_client_oriented['assignments']
+            })
         if s4_best_2_band:
-            output["scenario_best_2_band"] = {"waami": s4_best_2_band['waami'], "bands": s4_best_2_band['bands'], "assignments": s4_best_2_band['assignments']}
+            output["scenario_best_2_band"] = clean_data({
+                "waami": float(s4_best_2_band['waami']), 
+                "bands": s4_best_2_band['bands'], 
+                "assignments": s4_best_2_band['assignments']
+            })
 
         return output
 
