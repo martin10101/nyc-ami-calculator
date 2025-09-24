@@ -89,7 +89,7 @@ def test_no_solution_found(sample_affordable_df, sample_config):
     scenarios = solver_results["scenarios"]
 
     assert not scenarios.get("absolute_best"), "Solver should not find an absolute_best solution."
-    assert not scenarios.get("client_oriented"), "Solver should not find a client_oriented solution."
+    assert not scenarios.get("alternative"), "Solver should not find an alternative solution."
 
 def test_deep_affordability_constraint(sample_config):
     """
@@ -123,42 +123,40 @@ def test_deep_affordability_constraint(sample_config):
     # 20% of 10 units is 2. The constraint should force at least 2 units into the 40% band.
     assert len(low_band_units) >= 2
 
-def test_client_oriented_scenario_logic(sample_config):
+def test_lexicographical_tie_breaking_with_premium_score(sample_config):
     """
-    Tests that the client-oriented scenario prioritizes premium scores, even at a
-    slight WAAMI cost compared to the absolute best.
+    Tests that the lexicographical (two-pass) solver correctly uses the
+    premium score to break ties between solutions with the exact same WAAMI.
     """
-    # Unit A: High premium score, medium SF
-    # Unit B: Low premium score, high SF
+    # Unit A: High premium score
+    # Unit B: Low premium score
+    # Both have the same SF, so swapping their AMIs results in the same WAAMI.
     data = {
         'unit_id': ['A', 'B'],
-        'bedrooms': [3, 1], # Contributes to premium
-        'net_sf': [800, 850], # B has higher SF
-        'floor': [10, 1], # A is on a higher floor
-        'balcony': [1, 0], # A has a balcony
+        'bedrooms': [3, 1],
+        'net_sf': [1000, 1000], # Identical SF is key for this test
+        'floor': [10, 1],      # Unit A is more premium
+        'balcony': [1, 0],     # Unit A is more premium
         'client_ami': [1.0, 1.0]
     }
     df = pd.DataFrame(data)
 
-    # With these weights, Unit A will have a much higher premium score.
-    # The absolute_best solver should give the 100% band to Unit B (more SF).
-    # The client_oriented solver should give the 100% band to Unit A (more premium).
-    sample_config['optimization_rules']['potential_bands'] = [50, 100]
-    sample_config['optimization_rules']['waami_cap_percent'] = 80.0
+    # With these bands, the two possible assignments have identical WAAMIs.
+    # WAAMI = (1000 * 0.6 + 1000 * 0.4) / 2000 = 0.5
+    # By setting the cap to 50%, we force the solver to choose between the two
+    # tied scenarios, triggering the lexicographical tie-breaking.
+    sample_config['optimization_rules']['potential_bands'] = [40, 60]
+    sample_config['optimization_rules']['waami_cap_percent'] = 50.0
 
     solver_results = find_optimal_scenarios(df, sample_config)
     scenarios = solver_results["scenarios"]
 
+    # The 'absolute_best' scenario should be the one that maximizes the premium score
+    # by giving the higher AMI band to the more premium unit (Unit A).
     abs_best_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['absolute_best'][0]['assignments']}
-    client_oriented_assignments = {u['unit_id']: u['assigned_ami'] for u in scenarios['client_oriented'][0]['assignments']}
 
-    # Assert that the absolute_best scenario maximized SF * AMI
-    assert abs_best_assignments['B'] == 1.0
-    assert abs_best_assignments['A'] == 0.5
-
-    # Assert that the client_oriented scenario was nudged to prefer the premium unit
-    assert client_oriented_assignments['A'] == 1.0
-    assert client_oriented_assignments['B'] == 0.5
+    assert abs_best_assignments['A'] == 0.60
+    assert abs_best_assignments['B'] == 0.40
 
 def test_waami_floor_constraint(sample_affordable_df, sample_config):
     """Tests that the waami_floor constraint correctly finds solutions above a certain floor."""

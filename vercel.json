@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "100mb" }
+    },
+    {
+      "src": "dashboard/package.json",
+      "use": "@vercel/next",
+      "config": {
+        "workPath": "dashboard"
+      }
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/app.py"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/dashboard"
+    }
+  ]
+}

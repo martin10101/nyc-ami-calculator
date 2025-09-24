@@ -2,12 +2,12 @@ import pandas as pd
 
 # As defined in the Project Charter, Section 3.2
 HEADER_MAPPING = {
-    "unit_id": ["APT", "UNIT", "UNIT ID", "APARTMENT", "APT #", "ID", "UNIT_NUMBER", "APARTMENT_NUMBER"],
-    "bedrooms": ["BED", "BEDS", "BEDROOMS", "BEDROOM", "BR", "BEDROOM_COUNT"],
-    "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA", "SQUARE FEET", "SQUARE_FEET", "SIZE", "UNIT_SIZE", "FLOOR_AREA"],
-    "floor": ["FLOOR", "STORY", "LEVEL", "FLOOR_NUMBER", "STORY_NUMBER"],
-    "balcony": ["BALCONY", "TERRACE", "OUTDOOR", "PATIO", "DECK"],
-    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT", "AFFORDABLE", "AFFORDABLE_PERCENTAGE"],
+    "unit_id": ["APT", "UNIT", "UNIT ID", "APARTMENT", "APT #"],
+    "bedrooms": ["BED", "BEDS", "BEDROOMS"],
+    "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA"],
+    "floor": ["FLOOR", "STORY", "LEVEL"],
+    "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
+    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT"],
 }
 
 class Parser:
@@ -50,64 +50,30 @@ class Parser:
             if name.lower() in self.data.columns:
                 return name.lower()
         return None
-    
-    def _suggest_column_mapping(self, missing_columns):
-        """
-        Suggests possible column mappings for missing required columns.
-        """
-        suggestions = {}
-        for col_type, possible_names in missing_columns.items():
-            # Look for partial matches in existing columns
-            existing_cols = list(self.data.columns)
-            suggestions[col_type] = []
-            
-            for existing_col in existing_cols:
-                for possible_name in possible_names:
-                    if possible_name.lower() in existing_col.lower() or existing_col.lower() in possible_name.lower():
-                        suggestions[col_type].append(existing_col)
-                        break
-        
-        return suggestions
 
     def map_headers(self):
         """
         Maps the fuzzy headers from the input file to the standardized internal names.
         """
+        original_columns = list(self.data.columns)
+        self.data.columns = [str(col).lower() for col in self.data.columns]
+
         for key, possible_names in HEADER_MAPPING.items():
-            found_header = self._find_column(possible_names)
-            if found_header:
-                self.mapped_headers[key] = found_header
+            for name in possible_names:
+                if name.lower() in self.data.columns:
+                    # Find the original cased version of the header
+                    original_header = next((h for h in original_columns if h.lower() == name.lower()), None)
+                    self.mapped_headers[key] = original_header
+                    break
+
+        # Restore original column names for data manipulation
+        self.data.columns = original_columns
 
         # Validate that essential columns were found
         required_columns = ["unit_id", "bedrooms", "net_sf"]
-        missing_columns = []
         for col in required_columns:
             if col not in self.mapped_headers:
-                missing_columns.append(col)
-        
-        if missing_columns:
-            # Get suggestions for missing columns
-            suggestions = self._suggest_column_mapping({col: HEADER_MAPPING[col] for col in missing_columns})
-            
-            # Create detailed error message
-            error_msg = f"Error: Missing required columns: {', '.join(missing_columns)}\n\n"
-            error_msg += "Your file has these columns:\n"
-            error_msg += f"{', '.join(self.data.columns)}\n\n"
-            error_msg += "Required column names (any of these will work):\n"
-            
-            for col in missing_columns:
-                error_msg += f"- {col}: {', '.join(HEADER_MAPPING[col])}\n"
-            
-            # Add suggestions if any found
-            if any(suggestions.values()):
-                error_msg += "\nPossible matches in your file:\n"
-                for col_type, suggested_cols in suggestions.items():
-                    if suggested_cols:
-                        error_msg += f"- {col_type}: {', '.join(suggested_cols)}\n"
-            
-            error_msg += "\nPlease rename your columns to match one of the required names above."
-            
-            raise ValueError(error_msg)
+                raise ValueError(f"Error: Missing required column. Could not find a match for '{col}' (e.g., {HEADER_MAPPING[col][0]}).")
 
         return self.mapped_headers
 
