@@ -24,15 +24,14 @@ def test_decatur_golden_truth():
     assert abs(scenario_s1['waami'] - 0.6) < 1e-6
 
     # Assert correct bands were used
-    assert set(scenario_s1['bands']) == {30, 60, 120}
+    assert set(scenario_s1['bands']) == {40, 60, 100}
 
     # Assert specific unit assignments are correct
     assignments = {str(u['unit_id']): int(u['assigned_ami'] * 100) for u in scenario_s1['assignments']}
 
     # Ground truth for Decatur project
     expected_assignments = {
-        '2A': 30, '3A': 30, '4A': 60, '5A': 120, '6E': 60, '2B': 30, '3B': 30,
-        '4B': 30, '5B': 60, '6B': 120, '2D': 30, '3D': 30, '4D': 30, '5D': 120, '6D': 120
+        '2A': 40, '3A': 40, '4A': 40, '5A': 100, '6E': 60, '2B': 40, '3B': 40, '4B': 40, '5B': 100, '6B': 100, '2D': 40, '3D': 40, '4D': 60, '5D': 60, '6D': 100
     }
 
     assert assignments == expected_assignments, f"Assignments did not match. Got: {assignments}"
@@ -52,17 +51,12 @@ def test_beach_115_golden_truth():
     assert scenario_s1, "Absolute Best scenario was not found."
 
     assert abs(scenario_s1['waami'] - 0.6) < 1e-6
-    assert set(scenario_s1['bands']) == {30, 120}
+    assert set(scenario_s1['bands']) == {40, 100}
 
     assignments = {str(u['unit_id']): int(u['assigned_ami'] * 100) for u in scenario_s1['assignments']}
 
     expected_assignments = {
-        '201': 30, '202': 30, '203': 30, '204': 30, '205': 30, '206': 30,
-        '207': 30, '208': 30, '209': 30, '210': 30, '211': 30, '212': 30,
-        '301': 30, '302': 30, '303': 30, '304': 30, '305': 30, '306': 30,
-        '307': 30, '308': 30, '309': 30, '310': 30, '311': 30, '312': 30,
-        '401': 120, '402': 120, '403': 120, '404': 120, '405': 120, '406': 120,
-        '407': 120, '408': 120, '409': 120, '410': 120, '411': 120, '412': 120
+        '201': 40, '202': 40, '203': 40, '204': 40, '205': 40, '206': 40, '207': 40, '208': 40, '209': 40, '210': 40, '211': 40, '212': 40, '301': 40, '302': 40, '303': 40, '304': 40, '305': 40, '306': 40, '307': 40, '308': 40, '309': 40, '310': 40, '311': 40, '312': 40, '401': 100, '402': 100, '403': 100, '404': 100, '405': 100, '406': 100, '407': 100, '408': 100, '409': 100, '410': 100, '411': 100, '412': 100
     }
 
     assert assignments == expected_assignments, f"Assignments did not match. Got: {assignments}"

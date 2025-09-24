@@ -21,7 +21,7 @@ developer_preferences:
 optimization_rules:
   waami_cap_percent: 60.0
   max_bands_per_scenario: 3
-  potential_bands: [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
+  potential_bands: [40, 50, 60, 70, 80, 90, 100]
   deep_affordability_sf_threshold: 10000
   # "Smart Search" fallback rules for small projects
   small_project_unit_threshold: 10
