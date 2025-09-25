@@ -2,9 +2,10 @@ import os
 import shutil
 import tempfile
 import zipfile
+import json
 from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
-from main import main as run_ami_optix_analysis
+from main import main as run_ami_optix_analysis, default_converter
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 
@@ -76,7 +77,10 @@ def analyze_file():
                 os.makedirs(UPLOADS_DIR, exist_ok=True)
                 shutil.move(zip_filepath, os.path.join(UPLOADS_DIR, zip_filename))
 
-                return jsonify(analysis_results)
+                # Convert numpy/pandas types to native Python before serializing
+                safe_payload = json.loads(json.dumps(analysis_results, default=default_converter))
+
+                return jsonify(safe_payload)
 
             except Exception as e:
                 return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
