@@ -135,3 +135,22 @@ def test_ami_column_with_percentages(temp_dir):
     assert df.loc[df['unit_id'] == '1A', 'client_ami'].iloc[0] == 0.6
     assert df.loc[df['unit_id'] == '1B', 'client_ami'].iloc[0] == 0.8
     assert df.loc[df['unit_id'] == '2A', 'client_ami'].iloc[0] == 0.5
+
+def test_headers_with_whitespace_variations(temp_dir):
+    """Parser should tolerate leading/trailing spaces and tabs in headers."""
+    headers = ['FLOOR', 'APT', 'BED', ' NET SF', 'AMI', 'BALCONY']
+    data = [
+        [2, '2A', 1, 450.0, '60%', ''],
+        [2, '2B', 2, 595.0, '75%', ''],
+        [3, '3C', 1, 407.0, '60%', 'Yes'],
+    ]
+    filepath = create_csv(temp_dir, "whitespace_headers.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert len(df) == 3
+    assert df['net_sf'].tolist() == [450.0, 595.0, 407.0]
+    assert df['client_ami'].tolist()[0] == 0.60
+
+
