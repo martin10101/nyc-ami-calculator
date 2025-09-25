@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import zipfile
 from flask import Flask, request, jsonify, send_from_directory
@@ -73,7 +74,7 @@ def analyze_file():
 
                 # Persist the zip in the uploads directory for the download endpoint
                 os.makedirs(UPLOADS_DIR, exist_ok=True)
-                os.replace(zip_filepath, os.path.join(UPLOADS_DIR, zip_filename))
+                shutil.move(zip_filepath, os.path.join(UPLOADS_DIR, zip_filename))
 
                 return jsonify(analysis_results)
 
@@ -129,3 +130,4 @@ def serve_dashboard(path):
 if __name__ == '__main__':
     os.makedirs(UPLOADS_DIR, exist_ok=True)
     app.run(debug=True, port=5001)
+
