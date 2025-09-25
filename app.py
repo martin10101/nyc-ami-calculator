@@ -8,6 +8,18 @@ from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 
 app = Flask(__name__)
+UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+@app.route('/')
+def home():
+    """Simple status page for uptime checks."""
+    return (
+        "<html><head><title>NYC AMI Calculator</title></head><body>"
+        "<h1>NYC AMI Calculator API</h1>"
+        "<p>Use POST /api/analyze to submit a spreadsheet for analysis.</p>"
+        "</body></html>"
+    )
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_file():
@@ -40,7 +52,12 @@ def analyze_file():
                 analysis_results['narrative_analysis'] = narrative
 
                 # 3. Generate Excel reports, passing the original headers
-                report_files = create_excel_reports(analysis_results, upload_filepath, original_headers, output_dir=temp_dir)
+                report_files = create_excel_reports(
+                    analysis_results,
+                    upload_filepath,
+                    original_headers,
+                    output_dir=temp_dir
+                )
 
                 # 4. Create a zip file containing all reports
                 zip_filename = f"{os.path.splitext(filename)[0]}_reports.zip"
@@ -52,9 +69,9 @@ def analyze_file():
                 # 5. Add a download link for the zip file to the response
                 analysis_results['download_link'] = f"/api/download/{zip_filename}"
 
-                # Store the zip file path in a temporary location accessible by the download endpoint
-                # This is a simplification for this environment. A real app would use a shared file store.
-                os.rename(zip_filepath, os.path.join('uploads', zip_filename))
+                # Persist the zip in the uploads directory for the download endpoint
+                os.makedirs(UPLOADS_DIR, exist_ok=True)
+                os.replace(zip_filepath, os.path.join(UPLOADS_DIR, zip_filename))
 
                 return jsonify(analysis_results)
 
@@ -65,16 +82,12 @@ def analyze_file():
 
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_report(filename):
-    """
-    Serves the generated zip file for download.
-    """
-    # For security, only allow downloads from the 'uploads' directory
-    directory = os.path.join(os.getcwd(), 'uploads')
+    """Serves the generated zip file for download."""
     try:
-        return send_from_directory(directory, filename, as_attachment=True)
+        return send_from_directory(UPLOADS_DIR, filename, as_attachment=True)
     except FileNotFoundError:
         return jsonify({"error": "File not found."}), 404
 
 if __name__ == '__main__':
-    os.makedirs('uploads', exist_ok=True) # Ensure uploads dir exists for zips
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
     app.run(debug=True, port=5001)

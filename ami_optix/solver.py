@@ -136,7 +136,9 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
     # --- Pass 1: Maximize WAAMI ---
     model.Maximize(total_ami_sf_var)
     solver = cp_model.CpSolver()
-    solver.parameters.num_workers = 8
+    # Use a single worker to keep CP-SAT output deterministic across runs.
+    solver.parameters.num_workers = 1
+    solver.parameters.random_seed = 0
     status = solver.Solve(model)
 
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
@@ -156,29 +158,70 @@ def _solve_single_scenario(df_affordable, bands_to_test, total_affordable_sf, op
 
     status = solver.Solve(model)
 
-    # --- Process Results ---
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        assignments = []
+    if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
+        # This fallback should rarely be hit, but indicates an issue if the
+        # second pass fails after the first one succeeded.
+        return {"status": "NO_SOLUTION_IN_PASS_2"}
+
+    def _extract_assignments():
+        extracted = []
         for i in range(num_units):
             for j in range(num_bands):
                 if solver.Value(x[i][j]) == 1:
                     unit_data = df_affordable.iloc[i].to_dict()
                     unit_data['assigned_ami'] = bands_to_test[j] / 100.0
-                    assignments.append(unit_data)
+                    extracted.append(unit_data)
                     break
+        return extracted
 
-        final_waami = _calculate_waami_from_assignments(assignments)
+    optimal_premium_alignment = solver.Value(premium_alignment_expr)
+    best_assignments = _extract_assignments()
 
-        return {
-            "status": "OPTIMAL",
-            "waami": final_waami,
-            "assignments": assignments,
-            "bands": _get_bands_from_assignments(assignments)
-        }
+    # --- Pass 3: Enumerate optimal assignments for deterministic ordering ---
+    model.Add(premium_alignment_expr == optimal_premium_alignment)
+
+    class _OptimalSolutionCollector(cp_model.CpSolverSolutionCallback):
+        def __init__(self, x_vars, bands, frame):
+            super().__init__()
+            self._x_vars = x_vars
+            self._bands = bands
+            self._frame = frame
+            self.best_assignment = None
+            self.best_canonical = None
+
+        def on_solution_callback(self):
+            extracted = []
+            for unit_idx in range(num_units):
+                for band_idx in range(num_bands):
+                    if self.Value(self._x_vars[unit_idx][band_idx]):
+                        unit_data = self._frame.iloc[unit_idx].to_dict()
+                        unit_data['assigned_ami'] = self._bands[band_idx] / 100.0
+                        extracted.append(unit_data)
+                        break
+            canonical = tuple(sorted((unit['unit_id'], unit['assigned_ami']) for unit in extracted))
+            if self.best_canonical is None or canonical < self.best_canonical:
+                self.best_canonical = canonical
+                self.best_assignment = extracted
+
+    collector = _OptimalSolutionCollector(x, bands_to_test, df_affordable)
+    solver.parameters.enumerate_all_solutions = True
+    model.ClearObjective()
+    solver.Solve(model, collector)
+    solver.parameters.enumerate_all_solutions = False
+
+    if collector.best_assignment:
+        assignments = collector.best_assignment
     else:
-        # This fallback should rarely be hit, but indicates an issue if the
-        # second pass fails after the first one succeeded.
-        return {"status": "NO_SOLUTION_IN_PASS_2"}
+        assignments = best_assignments
+
+    final_waami = _calculate_waami_from_assignments(assignments)
+
+    return {
+        "status": "OPTIMAL",
+        "waami": final_waami,
+        "assignments": assignments,
+        "bands": _get_bands_from_assignments(assignments)
+    }
 
 def find_optimal_scenarios(df_affordable, config, relaxed_floor=None):
     """
@@ -245,3 +288,9 @@ def find_optimal_scenarios(df_affordable, config, relaxed_floor=None):
         notes.append("No viable 2-band solution was found that could meet the project's financial and compliance constraints.")
 
     return {"scenarios": scenarios, "notes": notes}
+
+
+
+
+
+
