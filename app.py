@@ -9,17 +9,19 @@ from ami_optix.report_generator import create_excel_reports
 
 app = Flask(__name__)
 UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
+DASHBOARD_DIR = os.path.join(os.getcwd(), 'dashboard_static')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-@app.route('/')
-def home():
-    """Simple status page for uptime checks."""
-    return (
-        "<html><head><title>NYC AMI Calculator</title></head><body>"
-        "<h1>NYC AMI Calculator API</h1>"
-        "<p>Use POST /api/analyze to submit a spreadsheet for analysis.</p>"
-        "</body></html>"
-    )
+
+def _dashboard_file_exists(filename: str) -> bool:
+    return os.path.exists(os.path.join(DASHBOARD_DIR, filename))
+
+
+@app.route('/healthz')
+def healthcheck():
+    """Lightweight health endpoint for uptime checks."""
+    return jsonify({"status": "ok"})
+
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_file():
@@ -80,6 +82,7 @@ def analyze_file():
 
     return jsonify({"error": "An unknown error occurred"}), 500
 
+
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_report(filename):
     """Serves the generated zip file for download."""
@@ -87,6 +90,41 @@ def download_report(filename):
         return send_from_directory(UPLOADS_DIR, filename, as_attachment=True)
     except FileNotFoundError:
         return jsonify({"error": "File not found."}), 404
+
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_dashboard(path):
+    """Serve the static dashboard that ships with the deployment."""
+    # Guard API routes so they keep flowing to their own handlers
+    if path.startswith('api/'):
+        return jsonify({"error": "Not found"}), 404
+
+    requested = path or 'index.html'
+    requested_path = os.path.join(DASHBOARD_DIR, requested)
+
+    if os.path.isdir(requested_path):
+        requested = os.path.join(requested, 'index.html')
+
+    if _dashboard_file_exists(requested):
+        return send_from_directory(DASHBOARD_DIR, requested)
+
+    if _dashboard_file_exists('index.html'):
+        # SPA fallback - return index so client-side routing can take over
+        return send_from_directory(DASHBOARD_DIR, 'index.html')
+
+    return (
+        "<html><head><title>NYC AMI Calculator API</title></head><body>"
+        "<h1>NYC AMI Calculator API</h1>"
+        "<p>The interactive dashboard has not been built. "
+        "Deploy tip: run 'npm install' and 'npm run build && npm run export' inside the"
+        " dashboard/ folder, then deploy the contents of the generated dashboard_static/"
+        " directory alongside this service.</p>"
+        "</body></html>",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"}
+    )
+
 
 if __name__ == '__main__':
     os.makedirs(UPLOADS_DIR, exist_ok=True)
