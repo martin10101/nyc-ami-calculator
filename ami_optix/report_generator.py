@@ -1,87 +1,113 @@
+﻿import os
 import pandas as pd
-import os
+
+_SCENARIO_EXPORT_ORDER = [
+    ("S1_Absolute_Best", "scenario_absolute_best", "AMI_S1_Absolute_Best"),
+    ("S2_Client_Oriented", "scenario_client_oriented", "AMI_S2_Client_Oriented"),
+    ("S3_Best_3_Band", "scenario_best_3_band", "AMI_S3_Best_3_Band"),
+    ("S4_Best_2_Band", "scenario_best_2_band", "AMI_S4_Best_2_Band"),
+    ("S5_Alternative", "scenario_alternative", "AMI_S5_Alternative"),
+]
+
+def _scenario_to_dataframe(scenario):
+    df = pd.DataFrame(scenario['assignments'])
+    report_df = df[['unit_id', 'bedrooms', 'net_sf', 'floor', 'assigned_ami']].copy()
+    report_df.rename(columns={
+        'unit_id': 'Unit ID',
+        'bedrooms': 'Bedrooms',
+        'net_sf': 'Net SF',
+        'floor': 'Floor',
+        'assigned_ami': 'Assigned AMI',
+    }, inplace=True)
+    report_df['Assigned AMI'] = (report_df['Assigned AMI'] * 100).map('{:.0f}%'.format)
+    return report_df
+
+def _scenario_summary_frame(display_name, scenario):
+    metrics = scenario.get('metrics', {})
+    band_mix = metrics.get('band_mix', [])
+    band_summary = "; ".join(
+        f"{entry['band']}%: {entry['units']} units ({entry['share_of_sf']*100:.1f}% SF)"
+        for entry in band_mix
+    )
+    return pd.DataFrame([
+        {
+            'Scenario': display_name.replace('_', ' '),
+            'WAAMI (%)': round(metrics.get('waami_percent', scenario.get('waami', 0) * 100), 4),
+            'Bands Used': ", ".join(f"{band}%" for band in scenario.get('bands', [])),
+            'Total Units': metrics.get('total_units'),
+            'Total SF': metrics.get('total_sf'),
+            'Revenue Score': round(metrics.get('revenue_score', 0.0), 2),
+            'Band Mix': band_summary,
+        }
+    ])
 
 def create_excel_reports(analysis_json, original_file_path, original_headers, output_dir='reports'):
-    """
-    Generates multiple Excel reports from the solver's analysis JSON, including an
-    updated version of the user's original file with new assignment columns.
-
-    Args:
-        analysis_json (dict): The JSON output from the AMI-Optix solver.
-        original_file_path (str): The path to the user's original uploaded file.
-        original_headers (dict): The mapping of internal names to original column headers.
-        output_dir (str): The directory to save the reports in.
-
-    Returns:
-        list: A list of file paths for the generated reports.
-    """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     base_name = os.path.splitext(os.path.basename(original_file_path))[0]
     created_files = []
-    scenarios = analysis_json.get("scenarios", {})
 
-    # --- 1. Create Individual Scenario Reports ---
-    scenarios_to_report = {
-        "S1_Absolute_Best": scenarios.get("absolute_best", [None])[0],
-        "S2_Alternative": scenarios.get("alternative", [None])[0],
-        "S3_Best_2_Band": scenarios.get("best_2_band"),
+    scenario_lookup = {
+        key: analysis_json.get(key)
+        for _, key, _ in _SCENARIO_EXPORT_ORDER
     }
 
-    for name, scenario in scenarios_to_report.items():
+    # --- Individual scenario workbooks ---
+    for display_name, analysis_key, _ in _SCENARIO_EXPORT_ORDER:
+        scenario = scenario_lookup.get(analysis_key)
         if not scenario or 'assignments' not in scenario:
             continue
-
-        df = pd.DataFrame(scenario['assignments'])
-        report_df = df[['unit_id', 'bedrooms', 'net_sf', 'floor', 'assigned_ami']].copy()
-        report_df.rename(columns={
-            'unit_id': 'Unit ID', 'bedrooms': 'Bedrooms', 'net_sf': 'Net SF',
-            'floor': 'Floor', 'assigned_ami': 'Assigned AMI'
-        }, inplace=True)
-        report_df['Assigned AMI'] = (report_df['Assigned AMI'] * 100).map('{:.0f}%'.format)
-
-        filepath = os.path.join(output_dir, f"{base_name}_{name}_Report.xlsx")
-        report_df.to_excel(filepath, index=False)
+        filepath = os.path.join(output_dir, f"{base_name}_{display_name}_Report.xlsx")
+        with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
+            _scenario_to_dataframe(scenario).to_excel(writer, sheet_name='Assignments', index=False)
+            _scenario_summary_frame(display_name, scenario).to_excel(writer, sheet_name='Summary', index=False)
         created_files.append(filepath)
 
-    # --- 2. Create Updated Source File with Exact Column Placement ---
+    # --- Updated source workbook ---
     try:
         if original_file_path.endswith('.csv'):
             master_df = pd.read_csv(original_file_path, dtype=str)
         else:
             master_df = pd.read_excel(original_file_path, dtype=str)
     except Exception:
-        return created_files # Cannot proceed if original file is unreadable
-
-    # Get the original column names for unit ID and AMI
-    unit_col = original_headers.get('unit_id')
-    ami_col = original_headers.get('client_ami')
-
-    if not unit_col or not ami_col or unit_col not in master_df.columns or ami_col not in master_df.columns:
-        # If essential columns are missing, cannot create the updated source file
         return created_files
 
-    # Find the integer position of the client's AMI column
-    ami_col_idx = master_df.columns.get_loc(ami_col)
+    unit_col = original_headers.get('unit_id')
+    ami_col = original_headers.get('client_ami')
+    if not unit_col or not ami_col or unit_col not in master_df.columns or ami_col not in master_df.columns:
+        return created_files
 
-    # Prepare scenario data for insertion
-    s1_data = scenarios_to_report.get("S1_Absolute_Best")
-    s2_data = scenarios_to_report.get("S2_Alternative")
+    # Preserve original AMI column
+    insert_idx = master_df.columns.get_loc(ami_col) + 1
+    original_label = f"{ami_col}_Original"
+    if original_label not in master_df.columns:
+        master_df.insert(insert_idx, original_label, master_df[ami_col])
+        insert_idx += 1
 
-    # Use a mapping approach to preserve original file's row order and non-affordable units
-    if s1_data and 'assignments' in s1_data:
-        s1_map = {str(u['unit_id']): f"{int(u['assigned_ami']*100)}%" for u in s1_data['assignments']}
-        master_df.insert(ami_col_idx + 1, 'AMI_S1', master_df[unit_col].map(s1_map).fillna(''))
+    # Add scenario columns
+    for _, analysis_key, column_name in _SCENARIO_EXPORT_ORDER:
+        scenario = scenario_lookup.get(analysis_key)
+        if not scenario or 'assignments' not in scenario:
+            continue
+        mapping = {str(u['unit_id']): f"{int(round(u['assigned_ami'] * 100))}%" for u in scenario['assignments']}
+        master_df.insert(insert_idx, column_name, master_df[unit_col].map(mapping).fillna(''))
+        insert_idx += 1
 
-    if s2_data and 'assignments' in s2_data:
-        s2_map = {str(u['unit_id']): f"{int(u['assigned_ami']*100)}%" for u in s2_data['assignments']}
-        # Insert S2 next to S1 if S1 was added, otherwise next to the original AMI column
-        insert_idx = ami_col_idx + 2 if 'AMI_S1' in master_df.columns else ami_col_idx + 1
-        master_df.insert(insert_idx, 'AMI_S2', master_df[unit_col].map(s2_map).fillna(''))
+    summary_rows = []
+    for display_name, analysis_key, _ in _SCENARIO_EXPORT_ORDER:
+        scenario = scenario_lookup.get(analysis_key)
+        if not scenario:
+            continue
+        summary_df = _scenario_summary_frame(display_name, scenario)
+        summary_rows.append(summary_df)
+    summary_sheet = pd.concat(summary_rows, ignore_index=True) if summary_rows else pd.DataFrame()
 
     updated_source_filepath = os.path.join(output_dir, f"{base_name}_Updated_Source.xlsx")
-    master_df.to_excel(updated_source_filepath, index=False)
+    with pd.ExcelWriter(updated_source_filepath, engine='xlsxwriter') as writer:
+        master_df.to_excel(writer, sheet_name='Units', index=False)
+        if not summary_sheet.empty:
+            summary_sheet.to_excel(writer, sheet_name='Scenario Summary', index=False)
     created_files.append(updated_source_filepath)
 
     return created_files

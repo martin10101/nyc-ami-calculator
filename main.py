@@ -33,7 +33,7 @@ def main(file_path):
         notes = solver_results.get("notes", [])
 
         # --- "Smart Search" Fallback Logic ---
-        num_scenarios_found = sum(1 for v in scenarios.values() if v)
+        num_scenarios_found = len([s for s in scenarios.values() if s])
         unit_count = len(df_affordable)
         threshold = config['optimization_rules'].get('small_project_unit_threshold', 10)
 
@@ -42,17 +42,16 @@ def main(file_path):
             notes.append(f"Standard search yielded only {num_scenarios_found} result(s). Performing a 'Relaxed Search' with a WAAMI target floor of {relaxed_floor_pct}%.")
 
             relaxed_solver_results = find_optimal_scenarios(df_affordable, config, relaxed_floor=(relaxed_floor_pct / 100.0))
-
-            # Merge the new results, being careful not to overwrite the original absolute_best
-            scenarios.update(relaxed_solver_results.get("scenarios", {}))
+            relaxed_scenarios = relaxed_solver_results.get("scenarios", {})
+            for name, scenario in relaxed_scenarios.items():
+                scenarios.setdefault(name, scenario)
             notes.extend(relaxed_solver_results.get("notes", []))
-
 
         if not scenarios.get("absolute_best"):
             return {"error": "No optimal solution found. The project may be unworkable with the current constraints.", "analysis_notes": notes}
 
         # --- Compliance & Output ---
-        s1_assignments = scenarios["absolute_best"][0]["assignments"]
+        s1_assignments = scenarios["absolute_best"]["assignments"]
         compliance_report = run_compliance_checks(pd.DataFrame(s1_assignments), config['nyc_rules'])
 
         output = {
@@ -62,15 +61,20 @@ def main(file_path):
             },
             "analysis_notes": notes,
             "compliance_report": compliance_report,
+            "scenarios": scenarios,
         }
 
-        # Flatten the scenarios dictionary for consumers like the narrator and report generator
+        # Flatten for existing consumers
         if scenarios.get("absolute_best"):
-            output["scenario_absolute_best"] = scenarios["absolute_best"][0]
-        if scenarios.get("alternative"):
-            output["scenario_alternative"] = scenarios["alternative"][0]
+            output["scenario_absolute_best"] = scenarios["absolute_best"]
+        if scenarios.get("client_oriented"):
+            output["scenario_client_oriented"] = scenarios["client_oriented"]
+        if scenarios.get("best_3_band"):
+            output["scenario_best_3_band"] = scenarios["best_3_band"]
         if scenarios.get("best_2_band"):
             output["scenario_best_2_band"] = scenarios["best_2_band"]
+        if scenarios.get("alternative"):
+            output["scenario_alternative"] = scenarios["alternative"]
 
         return {
             "results": output,
