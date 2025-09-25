@@ -3,6 +3,8 @@ import shutil
 import tempfile
 import zipfile
 import json
+import math
+import numpy as np
 from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis, default_converter
@@ -13,6 +15,28 @@ app = Flask(__name__)
 UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
 DASHBOARD_DIR = os.path.join(os.getcwd(), 'dashboard_static')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
+def _sanitize_for_json(value):
+    """Recursively convert numpy/pandas types and NaN values to JSON-safe primitives."""
+    if isinstance(value, dict):
+        return {key: _sanitize_for_json(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_sanitize_for_json(item) for item in value.tolist()]
+    if isinstance(value, (float, np.floating)):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return float(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    try:
+        return default_converter(value)
+    except TypeError:
+        return value
 
 
 def _dashboard_file_exists(filename: str) -> bool:
@@ -77,8 +101,7 @@ def analyze_file():
                 os.makedirs(UPLOADS_DIR, exist_ok=True)
                 shutil.move(zip_filepath, os.path.join(UPLOADS_DIR, zip_filename))
 
-                # Convert numpy/pandas types to native Python before serializing
-                safe_payload = json.loads(json.dumps(analysis_results, default=default_converter))
+                safe_payload = _sanitize_for_json(analysis_results)
 
                 return jsonify(safe_payload)
 
