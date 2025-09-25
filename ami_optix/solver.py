@@ -112,6 +112,9 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = 1
     solver.parameters.random_seed = 0
+    time_limit = optimization_rules.get('scenario_time_limit_seconds')
+    if time_limit:
+        solver.parameters.max_time_in_seconds = time_limit
     status = solver.Solve(model)
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
         return {"status": "NO_SOLUTION"}
@@ -137,34 +140,19 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
                     break
         return extracted
     best_assignments = _extract_assignments()
-    model.Add(premium_alignment_expr == solver.Value(premium_alignment_expr))
-    class _OptimalSolutionCollector(cp_model.CpSolverSolutionCallback):
-        def __init__(self, x_vars, bands, frame):
-            super().__init__()
-            self._x_vars = x_vars
-            self._bands = bands
-            self._frame = frame
-            self.best_assignment = None
-            self.best_canonical = None
-        def on_solution_callback(self):
-            extracted = []
-            for unit_idx in range(num_units):
-                for band_idx in range(num_bands):
-                    if self.Value(self._x_vars[unit_idx][band_idx]):
-                        unit_data = self._frame.iloc[unit_idx].to_dict()
-                        unit_data['assigned_ami'] = self._bands[band_idx] / 100.0
-                        extracted.append(unit_data)
-                        break
-            canonical = tuple(sorted((unit['unit_id'], unit['assigned_ami']) for unit in extracted))
-            if self.best_canonical is None or canonical < self.best_canonical:
-                self.best_canonical = canonical
-                self.best_assignment = extracted
-    collector = _OptimalSolutionCollector(x, bands_to_test, df_affordable)
-    solver.parameters.enumerate_all_solutions = True
-    model.ClearObjective()
-    solver.Solve(model, collector)
-    solver.parameters.enumerate_all_solutions = False
-    assignments = collector.best_assignment if collector.best_assignment else best_assignments
+    premium_optimal = solver.Value(premium_alignment_expr)
+    model.Add(premium_alignment_expr == premium_optimal)
+
+    lex_failed = False
+    for unit_idx in range(num_units):
+        assignment_index_expr = sum(j * x[unit_idx][j] for j in range(num_bands))
+        model.Minimize(assignment_index_expr)
+        status = solver.Solve(model)
+        if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
+            lex_failed = True
+            break
+        model.Add(assignment_index_expr == solver.Value(assignment_index_expr))
+    assignments = best_assignments if lex_failed else _extract_assignments()
     final_waami = _calculate_waami_from_assignments(assignments)
     metrics = _build_metrics(assignments)
     return {
@@ -189,18 +177,59 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
     max_bands = optimization_rules.get('max_bands_per_scenario', 3)
     band_combos = list(itertools.combinations(potential_bands, 2)) + list(itertools.combinations(potential_bands, max_bands))
     band_combos = [sorted(combo) for combo in band_combos]
-    all_results = []
+    waami_cap = optimization_rules.get('waami_cap_percent', 60)
+    band_combos = [combo for combo in band_combos if min(combo) <= waami_cap]
+
+    priority_raw = optimization_rules.get('priority_band_combos', [])
+    priority_set = {tuple(sorted(p)) for p in priority_raw}
+    priority_combos = []
+    remaining_combos = []
+    for combo in band_combos:
+        if tuple(combo) in priority_set:
+            priority_combos.append(combo)
+        else:
+            remaining_combos.append(combo)
+
+    def _combo_sort_key(combo):
+        mean = sum(combo) / len(combo)
+        spread = max(combo) - min(combo)
+        penalty = 0
+        if 70 in combo and max(combo) >= 100:
+            penalty += 50
+        return (abs(mean - waami_cap), spread + penalty, len(combo), -max(combo))
+
+    band_combos = priority_combos + sorted(remaining_combos, key=_combo_sort_key)
+    max_unique = optimization_rules.get('max_unique_scenarios', 25)
+    unique_results: Dict[tuple, Dict[str, Any]] = {}
     for combo in band_combos:
         result = _solve_single_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
-        if result['status'] == 'OPTIMAL':
-            result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
-            result['canonical_assignments'] = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in result['assignments']))
-            all_results.append(result)
-    if not all_results:
+        if result['status'] != 'OPTIMAL':
+            continue
+        result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
+        canonical = tuple(sorted((u['unit_id'], u['assigned_ami']) for u in result['assignments']))
+        result['canonical_assignments'] = canonical
+        result['source_combo'] = combo
+        existing = unique_results.get(canonical)
+        if existing:
+            existing_score = (
+                existing['waami'],
+                existing['metrics']['revenue_score'],
+                existing['premium_score'],
+            )
+            new_score = (
+                result['waami'],
+                result['metrics']['revenue_score'],
+                result['premium_score'],
+            )
+            if new_score <= existing_score:
+                continue
+        unique_results[canonical] = result
+        if max_unique and len(unique_results) >= max_unique:
+            break
+    if not unique_results:
         return {"scenarios": {}, "notes": ["The solver could not find any optimal solutions given the project constraints."]}
-    unique_results = {result['canonical_assignments']: result for result in all_results}.values()
     sorted_results = sorted(
-        list(unique_results),
+        unique_results.values(),
         key=lambda x: (x['waami'], x['metrics']['revenue_score'], x['premium_score']),
         reverse=True,
     )
