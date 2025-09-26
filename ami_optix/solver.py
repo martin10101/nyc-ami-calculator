@@ -314,10 +314,10 @@ def find_optimal_scenarios(
     if best_2_band:
         _register('best_2_band', best_2_band)
     else:
-        fallback = scenarios.get('absolute_best')
-        if fallback:
-            scenarios['best_2_band'] = fallback
-            notes.append("No viable 2-band solution was found. Falling back to the absolute best scenario.")
+        absolute = scenarios.get('absolute_best')
+        if absolute and len(absolute['bands']) == 2:
+            scenarios['best_2_band'] = absolute
+            notes.append("Dedicated 2-band scenario mirrors the absolute best configuration.")
         else:
             notes.append("No viable 2-band solution was found that could meet the project's financial and compliance constraints.")
     revenue_sorted = sorted(
