@@ -178,6 +178,7 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
     band_combos = list(itertools.combinations(potential_bands, 2)) + list(itertools.combinations(potential_bands, max_bands))
     band_combos = [sorted(combo) for combo in band_combos]
     waami_cap = optimization_rules.get('waami_cap_percent', 60)
+    max_combo_checks = optimization_rules.get('max_band_combo_checks')
     band_combos = [combo for combo in band_combos if min(combo) <= waami_cap]
 
     priority_raw = optimization_rules.get('priority_band_combos', [])
@@ -199,9 +200,16 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
         return (abs(mean - waami_cap), spread + penalty, len(combo), -max(combo))
 
     band_combos = priority_combos + sorted(remaining_combos, key=_combo_sort_key)
+    notes = []
     max_unique = optimization_rules.get('max_unique_scenarios', 25)
     unique_results: Dict[tuple, Dict[str, Any]] = {}
+    combos_checked = 0
+    truncated_for_combo_limit = False
     for combo in band_combos:
+        if max_combo_checks and combos_checked >= max_combo_checks:
+            truncated_for_combo_limit = True
+            break
+        combos_checked += 1
         result = _solve_single_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
         if result['status'] != 'OPTIMAL':
             continue
@@ -226,6 +234,10 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
         unique_results[canonical] = result
         if max_unique and len(unique_results) >= max_unique:
             break
+    if truncated_for_combo_limit and max_combo_checks and (not max_unique or len(unique_results) < max_unique):
+        notes.append(
+            f"Search stopped after evaluating {combos_checked} band mixes (configured limit: {max_combo_checks}). Additional scenarios may be omitted."
+        )
     if not unique_results:
         return {"scenarios": {}, "notes": ["The solver could not find any optimal solutions given the project constraints."]}
     sorted_results = sorted(
@@ -233,7 +245,6 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
         key=lambda x: (x['waami'], x['metrics']['revenue_score'], x['premium_score']),
         reverse=True,
     )
-    notes = []
     scenarios: Dict[str, Dict[str, Any]] = {}
     selected_assignments = set()
     def _register(name: str, scenario: Dict[str, Any]):
