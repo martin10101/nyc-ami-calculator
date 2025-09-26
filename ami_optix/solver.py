@@ -105,10 +105,15 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
             for i in range(num_units):
                 for j in low_band_indices:
                     low_band_assignments.append(x[i][j] * sf_coeffs_int.iloc[i])
-            min_required_sf = int(total_sf_int * optimization_rules.get('deep_affordability_min_share', 0.2))
+            min_share = optimization_rules.get('deep_affordability_min_share', 0.2)
+            max_share = optimization_rules.get('deep_affordability_max_share')
+            min_required_sf = int(total_sf_int * min_share)
             if min_required_sf == 0:
                 min_required_sf = int(total_sf_int * 0.2)
             model.Add(sum(low_band_assignments) >= min_required_sf)
+            if max_share is not None:
+                upper_sf = int(total_sf_int * max_share)
+                model.Add(sum(low_band_assignments) <= upper_sf)
     model.Maximize(total_ami_sf_var)
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = 1

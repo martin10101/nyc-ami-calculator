@@ -2,6 +2,7 @@ import sys
 import json
 import uuid
 import time
+import copy
 from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
@@ -39,6 +40,22 @@ def main(file_path):
 
         scenarios = solver_results.get("scenarios", {})
         notes = solver_results.get("notes", [])
+
+        max_share_cap = config['optimization_rules'].get('deep_affordability_max_share')
+        if (not scenarios.get("absolute_best")) and max_share_cap is not None:
+            notes.append(
+                f"No solution satisfied the deep-affordability cap of {max_share_cap*100:.1f}% share. Retrying without that constraint."
+            )
+            relaxed_config = copy.deepcopy(config)
+            relaxed_config['optimization_rules'].pop('deep_affordability_max_share', None)
+            base_index = len(solver_diagnostics)
+            solver_results = find_optimal_scenarios(
+                df_affordable, relaxed_config, diagnostics=solver_diagnostics
+            )
+            for entry in solver_diagnostics[base_index:]:
+                entry['phase'] = 'deep_affordability_relaxed'
+            scenarios = solver_results.get("scenarios", {})
+            notes.extend(solver_results.get("notes", []))
 
         # --- "Smart Search" Fallback Logic ---
         num_scenarios_found = len([s for s in scenarios.values() if s])
