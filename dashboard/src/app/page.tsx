@@ -7,8 +7,6 @@ import {
   FiChevronDown,
   FiSun,
   FiMoon,
-  FiCheckCircle,
-  FiAlertTriangle,
   FiDownload
 } from "react-icons/fi";
 
@@ -115,32 +113,6 @@ const AssignmentsTable = ({ assignments }: { assignments?: Assignment[] }) => {
   );
 };
 
-const ComplianceReport = ({ report }: { report?: ComplianceItem[] }) => {
-  const entries = report ?? [];
-  const flagged = entries.filter((item) => item.status === "FLAGGED");
-
-  if (flagged.length === 0) {
-    return (
-      <div className="flex items-center text-green-500">
-        <FiCheckCircle className="mr-2" />
-        <p>All compliance checks passed.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {flagged.map((item) => (
-        <div key={`${item.check}-${item.details}`} className="flex items-start text-yellow-500 text-sm">
-          <FiAlertTriangle className="mr-2 mt-1 flex-shrink-0" />
-          <span>
-            <strong>{item.check}:</strong> {item.details}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-};
 
 // --- Main Page Component ---
 
@@ -286,13 +258,6 @@ export default function Home() {
                     <h3 className="text-xl font-semibold mb-2">Internal Summary</h3>
                     <div className="text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/70 p-4 rounded-md text-sm leading-relaxed whitespace-pre-wrap">
                       {analysisResult.narrative_analysis ?? "No summary generated."}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-xl font-semibold mb-2">Compliance Report</h3>
-                    <div className="bg-gray-100 dark:bg-gray-900/70 p-4 rounded-md">
-                      <ComplianceReport report={analysisResult.compliance_report} />
                     </div>
                   </div>
 

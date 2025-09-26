@@ -75,6 +75,9 @@ def calculate_premium_scores(df: pd.DataFrame, dev_preferences: Dict[str, Any]) 
     return df
 
 def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int], total_affordable_sf: float, optimization_rules: Dict[str, Any]) -> Dict[str, Any]:
+    bands_to_test = [band for band in bands_to_test if band != 50]
+    if not bands_to_test:
+        return {"status": "NO_SOLUTION"}
     waami_cap_basis_points = int(optimization_rules['waami_cap_percent'] * 100)
     bands_basis_points = [int(b * 100) for b in bands_to_test]
     sf_coeffs_int = (df_affordable['net_sf'] * 100).astype(int)
