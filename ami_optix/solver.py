@@ -2,7 +2,8 @@
 from ortools.sat.python import cp_model
 import itertools
 import copy
-from typing import Dict, List, Any
+import time
+from typing import Dict, List, Any, Optional
 
 def _calculate_waami_from_assignments(assignments: List[Dict[str, Any]]) -> float:
     """Calculates the WAAMI from a list of assignment dictionaries using integer arithmetic."""
@@ -164,7 +165,12 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
         "revenue_score": metrics['revenue_score'],
     }
 
-def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], relaxed_floor: float = None) -> Dict[str, Any]:
+def find_optimal_scenarios(
+    df_affordable: pd.DataFrame,
+    config: Dict[str, Any],
+    relaxed_floor: float = None,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     optimization_rules = copy.deepcopy(config['optimization_rules'])
     if relaxed_floor:
         optimization_rules['waami_floor'] = relaxed_floor
@@ -209,8 +215,18 @@ def find_optimal_scenarios(df_affordable: pd.DataFrame, config: Dict[str, Any], 
         if max_combo_checks and combos_checked >= max_combo_checks:
             truncated_for_combo_limit = True
             break
+        combo_start = time.perf_counter()
         combos_checked += 1
         result = _solve_single_scenario(df_with_scores, list(combo), total_affordable_sf, optimization_rules)
+        combo_duration = time.perf_counter() - combo_start
+        if diagnostics is not None:
+            diagnostics.append({
+                'combo': combo,
+                'status': result.get('status'),
+                'elapsed_sec': combo_duration,
+                'combos_checked': combos_checked,
+                'unique_scenarios_so_far': len(unique_results),
+            })
         if result['status'] != 'OPTIMAL':
             continue
         result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])

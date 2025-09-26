@@ -74,6 +74,8 @@ def analyze_file():
 
                 analysis_results = analysis_output['results']
                 original_headers = analysis_output['original_headers']
+                analysis_meta = analysis_results.get('analysis_meta', {})
+                app.logger.info("analysis_id=%s combos=%s unique=%s duration=%.2fs truncated=%s", analysis_meta.get('analysis_id'), analysis_meta.get('solver_combination_count'), analysis_meta.get('solver_unique_scenarios'), analysis_meta.get('duration_sec'), analysis_meta.get('truncated'))
 
                 # 2. Generate the internal summary (no LLM for now)
                 narrative = generate_internal_summary(analysis_results)
@@ -106,6 +108,7 @@ def analyze_file():
                 return jsonify(safe_payload)
 
             except Exception as e:
+                app.logger.exception("analysis_failed: %s", e)
                 return jsonify({"error": f"An unexpected error occurred during analysis: {str(e)}"}), 500
 
     return jsonify({"error": "An unknown error occurred"}), 500

@@ -1,5 +1,8 @@
 import sys
 import json
+import uuid
+import time
+from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
 
@@ -19,16 +22,21 @@ def default_converter(o):
     raise TypeError
 
 def main(file_path):
-    """
-    Main function to orchestrate the entire optimization process.
-    """
+    """Main function to orchestrate the entire optimization process."""
     try:
+        analysis_id = uuid.uuid4().hex[:8]
+        analysis_started = time.perf_counter()
+
         config = load_config()
         parser = Parser(file_path)
         df_affordable = parser.get_affordable_units()
 
-        # --- Standard Search ---
-        solver_results = find_optimal_scenarios(df_affordable, config)
+        solver_diagnostics: List[Dict[str, Any]] = []
+        base_index = len(solver_diagnostics)
+        solver_results = find_optimal_scenarios(df_affordable, config, diagnostics=solver_diagnostics)
+        for entry in solver_diagnostics[base_index:]:
+            entry['phase'] = 'standard'
+
         scenarios = solver_results.get("scenarios", {})
         notes = solver_results.get("notes", [])
 
@@ -39,29 +47,58 @@ def main(file_path):
 
         if num_scenarios_found < 2 and unit_count <= threshold:
             relaxed_floor_pct = config['optimization_rules'].get('relaxed_search_waami_floor', 59.7)
-            notes.append(f"Standard search yielded only {num_scenarios_found} result(s). Performing a 'Relaxed Search' with a WAAMI target floor of {relaxed_floor_pct}%.")
+            notes.append(
+                f"Standard search yielded only {num_scenarios_found} result(s). Performing a 'Relaxed Search' with a WAAMI target floor of {relaxed_floor_pct}%."
+            )
 
-            relaxed_solver_results = find_optimal_scenarios(df_affordable, config, relaxed_floor=(relaxed_floor_pct / 100.0))
+            base_index = len(solver_diagnostics)
+            relaxed_solver_results = find_optimal_scenarios(
+                df_affordable,
+                config,
+                relaxed_floor=(relaxed_floor_pct / 100.0),
+                diagnostics=solver_diagnostics,
+            )
+            for entry in solver_diagnostics[base_index:]:
+                entry['phase'] = 'relaxed'
+
             relaxed_scenarios = relaxed_solver_results.get("scenarios", {})
             for name, scenario in relaxed_scenarios.items():
                 scenarios.setdefault(name, scenario)
             notes.extend(relaxed_solver_results.get("notes", []))
 
         if not scenarios.get("absolute_best"):
-            return {"error": "No optimal solution found. The project may be unworkable with the current constraints.", "analysis_notes": notes}
+            return {
+                "error": "No optimal solution found. The project may be unworkable with the current constraints.",
+                "analysis_notes": notes,
+                "analysis_id": analysis_id,
+                "solver_diagnostics": solver_diagnostics,
+            }
 
         # --- Compliance & Output ---
         s1_assignments = scenarios["absolute_best"]["assignments"]
         compliance_report = run_compliance_checks(pd.DataFrame(s1_assignments), config['nyc_rules'])
 
+        unique_scenario_count = len([s for s in scenarios.values() if s])
+        analysis_duration = time.perf_counter() - analysis_started
+        analysis_meta = {
+            "analysis_id": analysis_id,
+            "duration_sec": analysis_duration,
+            "solver_combination_count": len(solver_diagnostics),
+            "solver_unique_scenarios": unique_scenario_count,
+            "timestamp": time.time(),
+            "truncated": any("Search stopped after" in note for note in notes),
+        }
+
         output = {
             "project_summary": {
                 "total_affordable_sf": df_affordable['net_sf'].sum(),
-                "total_affordable_units": len(df_affordable)
+                "total_affordable_units": len(df_affordable),
             },
             "analysis_notes": notes,
             "compliance_report": compliance_report,
             "scenarios": scenarios,
+            "solver_diagnostics": solver_diagnostics,
+            "analysis_meta": analysis_meta,
         }
 
         # Flatten for existing consumers
@@ -78,7 +115,7 @@ def main(file_path):
 
         return {
             "results": output,
-            "original_headers": parser.mapped_headers
+            "original_headers": parser.mapped_headers,
         }
 
     except (FileNotFoundError, ValueError, IOError) as e:
