@@ -116,7 +116,10 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
     time_limit = optimization_rules.get('scenario_time_limit_seconds')
     if time_limit:
         solver.parameters.max_time_in_seconds = time_limit
-    status = solver.Solve(model)
+    try:
+        status = solver.Solve(model)
+    except (SystemExit, KeyboardInterrupt):
+        return {"status": "INTERRUPTED"}
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
         return {"status": "NO_SOLUTION"}
     optimal_total_ami_sf = solver.Value(total_ami_sf_var)
@@ -127,7 +130,10 @@ def _solve_single_scenario(df_affordable: pd.DataFrame, bands_to_test: List[int]
         for i in range(num_units)
     )
     model.Maximize(premium_alignment_expr)
-    status = solver.Solve(model)
+    try:
+        status = solver.Solve(model)
+    except (SystemExit, KeyboardInterrupt):
+        return {"status": "INTERRUPTED"}
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
         return {"status": "NO_SOLUTION_IN_PASS_2"}
     def _extract_assignments():
@@ -211,6 +217,7 @@ def find_optimal_scenarios(
     unique_results: Dict[tuple, Dict[str, Any]] = {}
     combos_checked = 0
     truncated_for_combo_limit = False
+    interrupted = False
     for combo in band_combos:
         if max_combo_checks and combos_checked >= max_combo_checks:
             truncated_for_combo_limit = True
@@ -227,6 +234,9 @@ def find_optimal_scenarios(
                 'combos_checked': combos_checked,
                 'unique_scenarios_so_far': len(unique_results),
             })
+        if result.get('status') == 'INTERRUPTED':
+            interrupted = True
+            break
         if result['status'] != 'OPTIMAL':
             continue
         result['premium_score'] = sum(u['premium_score'] * u['assigned_ami'] for u in result['assignments'])
@@ -250,6 +260,8 @@ def find_optimal_scenarios(
         unique_results[canonical] = result
         if max_unique and len(unique_results) >= max_unique:
             break
+    if interrupted:
+        notes.append("Solver interrupted before completing all band combinations (time limit or worker shutdown).")
     if truncated_for_combo_limit and max_combo_checks and (not max_unique or len(unique_results) < max_unique):
         notes.append(
             f"Search stopped after evaluating {combos_checked} band mixes (configured limit: {max_combo_checks}). Additional scenarios may be omitted."

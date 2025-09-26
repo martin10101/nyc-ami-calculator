@@ -86,7 +86,9 @@ def main(file_path):
             "solver_combination_count": len(solver_diagnostics),
             "solver_unique_scenarios": unique_scenario_count,
             "timestamp": time.time(),
-            "truncated": any("Search stopped after" in note for note in notes),
+            "truncated": any(
+                ("Search stopped after" in note) or ("Solver interrupted" in note) for note in notes
+            ),
         }
 
         output = {
