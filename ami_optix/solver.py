@@ -190,15 +190,26 @@ def find_optimal_scenarios(
     dev_preferences = config['developer_preferences']
     df_with_scores = calculate_premium_scores(df_affordable, dev_preferences)
     total_affordable_sf = df_with_scores['net_sf'].sum()
+    small_project_unit_threshold = optimization_rules.get('small_project_unit_threshold', 10)
+    deep_aff_sf_threshold = optimization_rules.get('deep_affordability_sf_threshold', 10000)
+    is_small_project = (total_affordable_sf < deep_aff_sf_threshold) or (len(df_with_scores) <= small_project_unit_threshold)
     potential_bands = optimization_rules.get('potential_bands', [])
     max_bands = optimization_rules.get('max_bands_per_scenario', 3)
     band_combos = list(itertools.combinations(potential_bands, 2)) + list(itertools.combinations(potential_bands, max_bands))
     band_combos = [sorted(combo) for combo in band_combos]
     waami_cap = optimization_rules.get('waami_cap_percent', 60)
-    max_combo_checks = optimization_rules.get('max_band_combo_checks')
+    base_max_combo_checks = optimization_rules.get('max_band_combo_checks')
+    effective_max_combo_checks = base_max_combo_checks
+    if is_small_project:
+        effective_max_combo_checks = optimization_rules.get('small_project_combo_allowance', base_max_combo_checks)
     band_combos = [combo for combo in band_combos if min(combo) <= waami_cap]
 
-    priority_raw = optimization_rules.get('priority_band_combos', [])
+    priority_raw = list(optimization_rules.get('priority_band_combos', []))
+    if is_small_project:
+        small_priority_raw = optimization_rules.get('small_project_priority_band_combos', [])
+        seen = {tuple(sorted(p)) for p in priority_raw}
+        priority_raw.extend([combo for combo in small_priority_raw if tuple(sorted(combo)) not in seen])
+        seen.update(tuple(sorted(combo)) for combo in small_priority_raw)
     priority_set = {tuple(sorted(p)) for p in priority_raw}
     priority_combos = []
     remaining_combos = []
@@ -219,12 +230,14 @@ def find_optimal_scenarios(
     band_combos = priority_combos + sorted(remaining_combos, key=_combo_sort_key)
     notes = []
     max_unique = optimization_rules.get('max_unique_scenarios', 25)
+    if is_small_project:
+        max_unique = optimization_rules.get('small_project_max_unique_scenarios', max_unique)
     unique_results: Dict[tuple, Dict[str, Any]] = {}
     combos_checked = 0
     truncated_for_combo_limit = False
     interrupted = False
     for combo in band_combos:
-        if max_combo_checks and combos_checked >= max_combo_checks:
+        if effective_max_combo_checks and combos_checked >= effective_max_combo_checks:
             truncated_for_combo_limit = True
             break
         combo_start = time.perf_counter()
@@ -267,9 +280,9 @@ def find_optimal_scenarios(
             break
     if interrupted:
         notes.append("Solver interrupted before completing all band combinations (time limit or worker shutdown).")
-    if truncated_for_combo_limit and max_combo_checks and (not max_unique or len(unique_results) < max_unique):
+    if truncated_for_combo_limit and effective_max_combo_checks and (not max_unique or len(unique_results) < max_unique):
         notes.append(
-            f"Search stopped after evaluating {combos_checked} band mixes (configured limit: {max_combo_checks}). Additional scenarios may be omitted."
+            f"Search stopped after evaluating {combos_checked} band mixes (configured limit: {effective_max_combo_checks}). Additional scenarios may be omitted."
         )
     if not unique_results:
         return {"scenarios": {}, "notes": ["The solver could not find any optimal solutions given the project constraints."]}
