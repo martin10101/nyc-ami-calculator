@@ -23,12 +23,6 @@ def generate_internal_summary(analysis_json):
         for note in notes:
             summary_parts.append(f"- {note}")
 
-    flagged_reports = [r['details'] for r in analysis_json.get('compliance_report', []) if r['status'] == 'FLAGGED']
-    if flagged_reports:
-        summary_parts.append("\nCompliance Issues Found:")
-        for report in flagged_reports:
-            summary_parts.append(f"- {report}")
-
     return "\n".join(summary_parts)
 
 def _format_scenario_summary(scenario_name, scenario_data):
@@ -66,13 +60,6 @@ def _build_prompt(analysis_json):
     prompt += _format_scenario_summary("Scenario 2: Alternative", analysis_json.get("scenario_alternative"))
     prompt += _format_scenario_summary("Scenario 3: Client Oriented", analysis_json.get("scenario_client_oriented"))
     prompt += _format_scenario_summary("Scenario 4: Best 2-Band", analysis_json.get("scenario_best_2_band"))
-
-    if analysis_json.get("compliance_report"):
-        flagged_reports = [r['details'] for r in analysis_json['compliance_report'] if r['status'] == 'FLAGGED']
-        if flagged_reports:
-            prompt += "\n### Compliance Issues Identified:\n"
-            for report in flagged_reports:
-                prompt += f"- {report}\n"
 
     if analysis_json.get("analysis_notes"):
         prompt += "\n### Solver Analysis Notes:\n"

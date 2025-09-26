@@ -152,3 +152,32 @@ def test_finds_exact_60_percent_solution(sample_config):
     assert scenarios.get("absolute_best")
     top_scenario = scenarios["absolute_best"]
     assert abs(top_scenario['waami'] - 0.600000) < 1e-9
+
+
+def test_multi_band_preferred_and_two_band_missing(sample_config):
+    data = {
+        'unit_id': ['A1', 'A2', 'A3'],
+        'bedrooms': [1, 1, 1],
+        'net_sf': [700, 700, 700],
+        'floor': [2, 3, 4],
+        'balcony': [0, 0, 0],
+        'client_ami': [0.6, 0.6, 0.6]
+    }
+    df = pd.DataFrame(data)
+
+    rules = sample_config['optimization_rules']
+    rules['waami_cap_percent'] = 60.0
+    rules['waami_floor'] = 0.60
+    rules['potential_bands'] = [40, 60, 80]
+
+    solver_results = find_optimal_scenarios(df, sample_config)
+    scenarios = solver_results['scenarios']
+
+    assert scenarios.get('absolute_best')
+    assert len(scenarios['absolute_best']['bands']) == 3
+    best_2 = scenarios.get('best_2_band')
+    if best_2:
+        assert len(best_2['bands']) == 2
+    else:
+        assert any('No viable 2-band solution' in note for note in solver_results['notes'])
+    assert all(len(s['bands']) >= 2 for s in scenarios.values())
