@@ -1,5 +1,6 @@
 ﻿import pytest
 import pandas as pd
+from main import main as run_ami_optix_analysis
 from ami_optix.solver import calculate_premium_scores, find_optimal_scenarios
 
 @pytest.fixture
@@ -57,8 +58,11 @@ def test_find_optimal_scenarios_success(sample_affordable_df, sample_config):
     expected_waami = ((800 * 0.80) + (600 * 0.40)) / (800 + 600)
     assert abs(top_scenario['waami'] - expected_waami) < 1e-9
 
-    assert "best_2_band" in scenarios
-    assert len(scenarios["best_2_band"]["bands"]) == 2
+    best_2 = scenarios.get("best_2_band")
+    if best_2:
+        assert len(best_2['bands']) == 2
+    else:
+        assert any('No viable 2-band solution' in note for note in solver_results['notes'])
 
 
 def test_client_oriented_present(sample_affordable_df, sample_config):
@@ -66,7 +70,11 @@ def test_client_oriented_present(sample_affordable_df, sample_config):
     solver_results = find_optimal_scenarios(sample_affordable_df, sample_config)
     scenarios = solver_results["scenarios"]
 
-    assert scenarios.get("client_oriented"), "Client-oriented scenario should always be returned"
+    client = scenarios.get("client_oriented")
+    if client:
+        assert len(client['bands']) >= 2
+    else:
+        assert any('Client-oriented scenario unavailable' in note for note in solver_results['notes'])
 
 
 def test_no_solution_found(sample_affordable_df, sample_config):
@@ -181,3 +189,27 @@ def test_multi_band_preferred_and_two_band_missing(sample_config):
     else:
         assert any('No viable 2-band solution' in note for note in solver_results['notes'])
     assert all(len(s['bands']) >= 2 for s in scenarios.values())
+
+
+@pytest.mark.parametrize("workbook", [
+    'Test.xlsx',
+    '1004 Wodycrest Avenue (1).xlsx',
+    '1530 Bergen Street (1).xlsx',
+    '169 Beach 115 Street (1).xlsx',
+    '212 West 231 Street (1).xlsx',
+    '2675 Decatur Avenue (1).xlsx'
+])
+def test_sample_workbooks_have_unique_valid_scenarios(workbook):
+    result = run_ami_optix_analysis(workbook)
+    assert 'error' not in result, f"Analysis failed for {workbook}: {result.get('error')}"
+    scenarios = result['results']['scenarios']
+    waami_floor = 0.58 - 1e-9
+    seen_assignments = set()
+    for scenario in scenarios.values():
+        if not scenario:
+            continue
+        assert scenario['waami'] >= waami_floor
+        assert len(scenario['bands']) >= 2
+        canonical = tuple(sorted((unit['unit_id'], unit['assigned_ami']) for unit in scenario['assignments']))
+        assert canonical not in seen_assignments
+        seen_assignments.add(canonical)

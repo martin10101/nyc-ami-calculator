@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import {
   FiUploadCloud,
@@ -114,14 +114,33 @@ const AssignmentsTable = ({ assignments }: { assignments?: Assignment[] }) => {
 };
 
 
+const getInitialTheme = () => {
+  if (typeof window === "undefined") return false;
+  const stored = window.localStorage.getItem("ami-optix-theme");
+  if (stored === "dark") return true;
+  if (stored === "light") return false;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+};
+
 // --- Main Page Component ---
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(getInitialTheme);
+  const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const root = document.documentElement;
+    if (isDarkMode) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    window.localStorage.setItem('ami-optix-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files?.[0]) {

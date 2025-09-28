@@ -294,27 +294,39 @@ def find_optimal_scenarios(
         key=lambda x: (x['waami'], x['metrics']['revenue_score'], x['premium_score']),
         reverse=True,
     )
+    reporting_floor = optimization_rules.get('waami_floor')
+    if reporting_floor is None:
+        reporting_floor = 0.58
+    reporting_floor = max(0.58, reporting_floor)
+    epsilon = 1e-9
+    filtered_results = [r for r in sorted_results if r['waami'] + epsilon >= reporting_floor]
+    if filtered_results:
+        if len(filtered_results) < len(sorted_results):
+            notes.append(
+                f"Excluded {len(sorted_results) - len(filtered_results)} scenario(s) with WAAMI below {reporting_floor*100:.2f}%."
+            )
+        sorted_results = filtered_results
+    else:
+        notes.append(
+            f"No scenario reached the {reporting_floor*100:.2f}% WAAMI floor; returning the closest-feasible configurations for review."
+        )
     scenarios: Dict[str, Dict[str, Any]] = {}
     selected_assignments = set()
-
     three_band_results = [r for r in sorted_results if len(r['bands']) >= 3]
     two_band_results = [r for r in sorted_results if len(r['bands']) == 2]
     multi_band_results = [r for r in sorted_results if len(r['bands']) >= 2]
-
     def _register(name: str, scenario: Dict[str, Any]):
         if scenario:
             scenarios[name] = scenario
             selected_assignments.add(scenario['canonical_assignments'])
         else:
             notes.append(f"No scenario available for '{name.replace('_', ' ')}'.")
-
     def _pick_from_list(candidates: List[Dict[str, Any]]):
         for candidate in candidates:
             if candidate['canonical_assignments'] in selected_assignments:
                 continue
             return candidate
         return None
-
     absolute_best = _pick_from_list(three_band_results)
     if not absolute_best:
         absolute_best = _pick_from_list(multi_band_results)
@@ -325,55 +337,41 @@ def find_optimal_scenarios(
         if absolute_best:
             notes.append("Only single-band configurations satisfied the constraints; presenting the top-scoring outcome.")
     _register('absolute_best', absolute_best)
-
     best_3_band = _pick_from_list(three_band_results)
     if best_3_band:
         _register('best_3_band', best_3_band)
     else:
-        fallback = scenarios.get('absolute_best')
-        if fallback and len(fallback.get('bands', [])) >= 3:
-            scenarios['best_3_band'] = fallback
-            notes.append("No distinct 3-band mix found; reusing the absolute best configuration.")
-        else:
-            notes.append("No viable 3-band solution was found.")
-
+        notes.append("No viable 3-band scenario distinct from the absolute best could be found.")
     best_2_band = _pick_from_list(two_band_results)
     if best_2_band:
         _register('best_2_band', best_2_band)
     else:
-        fallback_two_band = scenarios.get('absolute_best')
-        if fallback_two_band and len(fallback_two_band.get('bands', [])) == 2:
-            scenarios['best_2_band'] = fallback_two_band
-            notes.append("Dedicated 2-band scenario mirrors the absolute best configuration.")
-        else:
-            notes.append("No viable 2-band solution was found that could meet the project's financial and compliance constraints.")
-
+        notes.append("No viable 2-band solution met the WAAMI floor.")
     alternative = _pick_from_list(three_band_results)
     if not alternative:
         alternative = _pick_from_list(multi_band_results)
         if alternative:
-            notes.append("No additional 3-band scenario available; using the best remaining multi-band alternative.")
+            notes.append("No additional 3-band scenario was available; using the best remaining multi-band option.")
     if alternative:
         _register('alternative', alternative)
     else:
         notes.append("No viable alternative scenario with a different unit assignment mix could be found.")
-
     revenue_sorted = sorted(
         sorted_results,
         key=lambda x: (x['metrics']['revenue_score'], x['waami'], x['premium_score']),
         reverse=True,
     )
-    revenue_three_band = [r for r in revenue_sorted if len(r['bands']) >= 3]
-    revenue_multi_band = [r for r in revenue_sorted if len(r['bands']) >= 2]
-
+    revenue_three_band = [r for r in revenue_sorted if len(r['bands']) >= 3 and r['canonical_assignments'] not in selected_assignments]
+    revenue_multi_band = [r for r in revenue_sorted if len(r['bands']) >= 2 and r['canonical_assignments'] not in selected_assignments]
     client_oriented = _pick_from_list(revenue_three_band)
     if not client_oriented:
         client_oriented = _pick_from_list(revenue_multi_band)
         if client_oriented:
-            notes.append("Client-oriented scenario falls back to the best multi-band configuration.")
-    if not client_oriented:
-        client_oriented = scenarios.get('absolute_best')
-        if client_oriented:
-            notes.append("Client-oriented scenario defaults to the absolute best due to identical revenue scores or lack of alternatives.")
-    _register('client_oriented', client_oriented)
+            notes.append("Client-oriented scenario falls back to the best remaining multi-band configuration.")
+    if client_oriented:
+        _register('client_oriented', client_oriented)
+    else:
+        notes.append("Client-oriented scenario unavailable; no remaining band mix satisfied the WAAMI floor.")
     return {"scenarios": scenarios, "notes": notes}
+
+
