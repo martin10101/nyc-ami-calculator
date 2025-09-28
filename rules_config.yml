@@ -31,6 +31,7 @@ optimization_rules:
   priority_band_combos:
     - [40, 60, 90]
     - [40, 60, 100]
+    - [40, 60, 80]
     - [40, 80, 100]
     - [40, 90, 100]
   small_project_priority_band_combos:
@@ -41,3 +42,4 @@ optimization_rules:
   # "Smart Search" fallback rules for small projects
   small_project_unit_threshold: 10
   relaxed_search_waami_floor: 59.7
+

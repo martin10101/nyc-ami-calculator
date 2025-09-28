@@ -33,6 +33,7 @@ interface AnalysisResult {
   narrative_analysis?: string;
   compliance_report?: ComplianceItem[];
   scenario_absolute_best?: Scenario | null;
+  scenario_best_3_band?: Scenario | null;
   scenario_client_oriented?: Scenario | null;
   scenario_best_2_band?: Scenario | null;
   scenario_alternative?: Scenario | null;
@@ -284,6 +285,7 @@ export default function Home() {
                     <h3 className="text-xl font-semibold mb-2">Scenario Details</h3>
                     <div className="space-y-4">
                       <ScenarioCard title="Absolute Best" scenario={analysisResult.scenario_absolute_best} />
+                      <ScenarioCard title="Best 3-Band" scenario={analysisResult.scenario_best_3_band} />
                       <ScenarioCard title="Client Oriented" scenario={analysisResult.scenario_client_oriented} />
                       <ScenarioCard title="Best 2-Band" scenario={analysisResult.scenario_best_2_band} />
                       <ScenarioCard title="Alternative" scenario={analysisResult.scenario_alternative} />
