@@ -1,6 +1,9 @@
 import os
+from pathlib import Path
+from typing import Dict
 import pandas as pd
 
+from ami_optix.rent_calculator import save_rent_workbook_with_utilities
 _SCENARIO_EXPORT_ORDER = [
     ("S1_Absolute_Best", "scenario_absolute_best", "AMI_S1_Absolute_Best"),
     ("S2_Client_Oriented", "scenario_client_oriented", "AMI_S2_Client_Oriented"),
@@ -69,6 +72,8 @@ def create_excel_reports(
     original_headers,
     output_dir='reports',
     prefer_xlsb: bool = False,
+    utilities: Dict[str, str] | None = None,
+    rent_workbook_path: str | None = None,
 ):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -105,6 +110,20 @@ def create_excel_reports(
             _scenario_to_dataframe(scenario).to_excel(writer, sheet_name='Assignments', index=False)
             _scenario_summary_frame(display_name, scenario).to_excel(writer, sheet_name='Summary', index=False)
         _register_xlsx(filepath_xlsx)
+
+    if utilities and rent_workbook_path:
+        rent_ext = Path(rent_workbook_path).suffix.lower()
+        rent_output_name = f"{base_name}_Rent_Calculator{rent_ext if rent_ext in {'.xlsx', '.xlsm'} else '.xlsx'}"
+        rent_output_path = os.path.join(output_dir, rent_output_name)
+        try:
+            save_rent_workbook_with_utilities(rent_workbook_path, utilities, rent_output_path)
+            created_files.append(rent_output_path)
+        except ValueError as exc:
+            notes.append(f"Rent workbook export warning: {exc}")
+        except FileNotFoundError:
+            notes.append("Rent workbook export warning: provided rent calculator file could not be found.")
+        except Exception as exc:  # pragma: no cover - defensive
+            notes.append(f"Rent workbook export warning: {exc}")
 
     # --- Updated source workbook ---
     try:

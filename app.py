@@ -112,6 +112,9 @@ def analyze_file():
 
                 # 3. Generate Excel reports, passing the original headers
                 prefer_xlsb = filename.lower().endswith('.xlsb') or bool(request.form.get('preferXlsb'))
+                utility_selections = analysis_results.get('project_summary', {}).get('utility_selections')
+                rent_workbook_info = analysis_results.get('rent_workbook') or {}
+                rent_workbook_source = rent_workbook_info.get('source_path')
 
                 report_files = create_excel_reports(
                     analysis_results,
@@ -119,6 +122,8 @@ def analyze_file():
                     original_headers,
                     output_dir=temp_dir,
                     prefer_xlsb=prefer_xlsb,
+                    utilities=utility_selections,
+                    rent_workbook_path=rent_workbook_source,
                 )
 
                 # 4. Create a zip file containing all reports

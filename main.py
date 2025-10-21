@@ -41,7 +41,8 @@ def _sanitize_utilities(payload: Dict[str, Any] | None) -> Dict[str, str]:
 
 def _maybe_load_rent_schedule(candidate_path: str | None) -> tuple:
     """
-    Attempts to load the rent calculator workbook. Returns (schedule, error_message).
+    Attempts to load the rent calculator workbook.
+    Returns (schedule, error_message, resolved_path).
     """
     paths = []
     if candidate_path:
@@ -54,10 +55,11 @@ def _maybe_load_rent_schedule(candidate_path: str | None) -> tuple:
         if not path or not os.path.exists(path):
             continue
         try:
-            return load_rent_schedule(path), None
+            return load_rent_schedule(path), None, path
         except Exception as exc:
-            return None, str(exc)
-    return None, None
+            last_error = str(exc)
+            continue
+    return None, locals().get("last_error"), None
 
 
 def _apply_rent_metrics(schedule, scenarios, utilities):
@@ -82,7 +84,7 @@ def main(file_path, utilities=None, overrides=None, rent_calculator_path=None):
 
         utilities_clean = _sanitize_utilities(utilities if isinstance(utilities, dict) else None)
         overrides_payload = overrides if isinstance(overrides, dict) else None
-        rent_schedule, rent_schedule_error = _maybe_load_rent_schedule(rent_calculator_path)
+        rent_schedule, rent_schedule_error, rent_schedule_path = _maybe_load_rent_schedule(rent_calculator_path)
 
         config = load_config()
         parser = Parser(file_path)
@@ -103,23 +105,59 @@ def main(file_path, utilities=None, overrides=None, rent_calculator_path=None):
         notes = solver_results.get("notes", [])
 
         max_share_cap = config['optimization_rules'].get('deep_affordability_max_share')
-        if (not scenarios.get("absolute_best")) and max_share_cap is not None:
-            notes.append(
-                f"No solution satisfied the deep-affordability cap of {max_share_cap*100:.1f}% share. Retrying without that constraint."
-            )
-            relaxed_config = copy.deepcopy(config)
-            relaxed_config['optimization_rules'].pop('deep_affordability_max_share', None)
-            base_index = len(solver_diagnostics)
-            solver_results = find_optimal_scenarios(
-                df_affordable,
-                relaxed_config,
-                diagnostics=solver_diagnostics,
-                project_overrides=overrides_payload,
-            )
-            for entry in solver_diagnostics[base_index:]:
-                entry['phase'] = 'deep_affordability_relaxed'
-            scenarios = solver_results.get("scenarios", {})
-            notes.extend(solver_results.get("notes", []))
+        min_share_cap = config['optimization_rules'].get('deep_affordability_min_share')
+        if (not scenarios.get("absolute_best")) and max_share_cap is not None and min_share_cap is not None:
+            widen_step = config['optimization_rules'].get('deep_affordability_widen_step', 0.005)
+            widen_cap_limit = config['optimization_rules'].get('deep_affordability_widen_cap', 0.4)
+            widened_solution_found = False
+            if widen_step > 0:
+                candidate_cap = max_share_cap + widen_step
+                while candidate_cap <= widen_cap_limit and not widened_solution_found:
+                    attempt_config = copy.deepcopy(config)
+                    attempt_config['optimization_rules']['deep_affordability_max_share'] = candidate_cap
+                    notes.append(
+                        f"No solution satisfied the deep-affordability cap of {max_share_cap*100:.1f}% share. Retrying with a cap of {candidate_cap*100:.2f}%."
+                    )
+                    base_index = len(solver_diagnostics)
+                    attempt_results = find_optimal_scenarios(
+                        df_affordable,
+                        attempt_config,
+                        diagnostics=solver_diagnostics,
+                        project_overrides=overrides_payload,
+                    )
+                    for entry in solver_diagnostics[base_index:]:
+                        entry['phase'] = 'deep_affordability_widened'
+                        entry['widened_cap'] = candidate_cap
+                    attempt_scenarios = attempt_results.get("scenarios", {})
+                    if attempt_scenarios.get("absolute_best"):
+                        notes.append(
+                            f"40% share cap widened to {candidate_cap*100:.2f}% to satisfy the deep-affordability requirement."
+                        )
+                        notes.extend(attempt_results.get("notes", []))
+                        scenarios = attempt_scenarios
+                        config = attempt_config
+                        widened_solution_found = True
+                        break
+                    else:
+                        notes.extend(attempt_results.get("notes", []))
+                        candidate_cap = round(candidate_cap + widen_step, 10)
+            if not widened_solution_found:
+                notes.append(
+                    f"No solution satisfied the deep-affordability cap of {max_share_cap*100:.1f}% share even after widening; retrying without that constraint."
+                )
+                relaxed_config = copy.deepcopy(config)
+                relaxed_config['optimization_rules'].pop('deep_affordability_max_share', None)
+                base_index = len(solver_diagnostics)
+                solver_results = find_optimal_scenarios(
+                    df_affordable,
+                    relaxed_config,
+                    diagnostics=solver_diagnostics,
+                    project_overrides=overrides_payload,
+                )
+                for entry in solver_diagnostics[base_index:]:
+                    entry['phase'] = 'deep_affordability_relaxed'
+                scenarios = solver_results.get("scenarios", {})
+                notes.extend(solver_results.get("notes", []))
 
         # --- "Smart Search" Fallback Logic ---
         num_scenarios_found = len([s for s in scenarios.values() if s])
@@ -199,6 +237,9 @@ def main(file_path, utilities=None, overrides=None, rent_calculator_path=None):
             "total_monthly_rent": best_metrics.get('total_monthly_rent'),
             "total_annual_rent": best_metrics.get('total_annual_rent'),
         })
+
+        if rent_schedule_path:
+            output["rent_workbook"] = {"source_path": rent_schedule_path}
 
         # Flatten for existing consumers
         if scenarios.get("absolute_best"):

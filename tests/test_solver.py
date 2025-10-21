@@ -109,6 +109,41 @@ def test_deep_affordability_constraint(sample_config):
     assert len(low_band_units) >= 2
 
 
+def test_deep_affordability_cap_widening(tmp_path, monkeypatch):
+    df = pd.DataFrame({
+        'APT': [f'W{i}' for i in range(4)],
+        'BED': [1, 1, 1, 1],
+        'NET SF': [100, 100, 100, 100],
+        'FLOOR': [1, 2, 3, 4],
+        'AMI': [1, 1, 1, 1],
+    })
+    csv_path = tmp_path / 'units.csv'
+    df.to_csv(csv_path, index=False)
+
+    from ami_optix.config_loader import load_config as real_load_config
+    custom_config = real_load_config()
+    rules = custom_config['optimization_rules']
+    rules['waami_cap_percent'] = 100.0
+    rules['potential_bands'] = [40, 100]
+    rules['deep_affordability_min_share'] = 0.20
+    rules['deep_affordability_max_share'] = 0.21
+    rules['deep_affordability_widen_step'] = 0.005
+    rules['deep_affordability_widen_cap'] = 0.30
+    rules['max_band_combo_checks'] = 4
+    rules['max_unique_scenarios'] = 4
+
+    monkeypatch.setattr('main.load_config', lambda: custom_config)
+
+    result = run_ami_optix_analysis(str(csv_path))
+    assert 'error' not in result, result.get('error')
+
+    analysis = result['results']
+    scenario = analysis.get('scenario_absolute_best')
+    assert scenario, 'Expected a scenario after widening the cap.'
+    assert abs(scenario['metrics']['low_band_share'] - 0.25) < 1e-9
+    assert any('share cap widened' in note for note in analysis.get('analysis_notes', []))
+
+
 def test_lexicographical_tie_breaking_with_premium_score(sample_config):
     data = {
         'unit_id': ['A', 'B'],

@@ -11,6 +11,8 @@ import os
 import math
 
 import pandas as pd
+from pathlib import Path
+from openpyxl import load_workbook
 
 BEDROOM_LABELS = ["studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR"]
 
@@ -175,3 +177,38 @@ def compute_rents_for_assignments(
         updated_assignments.append(enriched)
         total_monthly += monthly
     return updated_assignments, round(total_monthly, 2), round(total_monthly * 12.0, 2)
+
+
+def save_rent_workbook_with_utilities(
+    source_path: str,
+    utilities: Dict[str, str],
+    destination_path: str,
+) -> str:
+    """
+    Persist utility selections into the rent workbook so Excel shows the same
+    allowance choices the user picked in the UI.
+    """
+    if not source_path or not os.path.exists(source_path):
+        raise FileNotFoundError(f"Rent workbook not found: {source_path}")
+
+    source_ext = Path(source_path).suffix.lower()
+    if source_ext == ".xlsb":
+        raise ValueError("Writing utility selections into .xlsb workbooks is not supported.")
+
+    keep_vba = source_ext == ".xlsm"
+    workbook = load_workbook(source_path, keep_vba=keep_vba)
+    sheet = workbook["AMI & Rent"]
+
+    mapping = [
+        ("cooking", 17, 3, COOKING_OPTIONS),
+        ("heat", 17, 5, HEAT_OPTIONS),
+        ("hot_water", 17, 10, HOT_WATER_OPTIONS),
+    ]
+
+    for key, row, col, options in mapping:
+        selection_key = utilities.get(key, "na")
+        label = options.get(selection_key, options["na"])
+        sheet.cell(row=row, column=col).value = label
+
+    workbook.save(destination_path)
+    return destination_path

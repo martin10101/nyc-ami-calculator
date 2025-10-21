@@ -26,6 +26,8 @@ optimization_rules:
   deep_affordability_sf_threshold: 0
   deep_affordability_min_share: 0.20
   deep_affordability_max_share: 0.21
+  deep_affordability_widen_step: 0.005
+  deep_affordability_widen_cap: 0.4
   low_band_band_threshold: 40
   scenario_time_limit_seconds: 3
   max_unique_scenarios: 4
