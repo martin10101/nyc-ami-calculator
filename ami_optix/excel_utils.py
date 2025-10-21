@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -60,7 +61,7 @@ def convert_xlsx_to_xlsb(source_path: str, target_path: Optional[str] = None, de
         except RuntimeError as exc:  # pragma: no cover - depends on runtime
             errors.append(str(exc))
 
-    soffice = shutil.which("soffice")
+    soffice = _locate_soffice_binary()
     if soffice:
         try:
             return _convert_with_soffice(soffice, source_abs, target_abs, delete_source=delete_source)
@@ -108,6 +109,28 @@ def _convert_with_win32(source_abs: str, target_abs: str, delete_source: bool) -
             pass
 
     return target_abs
+
+
+def _locate_soffice_binary() -> Optional[str]:
+    env_path = os.environ.get("LIBREOFFICE_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+
+    system_path = shutil.which("soffice")
+    if system_path:
+        return system_path
+
+    project_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        project_root / "libreoffice-appimage" / "usr" / "bin" / "soffice",
+        project_root / "squashfs-root" / "usr" / "bin" / "soffice",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            candidate_path = str(candidate)
+            if os.access(candidate_path, os.X_OK):
+                return candidate_path
+    return None
 
 
 def _convert_with_soffice(soffice_path: str, source_abs: str, target_abs: str, delete_source: bool) -> str:
