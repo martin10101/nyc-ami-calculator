@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v soffice >/dev/null 2>&1; then
+  echo "Installing LibreOffice for XLSB conversion..."
+  apt-get update -y
+  apt-get install -y libreoffice
+fi
+
 pip install -r requirements.txt
 
 cd dashboard

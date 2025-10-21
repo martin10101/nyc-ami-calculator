@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import re
 
@@ -10,6 +11,7 @@ HEADER_MAPPING = {
     "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
     "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT"],
 }
+
 
 def _normalize_header(value):
     """Return a normalized representation of a header for fuzzy matching."""
@@ -27,8 +29,8 @@ class Parser:
     """
     The Parser is the "Prep Cook" of the AMI-Optix system.
     Its sole responsibility is to read, validate, and prepare the input data
-    from a client's spreadsheet (.xlsx or .csv). It ensures the data is 100%
-    correct before any analysis begins.
+    from a client's spreadsheet. It ensures the data is 100% correct before
+    any analysis begins.
     """
 
     def __init__(self, file_path):
@@ -37,26 +39,77 @@ class Parser:
         self.mapped_headers = {}
 
     def read_data(self):
-        """
-        Reads the input file (Excel or CSV) into a pandas DataFrame.
-        """
-        if not self.file_path.endswith((".csv", ".xlsx")):
-            raise ValueError("Unsupported file type. Please provide a .csv or .xlsx file.")
+        """Reads the input file (Excel or CSV) into a pandas DataFrame."""
+        _, ext = os.path.splitext(self.file_path.lower())
+        if ext not in (".csv", ".xlsx", ".xlsm", ".xlsb"):
+            raise ValueError("Unsupported file type. Please provide a .csv, .xlsx, .xlsm, or .xlsb file.")
 
         try:
-            if self.file_path.endswith(".csv"):
+            if ext == ".csv":
                 self.data = pd.read_csv(self.file_path)
-            else:  # .xlsx
-                self.data = pd.read_excel(self.file_path)
+            else:
+                self.data = self._read_excel_with_fallback(ext)
         except FileNotFoundError:
             raise FileNotFoundError(f"Error: The file '{self.file_path}' was not found.")
         except Exception as e:
             raise IOError(f"Error reading or parsing the file '{self.file_path}': {e}")
 
+    def _read_excel_with_fallback(self, ext: str) -> pd.DataFrame:
+        engine = "pyxlsb" if ext == ".xlsb" else None
+        excel = pd.ExcelFile(self.file_path, engine=engine)
+
+        preferred = ["RentRoll", "Units", "Sheet1"]
+        ordered = preferred + [name for name in excel.sheet_names if name not in preferred]
+
+        for sheet in ordered:
+            # Try direct parse with default header
+            try:
+                direct_df = excel.parse(sheet)
+                if self._sheet_has_viable_headers(direct_df.columns):
+                    return direct_df
+            except Exception:
+                pass
+
+            # Fallback: search for header row manually
+            try:
+                raw = excel.parse(sheet, header=None)
+            except Exception:
+                continue
+
+            header_idx = self._locate_header_row(raw)
+            if header_idx is None:
+                continue
+
+            header_row = raw.iloc[header_idx].fillna("")
+            df = raw.iloc[header_idx + 1 :].copy()
+            df.columns = header_row
+            df.dropna(how="all", inplace=True)
+            if not df.empty and self._sheet_has_viable_headers(df.columns):
+                return df
+
+        raise ValueError("Unable to locate a worksheet with recognizable columns for unit data.")
+
+    def _sheet_has_viable_headers(self, columns) -> bool:
+        normalized = {_normalize_header(col) for col in columns if col is not None}
+        required = {_normalize_header(name) for name in HEADER_MAPPING["unit_id"]}
+        bedrooms = {_normalize_header(name) for name in HEADER_MAPPING["bedrooms"]}
+        net_sf = {_normalize_header(name) for name in HEADER_MAPPING["net_sf"]}
+        return bool(normalized & required) and bool(normalized & bedrooms) and bool(normalized & net_sf)
+
+    def _locate_header_row(self, dataframe: pd.DataFrame):
+        for idx in range(len(dataframe)):
+            row = dataframe.iloc[idx]
+            normalized_values = {_normalize_header(val) for val in row if pd.notna(val)}
+            hits = 0
+            for names in HEADER_MAPPING.values():
+                if any(_normalize_header(name) in normalized_values for name in names):
+                    hits += 1
+            if hits >= 3:
+                return idx
+        return None
+
     def map_headers(self):
-        """
-        Maps the fuzzy headers from the input file to the standardized internal names.
-        """
+        """Maps fuzzy headers from the input file to standardized internal names."""
         if self.data is None:
             self.read_data()
 
@@ -86,9 +139,7 @@ class Parser:
         return self.mapped_headers
 
     def _get_standardized_dataframe(self):
-        """
-        Internal method to get a DataFrame with standardized column names.
-        """
+        """Internal method to get a DataFrame with standardized column names."""
         if not self.mapped_headers:
             self.map_headers()
 
@@ -99,9 +150,8 @@ class Parser:
 
     def get_affordable_units(self):
         """
-        The main public method for the Parser. It reads the file, maps headers,
-        identifies the affordable unit set, validates their data, and returns
-        a clean DataFrame of units to be optimized.
+        Reads the file, maps headers, identifies the affordable unit set,
+        validates their data, and returns a clean DataFrame of units.
         """
         if self.data is None:
             self.read_data()
@@ -154,5 +204,3 @@ class Parser:
                 )
 
         return affordable_df
-
-

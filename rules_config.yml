@@ -23,8 +23,10 @@ optimization_rules:
   waami_floor: 0.58
   max_bands_per_scenario: 3
   potential_bands: [40, 60, 70, 80, 90, 100]
-  deep_affordability_sf_threshold: 10000
-  deep_affordability_max_share: 0.22
+  deep_affordability_sf_threshold: 0
+  deep_affordability_min_share: 0.20
+  deep_affordability_max_share: 0.21
+  low_band_band_threshold: 40
   scenario_time_limit_seconds: 3
   max_unique_scenarios: 4
   max_band_combo_checks: 4

@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import uuid
@@ -11,6 +12,8 @@ from ami_optix.parser import Parser
 from ami_optix.config_loader import load_config
 from ami_optix.solver import find_optimal_scenarios
 from ami_optix.validator import run_compliance_checks
+from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
+
 
 def default_converter(o):
     """A default converter for json.dumps to handle numpy types."""
@@ -22,11 +25,64 @@ def default_converter(o):
         return o.tolist()
     raise TypeError
 
-def main(file_path):
+
+DEFAULT_UTILITIES = {"cooking": "na", "heat": "na", "hot_water": "na"}
+
+
+def _sanitize_utilities(payload: Dict[str, Any] | None) -> Dict[str, str]:
+    sanitized = DEFAULT_UTILITIES.copy()
+    if isinstance(payload, dict):
+        for key in sanitized:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                sanitized[key] = value.strip()
+    return sanitized
+
+
+def _maybe_load_rent_schedule(candidate_path: str | None) -> tuple:
+    """
+    Attempts to load the rent calculator workbook. Returns (schedule, error_message).
+    """
+    paths = []
+    if candidate_path:
+        paths.append(candidate_path)
+    default_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
+    if default_path not in paths:
+        paths.append(default_path)
+
+    for path in paths:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            return load_rent_schedule(path), None
+        except Exception as exc:
+            return None, str(exc)
+    return None, None
+
+
+def _apply_rent_metrics(schedule, scenarios, utilities):
+    for scenario in scenarios.values():
+        if not scenario:
+            continue
+        assignments, total_monthly, total_annual = compute_rents_for_assignments(
+            schedule, scenario['assignments'], utilities
+        )
+        scenario['assignments'] = assignments
+        metrics = scenario.get('metrics', {})
+        metrics['total_monthly_rent'] = total_monthly
+        metrics['total_annual_rent'] = total_annual
+        scenario['metrics'] = metrics
+
+
+def main(file_path, utilities=None, overrides=None, rent_calculator_path=None):
     """Main function to orchestrate the entire optimization process."""
     try:
         analysis_id = uuid.uuid4().hex[:8]
         analysis_started = time.perf_counter()
+
+        utilities_clean = _sanitize_utilities(utilities if isinstance(utilities, dict) else None)
+        overrides_payload = overrides if isinstance(overrides, dict) else None
+        rent_schedule, rent_schedule_error = _maybe_load_rent_schedule(rent_calculator_path)
 
         config = load_config()
         parser = Parser(file_path)
@@ -34,7 +90,12 @@ def main(file_path):
 
         solver_diagnostics: List[Dict[str, Any]] = []
         base_index = len(solver_diagnostics)
-        solver_results = find_optimal_scenarios(df_affordable, config, diagnostics=solver_diagnostics)
+        solver_results = find_optimal_scenarios(
+            df_affordable,
+            config,
+            diagnostics=solver_diagnostics,
+            project_overrides=overrides_payload,
+        )
         for entry in solver_diagnostics[base_index:]:
             entry['phase'] = 'standard'
 
@@ -50,7 +111,10 @@ def main(file_path):
             relaxed_config['optimization_rules'].pop('deep_affordability_max_share', None)
             base_index = len(solver_diagnostics)
             solver_results = find_optimal_scenarios(
-                df_affordable, relaxed_config, diagnostics=solver_diagnostics
+                df_affordable,
+                relaxed_config,
+                diagnostics=solver_diagnostics,
+                project_overrides=overrides_payload,
             )
             for entry in solver_diagnostics[base_index:]:
                 entry['phase'] = 'deep_affordability_relaxed'
@@ -74,6 +138,7 @@ def main(file_path):
                 config,
                 relaxed_floor=(relaxed_floor_pct / 100.0),
                 diagnostics=solver_diagnostics,
+                project_overrides=overrides_payload,
             )
             for entry in solver_diagnostics[base_index:]:
                 entry['phase'] = 'relaxed'
@@ -95,6 +160,11 @@ def main(file_path):
         s1_assignments = scenarios["absolute_best"]["assignments"]
         compliance_report = run_compliance_checks(pd.DataFrame(s1_assignments), config['nyc_rules'])
 
+        if rent_schedule:
+            _apply_rent_metrics(rent_schedule, scenarios, utilities_clean)
+        elif rent_schedule_error:
+            notes.append(f"Rent calculator warning: {rent_schedule_error}")
+
         unique_scenario_count = len([s for s in scenarios.values() if s])
         analysis_duration = time.perf_counter() - analysis_started
         analysis_meta = {
@@ -112,6 +182,7 @@ def main(file_path):
             "project_summary": {
                 "total_affordable_sf": df_affordable['net_sf'].sum(),
                 "total_affordable_units": len(df_affordable),
+                "utility_selections": utilities_clean,
             },
             "analysis_notes": notes,
             "compliance_report": compliance_report,
@@ -119,6 +190,15 @@ def main(file_path):
             "solver_diagnostics": solver_diagnostics,
             "analysis_meta": analysis_meta,
         }
+
+        best_metrics = scenarios["absolute_best"].get('metrics', {}) if scenarios.get("absolute_best") else {}
+        output["project_summary"].update({
+            "forty_percent_units": best_metrics.get('low_band_units'),
+            "forty_percent_sf": best_metrics.get('low_band_sf'),
+            "forty_percent_share": best_metrics.get('low_band_share'),
+            "total_monthly_rent": best_metrics.get('total_monthly_rent'),
+            "total_annual_rent": best_metrics.get('total_annual_rent'),
+        })
 
         # Flatten for existing consumers
         if scenarios.get("absolute_best"):
@@ -139,6 +219,7 @@ def main(file_path):
 
     except (FileNotFoundError, ValueError, IOError) as e:
         return {"error": str(e)}
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

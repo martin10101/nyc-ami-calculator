@@ -66,9 +66,38 @@ def analyze_file():
             upload_filepath = os.path.join(temp_dir, filename)
             file.save(upload_filepath)
 
+            utilities_payload = None
+            overrides_payload = None
+            rent_calculator_path = None
+
+            utilities_raw = request.form.get('utilities')
+            if utilities_raw:
+                try:
+                    utilities_payload = json.loads(utilities_raw)
+                except json.JSONDecodeError:
+                    return jsonify({"error": "Invalid utilities payload."}), 400
+
+            overrides_raw = request.form.get('overrides')
+            if overrides_raw:
+                try:
+                    overrides_payload = json.loads(overrides_raw)
+                except json.JSONDecodeError:
+                    return jsonify({"error": "Invalid overrides payload."}), 400
+
+            rent_calculator_upload = request.files.get('rentCalculator')
+            if rent_calculator_upload and rent_calculator_upload.filename:
+                rent_filename = secure_filename(rent_calculator_upload.filename)
+                rent_calculator_path = os.path.join(temp_dir, rent_filename)
+                rent_calculator_upload.save(rent_calculator_path)
+
             try:
                 # 1. Run the core analysis
-                analysis_output = run_ami_optix_analysis(upload_filepath)
+                analysis_output = run_ami_optix_analysis(
+                    upload_filepath,
+                    utilities=utilities_payload,
+                    overrides=overrides_payload,
+                    rent_calculator_path=rent_calculator_path,
+                )
                 if "error" in analysis_output:
                     return jsonify(analysis_output), 400
 
@@ -82,11 +111,14 @@ def analyze_file():
                 analysis_results['narrative_analysis'] = narrative
 
                 # 3. Generate Excel reports, passing the original headers
+                prefer_xlsb = filename.lower().endswith('.xlsb') or bool(request.form.get('preferXlsb'))
+
                 report_files = create_excel_reports(
                     analysis_results,
                     upload_filepath,
                     original_headers,
-                    output_dir=temp_dir
+                    output_dir=temp_dir,
+                    prefer_xlsb=prefer_xlsb,
                 )
 
                 # 4. Create a zip file containing all reports

@@ -24,15 +24,16 @@ def test_decatur_golden_truth():
     assert abs(scenario_s1['waami'] - 0.6) < 1e-6
 
     # Assert correct bands were used
-    assert set(scenario_s1['bands']) == {40, 60, 100}
+    assert set(scenario_s1['bands']) == {40, 60, 90}
 
     # Assert specific unit assignments are correct
     assignments = {str(u['unit_id']): int(u['assigned_ami'] * 100) for u in scenario_s1['assignments']}
 
-    # Ground truth for Decatur project
-    # Expected distribution is derived from deterministic CP-SAT tie-breaking.
+    # Ground truth for Decatur project (updated for 20–21% clamp)
     expected_assignments = {
-        '2A': 40, '3A': 40, '4A': 40, '5A': 60, '6E': 60, '2B': 40, '3B': 40, '4B': 40, '5B': 100, '6B': 100, '2D': 40, '3D': 40, '4D': 60, '5D': 100, '6D': 100
+        '2A': 40, '3A': 60, '4A': 60, '5A': 60, '6E': 60,
+        '2B': 40, '3B': 60, '4B': 60, '5B': 60, '6B': 90,
+        '2D': 40, '3D': 60, '4D': 60, '5D': 60, '6D': 90,
     }
 
     assert assignments == expected_assignments, f"Assignments did not match. Got: {assignments}"

@@ -1,4 +1,7 @@
-﻿import pandas as pd
+import pandas as pd
+import pytest
+from pathlib import Path
+
 from ami_optix.report_generator import create_excel_reports
 
 
@@ -59,3 +62,82 @@ def test_create_excel_reports_adds_scenario_columns(tmp_path):
     assert 'AMI_S2_Client_Oriented' in units_df.columns
     summary_df = pd.read_excel(updated_path, sheet_name='Scenario Summary')
     assert not summary_df.empty
+
+
+def test_create_excel_reports_prefers_xlsb_when_available(tmp_path, monkeypatch):
+    original_path = tmp_path / "input.xlsx"
+    pd.DataFrame({'APT': ['1A'], 'AMI': ['40%'], 'NET SF': [500]}).to_excel(original_path, index=False)
+
+    analysis_json = {
+        'analysis_notes': [],
+        'scenario_absolute_best': {
+            'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+            'metrics': {'band_mix': [], 'waami_percent': 40.0},
+            'bands': [40],
+        },
+        'scenarios': {
+            'absolute_best': {
+                'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+                'metrics': {'band_mix': [], 'waami_percent': 40.0},
+                'bands': [40],
+            }
+        },
+    }
+
+    def fake_convert(path, target_path=None, delete_source=True):
+        src = Path(path)
+        target = Path(target_path) if target_path else src.with_suffix('.xlsb')
+        target.write_bytes(b'dummy')
+        if delete_source and src.exists():
+            src.unlink()
+        return str(target)
+
+    monkeypatch.setattr('ami_optix.report_generator.convert_xlsx_to_xlsb', fake_convert)
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path),
+        prefer_xlsb=True,
+    )
+
+    assert any(file.endswith('.xlsb') for file in files)
+    assert all(not file.endswith('.xlsx') for file in files)
+
+
+def test_create_excel_reports_falls_back_to_xlsx_when_conversion_fails(tmp_path, monkeypatch):
+    original_path = tmp_path / "input.xlsx"
+    pd.DataFrame({'APT': ['1A'], 'AMI': ['40%'], 'NET SF': [500]}).to_excel(original_path, index=False)
+
+    analysis_json = {
+        'analysis_notes': [],
+        'scenario_absolute_best': {
+            'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+            'metrics': {'band_mix': [], 'waami_percent': 40.0},
+            'bands': [40],
+        },
+        'scenarios': {
+            'absolute_best': {
+                'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+                'metrics': {'band_mix': [], 'waami_percent': 40.0},
+                'bands': [40],
+            }
+        },
+    }
+
+    def failing_convert(*_args, **_kwargs):
+        raise RuntimeError("conversion failed")
+
+    monkeypatch.setattr('ami_optix.report_generator.convert_xlsx_to_xlsb', failing_convert)
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path),
+        prefer_xlsb=True,
+    )
+
+    assert any(file.endswith('.xlsx') for file in files)
+    assert any('Delivered as .xlsx' in note for note in analysis_json['analysis_notes'])
