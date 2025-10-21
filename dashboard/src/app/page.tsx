@@ -22,10 +22,59 @@ type UtilitiesState = {
   hot_water: string;
 };
 
+type ProjectSummary = {
+  total_affordable_units?: number;
+  total_affordable_sf?: number;
+  forty_percent_units?: number;
+  forty_percent_sf?: number;
+  forty_percent_share?: number;
+  total_monthly_rent?: number;
+  total_annual_rent?: number;
+  utility_selections?: UtilitiesState;
+  [key: string]: unknown;
+};
+
+type ScenarioBandMixEntry = {
+  band: number;
+  units: number;
+  share_of_sf: number;
+  net_sf?: number;
+};
+
+type ScenarioMetrics = {
+  waami_percent?: number;
+  total_units?: number;
+  total_sf?: number;
+  revenue_score?: number;
+  band_mix?: ScenarioBandMixEntry[];
+  low_band_units?: number;
+  low_band_sf?: number;
+  low_band_share?: number;
+  total_monthly_rent?: number;
+  total_annual_rent?: number;
+};
+
+type ScenarioAssignment = {
+  unit_id: string;
+  bedrooms?: number;
+  net_sf?: number;
+  floor?: number;
+  assigned_ami: number;
+  monthly_rent?: number;
+  annual_rent?: number;
+};
+
+type ScenarioResult = {
+  assignments?: ScenarioAssignment[];
+  metrics?: ScenarioMetrics;
+  bands?: number[];
+  waami?: number;
+};
+
 type AnalysisResponse = {
-  project_summary?: Record<string, any>;
+  project_summary?: ProjectSummary;
   analysis_notes?: string[];
-  scenarios?: Record<string, any>;
+  scenarios?: Record<string, ScenarioResult | null | undefined>;
   download_link?: string;
 };
 
@@ -88,7 +137,7 @@ export default function DashboardPage() {
     balcony: 0.1,
   });
   const [notes, setNotes] = useState('');
-  const [preferXlsb, setPreferXlsb] = useState(true);
+  const [preferXlsb, setPreferXlsb] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [selectedScenarioKey, setSelectedScenarioKey] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -186,7 +235,7 @@ export default function DashboardPage() {
         if (parsed.premiumWeights) setPremiumWeights({ ...premiumWeights, ...parsed.premiumWeights });
         if (typeof parsed.notes === 'string') setNotes(parsed.notes);
         if (typeof parsed.preferXlsb === 'boolean') setPreferXlsb(parsed.preferXlsb);
-      } catch (err) {
+      } catch {
         setErrorMessage('Unable to import settings: invalid JSON file.');
       }
     };
@@ -282,7 +331,7 @@ export default function DashboardPage() {
         setSelectedScenarioKey(scenarioKey);
       }
       setCurrentStep(STEP_CONFIG.length - 1);
-    } catch (err) {
+    } catch {
       setErrorMessage('Request failed. Please check your network connection and try again.');
     } finally {
       setIsSubmitting(false);
@@ -305,9 +354,9 @@ export default function DashboardPage() {
       { label: 'Affordable Units', value: summary.total_affordable_units },
       { label: 'Affordable SF', value: summary.total_affordable_sf },
       { label: '40% Units', value: summary.forty_percent_units },
-      { label: '40% Share', value: summary.forty_percent_share ? `${(summary.forty_percent_share * 100).toFixed(2)}%` : '—' },
-      { label: 'Total Monthly Rent', value: summary.total_monthly_rent ? `$${summary.total_monthly_rent.toLocaleString()}` : '—' },
-      { label: 'Total Annual Rent', value: summary.total_annual_rent ? `$${summary.total_annual_rent.toLocaleString()}` : '—' },
+      { label: '40% Share', value: summary.forty_percent_share ? `${(summary.forty_percent_share * 100).toFixed(2)}%` : '-' },
+      { label: 'Total Monthly Rent', value: summary.total_monthly_rent ? `$${summary.total_monthly_rent.toLocaleString()}` : '-' },
+      { label: 'Total Annual Rent', value: summary.total_annual_rent ? `$${summary.total_annual_rent.toLocaleString()}` : '-' },
     ];
   }, [analysis]);
 
@@ -409,7 +458,7 @@ export default function DashboardPage() {
               <div>
                 <h2 className="text-xl font-semibold">Rent Calculator (Optional)</h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  Upload the client-provided rent workbook (e.g., 2025 AMI Rent Calculator). If skipped, we'll use the default copy bundled with the app.
+                  Upload the client-provided rent workbook (e.g., 2025 AMI Rent Calculator). If skipped, we&apos;ll use the default copy bundled with the app.
                 </p>
               </div>
               <label className="flex cursor-pointer items-center justify-between rounded-md border border-dashed border-slate-300 bg-slate-50 p-6 hover:border-slate-400">
@@ -455,7 +504,7 @@ export default function DashboardPage() {
               <div>
                 <h2 className="text-xl font-semibold">Utility Responsibilities</h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  These answers populate row 17 of the client's rent calculator and determine the net rents (column H). If everything is owner-paid, choose N/A for each category.
+                  These answers populate row 17 of the client&apos;s rent calculator and determine the net rents (column H). If everything is owner-paid, choose N/A for each category.
                 </p>
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
@@ -552,7 +601,7 @@ export default function DashboardPage() {
                     <div className="mt-3 space-y-3">
                       {fixedUnits.length === 0 && (
                         <div className="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-                          No overrides yet. Click "Add Unit" to pin a unit.
+                          No overrides yet. Click &quot;Add Unit&quot; to pin a unit.
                         </div>
                       )}
                       {fixedUnits.map((row) => (
@@ -604,7 +653,7 @@ export default function DashboardPage() {
                     <div className="mt-3 space-y-3">
                       {floorRules.length === 0 && (
                         <div className="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-                          No floor constraints yet. Click "Add Rule" to get started.
+                          No floor constraints yet. Click &quot;Add Rule&quot; to get started.
                         </div>
                       )}
                       {floorRules.map((row) => (
@@ -647,7 +696,7 @@ export default function DashboardPage() {
                   <div>
                     <h2 className="text-xl font-semibold">Premium Weights</h2>
                     <p className="mt-1 text-sm text-slate-600">
-                      Adjust the tie-break recipe for the solver. Values do not need to add up to exactly 1.0—the backend normalizes them before use.
+                      Adjust the tie-break recipe for the solver. Values do not need to add up to exactly 1.0-the backend normalizes them before use.
                     </p>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                       <div>
@@ -715,7 +764,7 @@ export default function DashboardPage() {
                   <div>
                     <h2 className="text-xl font-semibold">Notes to Solver</h2>
                     <p className="mt-1 text-sm text-slate-600">
-                      Provide context or special instructions. One note per line—these flow into the solver diagnostics.
+                      Provide context or special instructions. One note per line-these flow into the solver diagnostics.
                     </p>
                     <textarea
                       value={notes}
@@ -735,9 +784,12 @@ export default function DashboardPage() {
                       className="h-5 w-5 rounded border border-slate-300 text-slate-900 focus:ring-slate-900"
                     />
                     <label htmlFor="prefer-xlsb" className="text-sm font-medium text-slate-700">
-                      Return downloads in .xlsb format when possible
+                      Return downloads in .xlsb format (Windows-only, coming soon)
                     </label>
                   </div>
+                  <p className="text-xs text-slate-500">
+                    Current Render deployment always delivers .xlsx files; we&apos;ll re-enable .xlsb once the service runs on a Windows host.
+                  </p>
                 </div>
               </div>
 
@@ -787,7 +839,7 @@ export default function DashboardPage() {
                   <ul className="mt-2 space-y-1">
                     <li>
                       <span className="font-medium text-slate-600">Unit schedule:</span>{' '}
-                      {unitFile ? unitFile.name : '—'}
+                      {unitFile ? unitFile.name : '-'}
                     </li>
                     <li>
                       <span className="font-medium text-slate-600">Rent workbook:</span>{' '}
@@ -840,7 +892,7 @@ export default function DashboardPage() {
                     )}
                   </button>
                   <span className="text-xs text-slate-500">
-                    The solver enforces the 20–21% low-band window, applies overrides, and returns rent totals per unit.
+                    The solver enforces the 20-21% low-band window, applies overrides, and returns rent totals per unit.
                   </span>
                 </div>
                 {!unitFile && (
@@ -877,7 +929,7 @@ export default function DashboardPage() {
                           {entry.label}
                         </div>
                         <div className="mt-1 text-lg font-semibold text-slate-800">
-                          {entry.value ?? '—'}
+                          {entry.value ?? '-'}
                         </div>
                       </div>
                     ))}
@@ -923,17 +975,17 @@ export default function DashboardPage() {
                     {currentScenario ? (
                       <div className="rounded-md border border-slate-200 bg-white p-4">
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <SummaryCell label="WAAMI" value={`${(currentScenario.waami * 100).toFixed(2)}%`} />
+                          <SummaryCell label="WAAMI" value={currentScenario.waami !== undefined ? `${(currentScenario.waami * 100).toFixed(2)}%` : 'ï¿½'} />
                           <SummaryCell
                             label="Total Units"
-                            value={currentScenario.metrics?.total_units ?? '—'}
+                            value={currentScenario.metrics?.total_units ?? '-'}
                           />
                           <SummaryCell
                             label="Total Monthly Rent"
                             value={
                               currentScenario.metrics?.total_monthly_rent
                                 ? `$${currentScenario.metrics.total_monthly_rent.toLocaleString()}`
-                                : '—'
+                                : '-'
                             }
                           />
                           <SummaryCell
@@ -941,19 +993,19 @@ export default function DashboardPage() {
                             value={
                               currentScenario.metrics?.total_annual_rent
                                 ? `$${currentScenario.metrics.total_annual_rent.toLocaleString()}`
-                                : '—'
+                                : '-'
                             }
                           />
                           <SummaryCell
                             label="40% Units"
-                            value={currentScenario.metrics?.low_band_units ?? '—'}
+                            value={currentScenario.metrics?.low_band_units ?? '-'}
                           />
                           <SummaryCell
                             label="40% Share"
                             value={
                               currentScenario.metrics?.low_band_share !== undefined
                                 ? `${(currentScenario.metrics.low_band_share * 100).toFixed(2)}%`
-                                : '—'
+                                : '-'
                             }
                           />
                           <SummaryCell
@@ -961,10 +1013,10 @@ export default function DashboardPage() {
                             value={
                               currentScenario.metrics?.band_mix
                                 ?.map(
-                                  (entry: any) =>
-                                    `${entry.band}% (${entry.units} units · ${(entry.share_of_sf * 100).toFixed(1)}% SF)`
+                                  (entry: ScenarioBandMixEntry) =>
+                                    `${entry.band}% (${entry.units} units Â· ${(entry.share_of_sf * 100).toFixed(1)}% SF)`
                                 )
-                                .join('; ') || '—'
+                                .join('; ') || '-'
                             }
                             span
                           />
@@ -984,22 +1036,22 @@ export default function DashboardPage() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200 bg-white">
-                              {currentScenario.assignments?.map((unit: any, index: number) => (
+                              {currentScenario.assignments?.map((unit: ScenarioAssignment, index: number) => (
                                 <tr key={`${unit.unit_id}-${index}`} className="text-slate-700">
                                   <td className="px-3 py-2 font-medium">{unit.unit_id}</td>
                                   <td className="px-3 py-2">{unit.bedrooms}</td>
                                   <td className="px-3 py-2">{unit.net_sf}</td>
-                                  <td className="px-3 py-2">{unit.floor ?? '—'}</td>
+                                  <td className="px-3 py-2">{unit.floor ?? '-'}</td>
                                   <td className="px-3 py-2">{`${(unit.assigned_ami * 100).toFixed(0)}%`}</td>
                                   <td className="px-3 py-2">
                                     {unit.monthly_rent !== undefined
                                       ? `$${unit.monthly_rent.toLocaleString()}`
-                                      : '—'}
+                                      : '-'}
                                   </td>
                                   <td className="px-3 py-2">
                                     {unit.annual_rent !== undefined
                                       ? `$${unit.annual_rent.toLocaleString()}`
-                                      : '—'}
+                                      : '-'}
                                   </td>
                                 </tr>
                               ))}
@@ -1052,7 +1104,7 @@ function SummaryCell({
   return (
     <div className={`rounded-md border border-slate-200 bg-slate-50 p-4 ${span ? 'sm:col-span-2 lg:col-span-4' : ''}`}>
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-800">{value ?? '—'}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-800">{value ?? '-'}</div>
     </div>
   );
 }

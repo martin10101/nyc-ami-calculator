@@ -1,8 +1,6 @@
 import os
 import pandas as pd
 
-from ami_optix.excel_utils import convert_xlsx_to_xlsb
-
 _SCENARIO_EXPORT_ORDER = [
     ("S1_Absolute_Best", "scenario_absolute_best", "AMI_S1_Absolute_Best"),
     ("S2_Client_Oriented", "scenario_client_oriented", "AMI_S2_Client_Oriented"),
@@ -85,19 +83,18 @@ def create_excel_reports(
 
     # --- Individual scenario workbooks ---
     notes = analysis_json.setdefault('analysis_notes', [])
+    xlsb_note_added = False
 
-    def _finalize(path_xlsx: str) -> str:
-        if not prefer_xlsb:
-            created_files.append(path_xlsx)
-            return path_xlsx
-        try:
-            converted = convert_xlsx_to_xlsb(path_xlsx)
-            created_files.append(converted)
-            return converted
-        except RuntimeError as exc:
-            notes.append(f"Report export warning: {exc}. Delivered as .xlsx.")
-            created_files.append(path_xlsx)
-            return path_xlsx
+    def _register_xlsx(path_xlsx: str) -> str:
+        nonlocal xlsb_note_added
+        created_files.append(path_xlsx)
+        if prefer_xlsb and not xlsb_note_added:
+            notes.append(
+                "XLSB export requested, but the current environment only delivers .xlsx files. "
+                "Please reopen on a Windows host to receive .xlsb downloads."
+            )
+            xlsb_note_added = True
+        return path_xlsx
 
     for display_name, analysis_key, _ in _SCENARIO_EXPORT_ORDER:
         scenario = scenario_lookup.get(analysis_key)
@@ -107,7 +104,7 @@ def create_excel_reports(
         with pd.ExcelWriter(filepath_xlsx, engine='xlsxwriter') as writer:
             _scenario_to_dataframe(scenario).to_excel(writer, sheet_name='Assignments', index=False)
             _scenario_summary_frame(display_name, scenario).to_excel(writer, sheet_name='Summary', index=False)
-        _finalize(filepath_xlsx)
+        _register_xlsx(filepath_xlsx)
 
     # --- Updated source workbook ---
     try:
@@ -154,6 +151,6 @@ def create_excel_reports(
         master_df.to_excel(writer, sheet_name='Units', index=False)
         if not summary_sheet.empty:
             summary_sheet.to_excel(writer, sheet_name='Scenario Summary', index=False)
-    _finalize(updated_source_filepath_xlsx)
+    _register_xlsx(updated_source_filepath_xlsx)
 
     return created_files
