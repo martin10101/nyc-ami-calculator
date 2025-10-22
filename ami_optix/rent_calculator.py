@@ -46,6 +46,13 @@ UTILITY_OPTION_MAP = {
     'hot_water': HOT_WATER_OPTIONS,
 }
 
+LABEL_TO_CATEGORY = {label: key for key, options in UTILITY_OPTION_MAP.items() for label in options.values()}
+HEADER_TO_CATEGORY = {
+    "cooking": "cooking",
+    "heat": "heat",
+    "hot water": "hot_water",
+}
+
 @dataclass
 class RentSchedule:
     gross_rents: Dict[Tuple[float, str], float]
@@ -116,38 +123,53 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
     current_category = None
     for col_idx in range(sheet.shape[1]):
         header = sheet.iloc[14, col_idx]
-        if isinstance(header, str) and header.strip():
-            label = header.strip()
-            if label not in ("Project Total",):
-                current_category = label
+        if isinstance(header, str):
+            header_clean = header.strip()
+            if header_clean:
+                normalized = header_clean.lower()
+                header_category = HEADER_TO_CATEGORY.get(normalized)
+                if header_category:
+                    current_category = header_category
+                else:
+                    option_category = LABEL_TO_CATEGORY.get(header_clean)
+                    if option_category:
+                        current_category = option_category
 
         option = sheet.iloc[15, col_idx]
-        if current_category and isinstance(option, str) and option.strip() and option.strip().lower() != "select -->>":
-            cleaned_option = option.strip()
-            allowances.setdefault(current_category, {})
-            bedroom_map = {}
-            for offset, bedroom in enumerate(BEDROOM_LABELS):
-                value = sheet.iloc[17 + offset, col_idx]
-                numeric = 0.0
-                if not pd.isna(value):
-                    if isinstance(value, (int, float)):
-                        numeric = float(value)
-                    elif isinstance(value, str):
-                        value_str = value.strip()
-                        if value_str.startswith('='):
-                            match = re.search(r',\s*([-]?[0-9]+(?:\.[0-9]+)?)', value_str)
-                            if match:
-                                try:
-                                    numeric = float(match.group(1))
-                                except ValueError:
-                                    numeric = 0.0
-                        else:
+        if not isinstance(option, str):
+            continue
+        cleaned_option = option.strip()
+        if not cleaned_option or cleaned_option.lower() == "select -->>":
+            continue
+
+        category_key = LABEL_TO_CATEGORY.get(cleaned_option) or current_category
+        if not category_key:
+            continue
+
+        category_bucket = allowances.setdefault(category_key, {})
+        bedroom_map = {}
+        for offset, bedroom in enumerate(BEDROOM_LABELS):
+            value = sheet.iloc[17 + offset, col_idx]
+            numeric = 0.0
+            if not pd.isna(value):
+                if isinstance(value, (int, float)):
+                    numeric = float(value)
+                elif isinstance(value, str):
+                    value_str = value.strip()
+                    if value_str.startswith('='):
+                        match = re.search(r',\s*([-]?[0-9]+(?:\.[0-9]+)?)', value_str)
+                        if match:
                             try:
-                                numeric = float(value_str)
+                                numeric = float(match.group(1))
                             except ValueError:
                                 numeric = 0.0
-                bedroom_map[bedroom] = numeric
-            allowances[current_category][cleaned_option] = bedroom_map
+                    else:
+                        try:
+                            numeric = float(value_str)
+                        except ValueError:
+                            numeric = 0.0
+            bedroom_map[bedroom] = numeric
+        category_bucket[cleaned_option] = bedroom_map
     return allowances
 
 
