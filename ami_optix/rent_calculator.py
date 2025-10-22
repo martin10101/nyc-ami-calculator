@@ -6,7 +6,7 @@ monthly/annual net rents based on utility selections.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import os
 import math
 
@@ -39,19 +39,42 @@ HOT_WATER_OPTIONS = {
 }
 
 
+UTILITY_OPTION_MAP = {
+    'cooking': COOKING_OPTIONS,
+    'heat': HEAT_OPTIONS,
+    'hot_water': HOT_WATER_OPTIONS,
+}
+
 @dataclass
 class RentSchedule:
     gross_rents: Dict[Tuple[float, str], float]
     allowances: Dict[str, Dict[str, Dict[str, float]]]
 
     def rent_for(self, ami_percent: float, bedrooms: float, selections: Dict[str, str]) -> float:
+        return self.rent_components(ami_percent, bedrooms, selections)['net']
+
+    def rent_components(self, ami_percent: float, bedrooms: float, selections: Dict[str, str]) -> Dict[str, Any]:
         bedroom_label = _normalize_bedroom_label(bedrooms)
-        gross = self._gross_rents_lookup(ami_percent, bedroom_label)
-        allowance_total = 0.0
-        for category, human_choice in selections.items():
-            option_label = _resolve_option_label(category, human_choice)
-            allowance_total += self._allowance_lookup(category, option_label, bedroom_label)
-        return max(gross - allowance_total, 0.0)
+        gross = float(self._gross_rents_lookup(ami_percent, bedroom_label))
+        allowances: Dict[str, Dict[str, Any]] = {}
+        total_allowance = 0.0
+        for category, options in UTILITY_OPTION_MAP.items():
+            selection_key = (selections or {}).get(category, 'na')
+            option_label = _resolve_option_label(category, selection_key)
+            amount = float(self._allowance_lookup(category, option_label, bedroom_label))
+            allowances[category] = {
+                'category': category,
+                'label': option_label,
+                'amount': amount,
+            }
+            total_allowance += amount
+        net = max(gross - total_allowance, 0.0)
+        return {
+            'gross': gross,
+            'allowances': allowances,
+            'allowance_total': total_allowance,
+            'net': net,
+        }
 
     def _gross_rents_lookup(self, ami_percent: float, bedroom_label: str) -> float:
         key = (round(ami_percent, 4), bedroom_label)
@@ -163,20 +186,65 @@ def compute_rents_for_assignments(
     schedule: RentSchedule,
     assignments: List[Dict[str, float]],
     utilities: Dict[str, str],
-) -> Tuple[List[Dict[str, float]], float, float]:
-    updated_assignments = []
-    total_monthly = 0.0
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    updated_assignments: List[Dict[str, Any]] = []
+    total_net = 0.0
+    total_gross = 0.0
+    total_allowance = 0.0
+    category_totals: Dict[str, float] = {}
+    category_labels: Dict[str, str] = {}
+
     for unit in assignments:
         ami = float(unit.get("assigned_ami"))
         bedrooms = unit.get("bedrooms", 0)
-        monthly = schedule.rent_for(ami, bedrooms, utilities)
-        annual = monthly * 12.0
+        components = schedule.rent_components(ami, bedrooms, utilities)
+        gross = components['gross']
+        net = components['net']
+        allowance_total = components['allowance_total']
+        allowance_details = []
+        for category, detail in components['allowances'].items():
+            amount = detail['amount']
+            label = detail['label']
+            allowance_details.append({
+                'category': category,
+                'label': label,
+                'amount': round(amount, 2),
+            })
+            category_totals[category] = category_totals.get(category, 0.0) + amount
+            category_labels[category] = label
+
         enriched = dict(unit)
-        enriched["monthly_rent"] = round(monthly, 2)
-        enriched["annual_rent"] = round(annual, 2)
+        enriched['gross_rent'] = round(gross, 2)
+        enriched['monthly_rent'] = round(net, 2)
+        enriched['annual_rent'] = round(net * 12.0, 2)
+        enriched['allowance_total'] = round(allowance_total, 2)
+        enriched['allowances'] = allowance_details
         updated_assignments.append(enriched)
-        total_monthly += monthly
-    return updated_assignments, round(total_monthly, 2), round(total_monthly * 12.0, 2)
+
+        total_net += net
+        total_gross += gross
+        total_allowance += allowance_total
+
+    allowance_breakdown = {
+        category: {
+            'label': category_labels.get(category, ''),
+            'monthly': round(amount, 2),
+            'annual': round(amount * 12.0, 2),
+        }
+        for category, amount in category_totals.items()
+    }
+
+    totals = {
+        'net_monthly': round(total_net, 2),
+        'net_annual': round(total_net * 12.0, 2),
+        'gross_monthly': round(total_gross, 2),
+        'gross_annual': round(total_gross * 12.0, 2),
+        'allowances_monthly': round(total_allowance, 2),
+        'allowances_annual': round(total_allowance * 12.0, 2),
+        'allowances_breakdown': allowance_breakdown,
+    }
+
+    return updated_assignments, totals
 
 
 def save_rent_workbook_with_utilities(

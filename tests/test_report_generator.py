@@ -22,8 +22,8 @@ def test_create_excel_reports_adds_scenario_columns(tmp_path):
         'status': 'OPTIMAL',
         'bands': [40, 60, 80],
         'assignments': [
-            {'unit_id': '1A', 'bedrooms': 1, 'net_sf': 500, 'floor': 1, 'client_ami': 0.5, 'premium_score': 0.1, 'assigned_ami': 0.4},
-            {'unit_id': '1B', 'bedrooms': 2, 'net_sf': 700, 'floor': 2, 'client_ami': 0.6, 'premium_score': 0.2, 'assigned_ami': 0.6},
+            {'unit_id': '1A', 'bedrooms': 1, 'net_sf': 500, 'floor': 1, 'client_ami': 0.5, 'premium_score': 0.1, 'assigned_ami': 0.4, 'gross_rent': 1500, 'monthly_rent': 1400, 'annual_rent': 16800, 'allowance_total': 100, 'allowances': [{'category': 'cooking', 'label': 'Electric Stove', 'amount': 100}]},
+            {'unit_id': '1B', 'bedrooms': 2, 'net_sf': 700, 'floor': 2, 'client_ami': 0.6, 'premium_score': 0.2, 'assigned_ami': 0.6, 'gross_rent': 2000, 'monthly_rent': 1900, 'annual_rent': 22800, 'allowance_total': 100, 'allowances': [{'category': 'cooking', 'label': 'Electric Stove', 'amount': 100}]},
         ],
         'metrics': {
             'waami_percent': 50.0,
@@ -34,6 +34,14 @@ def test_create_excel_reports_adds_scenario_columns(tmp_path):
                 {'band': 40, 'units': 1, 'net_sf': 500, 'share_of_sf': 500/1200},
                 {'band': 60, 'units': 1, 'net_sf': 700, 'share_of_sf': 700/1200},
             ],
+            'gross_monthly_rent': 3500,
+            'gross_annual_rent': 42000,
+            'total_monthly_rent': 3300,
+            'total_annual_rent': 39600,
+            'allowance_monthly_total': 200,
+            'allowance_breakdown': {
+                'cooking': {'label': 'Electric Stove', 'monthly': 200, 'annual': 2400}
+            },
         },
     }
 
@@ -65,7 +73,15 @@ def test_create_excel_reports_adds_scenario_columns(tmp_path):
     units_df = pd.read_excel(updated_path, sheet_name='Units')
     assert 'AMI_S1_Absolute_Best' in units_df.columns
     assert 'AMI_S2_Client_Oriented' in units_df.columns
+    scenario_workbook = [p for p in files if p.endswith('S1_Absolute_Best_Report.xlsx')][0]
+    scenario_df = pd.read_excel(scenario_workbook, sheet_name='Assignments')
+    assert 'Gross Rent' in scenario_df.columns
+    assert 'Rent Deductions' in scenario_df.columns
+    assert 'Allowance Detail' in scenario_df.columns
+
     summary_df = pd.read_excel(updated_path, sheet_name='Scenario Summary')
+    assert 'Gross Monthly Rent' in summary_df.columns
+    assert 'Rent Deductions (Monthly)' in summary_df.columns
     assert not summary_df.empty
 
 

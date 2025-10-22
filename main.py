@@ -66,13 +66,19 @@ def _apply_rent_metrics(schedule, scenarios, utilities):
     for scenario in scenarios.values():
         if not scenario:
             continue
-        assignments, total_monthly, total_annual = compute_rents_for_assignments(
+        assignments, rent_totals = compute_rents_for_assignments(
             schedule, scenario['assignments'], utilities
         )
         scenario['assignments'] = assignments
+        scenario['rent_breakdown'] = rent_totals
         metrics = scenario.get('metrics', {})
-        metrics['total_monthly_rent'] = total_monthly
-        metrics['total_annual_rent'] = total_annual
+        metrics['total_monthly_rent'] = rent_totals['net_monthly']
+        metrics['total_annual_rent'] = rent_totals['net_annual']
+        metrics['gross_monthly_rent'] = rent_totals['gross_monthly']
+        metrics['gross_annual_rent'] = rent_totals['gross_annual']
+        metrics['allowance_monthly_total'] = rent_totals['allowances_monthly']
+        metrics['allowance_annual_total'] = rent_totals['allowances_annual']
+        metrics['allowance_breakdown'] = rent_totals['allowances_breakdown']
         scenario['metrics'] = metrics
 
 
@@ -236,6 +242,10 @@ def main(file_path, utilities=None, overrides=None, rent_calculator_path=None):
             "forty_percent_share": best_metrics.get('low_band_share'),
             "total_monthly_rent": best_metrics.get('total_monthly_rent'),
             "total_annual_rent": best_metrics.get('total_annual_rent'),
+            "total_gross_monthly_rent": best_metrics.get('gross_monthly_rent'),
+            "total_gross_annual_rent": best_metrics.get('gross_annual_rent'),
+            "total_rent_deductions_monthly": best_metrics.get('allowance_monthly_total'),
+            "total_rent_deductions_annual": best_metrics.get('allowance_annual_total'),
         })
 
         if rent_schedule_path:

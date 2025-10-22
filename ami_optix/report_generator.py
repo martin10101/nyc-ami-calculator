@@ -35,10 +35,25 @@ def _scenario_to_dataframe(scenario):
     if 'Assigned AMI' in report_df.columns:
         report_df['Assigned AMI'] = (report_df['Assigned AMI'].astype(float) * 100).map('{:.0f}%'.format)
 
+    if 'gross_rent' in df.columns:
+        report_df['Gross Rent'] = df['gross_rent'].round(2)
     if 'monthly_rent' in df.columns:
         report_df['Monthly Rent'] = df['monthly_rent'].round(2)
+    if 'allowance_total' in df.columns:
+        report_df['Rent Deductions'] = df['allowance_total'].round(2)
     if 'annual_rent' in df.columns:
         report_df['Annual Rent'] = df['annual_rent'].round(2)
+    if 'allowances' in df.columns:
+        def _format_allowances(items):
+            if not isinstance(items, list):
+                return ''
+            formatted = [
+                f"{detail.get('label') or detail.get('category')}: -${detail.get('amount', 0):,.2f}"
+                for detail in items
+                if detail and detail.get('amount')
+            ]
+            return '; '.join(formatted)
+        report_df['Allowance Detail'] = df['allowances'].apply(_format_allowances)
     return report_df
 
 
@@ -48,6 +63,12 @@ def _scenario_summary_frame(display_name, scenario):
     band_summary = "; ".join(
         f"{entry['band']}%: {entry['units']} units ({entry['share_of_sf']*100:.1f}% SF)"
         for entry in band_mix
+    )
+    allowance_breakdown = metrics.get('allowance_breakdown', {})
+    allowance_summary = '; '.join(
+        f"{detail.get('label') or category}: -${detail.get('monthly', 0):,.2f}"
+        for category, detail in allowance_breakdown.items()
+        if detail.get('monthly')
     )
     summary = {
         'Scenario': display_name.replace('_', ' '),
@@ -60,6 +81,10 @@ def _scenario_summary_frame(display_name, scenario):
         '40% Units': metrics.get('low_band_units'),
         '40% SF': round(metrics.get('low_band_sf', 0.0), 2),
         '40% Share (%)': round(metrics.get('low_band_share', 0.0) * 100, 2),
+        'Gross Monthly Rent': round(metrics.get('gross_monthly_rent', 0.0), 2),
+        'Gross Annual Rent': round(metrics.get('gross_annual_rent', 0.0), 2),
+        'Rent Deductions (Monthly)': round(metrics.get('allowance_monthly_total', 0.0), 2),
+        'Rent Deductions Detail': allowance_summary,
         'Total Monthly Rent': round(metrics.get('total_monthly_rent', 0.0), 2),
         'Total Annual Rent': round(metrics.get('total_annual_rent', 0.0), 2),
     }

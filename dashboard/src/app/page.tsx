@@ -22,6 +22,24 @@ type UtilitiesState = {
   hot_water: string;
 };
 
+type RentAllowanceDetail = {
+  category: string;
+  label: string;
+  amount: number;
+};
+
+type RentAllowanceBreakdown = Record<string, { label?: string; monthly?: number; annual?: number }>;
+
+type RentBreakdown = {
+  net_monthly?: number;
+  net_annual?: number;
+  gross_monthly?: number;
+  gross_annual?: number;
+  allowances_monthly?: number;
+  allowances_annual?: number;
+  allowances_breakdown?: RentAllowanceBreakdown;
+};
+
 type ProjectSummary = {
   total_affordable_units?: number;
   total_affordable_sf?: number;
@@ -30,6 +48,10 @@ type ProjectSummary = {
   forty_percent_share?: number;
   total_monthly_rent?: number;
   total_annual_rent?: number;
+  total_gross_monthly_rent?: number;
+  total_gross_annual_rent?: number;
+  total_rent_deductions_monthly?: number;
+  total_rent_deductions_annual?: number;
   utility_selections?: UtilitiesState;
   [key: string]: unknown;
 };
@@ -42,6 +64,11 @@ type ScenarioBandMixEntry = {
 };
 
 type ScenarioMetrics = {
+  gross_monthly_rent?: number;
+  gross_annual_rent?: number;
+  allowance_monthly_total?: number;
+  allowance_annual_total?: number;
+  allowance_breakdown?: RentAllowanceBreakdown;
   waami_percent?: number;
   total_units?: number;
   total_sf?: number;
@@ -60,8 +87,11 @@ type ScenarioAssignment = {
   net_sf?: number;
   floor?: number;
   assigned_ami: number;
+  gross_rent?: number;
   monthly_rent?: number;
   annual_rent?: number;
+  allowance_total?: number;
+  allowances?: RentAllowanceDetail[];
 };
 
 type ScenarioResult = {
@@ -69,6 +99,7 @@ type ScenarioResult = {
   metrics?: ScenarioMetrics;
   bands?: number[];
   waami?: number;
+  rent_breakdown?: RentBreakdown;
 };
 
 type AnalysisResponse = {
@@ -76,6 +107,13 @@ type AnalysisResponse = {
   analysis_notes?: string[];
   scenarios?: Record<string, ScenarioResult | null | undefined>;
   download_link?: string;
+};
+
+const formatCurrency = (value?: number | null) => {
+  if (value === undefined || value === null) {
+    return '-';
+  }
+  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 const DEFAULT_UTILITIES: UtilitiesState = {
@@ -355,8 +393,10 @@ export default function DashboardPage() {
       { label: 'Affordable SF', value: summary.total_affordable_sf },
       { label: '40% Units', value: summary.forty_percent_units },
       { label: '40% Share', value: summary.forty_percent_share ? `${(summary.forty_percent_share * 100).toFixed(2)}%` : '-' },
-      { label: 'Total Monthly Rent', value: summary.total_monthly_rent ? `$${summary.total_monthly_rent.toLocaleString()}` : '-' },
-      { label: 'Total Annual Rent', value: summary.total_annual_rent ? `$${summary.total_annual_rent.toLocaleString()}` : '-' },
+      { label: 'Gross Monthly Rent', value: formatCurrency(summary.total_gross_monthly_rent ?? null) },
+      { label: 'Rent Deductions', value: formatCurrency(summary.total_rent_deductions_monthly ?? null) },
+      { label: 'Net Monthly Rent', value: formatCurrency(summary.total_monthly_rent ?? null) },
+      { label: 'Net Annual Rent', value: formatCurrency(summary.total_annual_rent ?? null) },
     ];
   }, [analysis]);
 
@@ -364,6 +404,16 @@ export default function DashboardPage() {
     if (!analysis?.scenarios || !selectedScenarioKey) return null;
     return analysis.scenarios[selectedScenarioKey];
   }, [analysis, selectedScenarioKey]);
+
+  const scenarioRentSummary = useMemo(() => {
+    if (!currentScenario) return null;
+    const grossMonthly = currentScenario.metrics?.gross_monthly_rent ?? currentScenario.metrics?.total_monthly_rent ?? 0;
+    const allowanceMonthlyTotal = currentScenario.metrics?.allowance_monthly_total ?? 0;
+    const allowanceEntries = Object.entries(currentScenario.metrics?.allowance_breakdown ?? {});
+    const allowanceItems = allowanceEntries.filter(([, detail]) => (detail?.monthly ?? 0) > 0);
+    return { grossMonthly, allowanceMonthlyTotal, allowanceItems };
+  }, [currentScenario]);
+
 
   const handleDownloadReports = () => {
     if (!analysis?.download_link) return;
@@ -973,28 +1023,21 @@ export default function DashboardPage() {
                     </div>
 
                     {currentScenario ? (
+                      
                       <div className="rounded-md border border-slate-200 bg-white p-4">
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <SummaryCell label="WAAMI" value={currentScenario.waami !== undefined ? `${(currentScenario.waami * 100).toFixed(2)}%` : '�'} />
+                          <SummaryCell label="WAAMI" value={currentScenario.waami !== undefined ? `${(currentScenario.waami * 100).toFixed(2)}%` : '-'} />
                           <SummaryCell
                             label="Total Units"
                             value={currentScenario.metrics?.total_units ?? '-'}
                           />
                           <SummaryCell
                             label="Total Monthly Rent"
-                            value={
-                              currentScenario.metrics?.total_monthly_rent
-                                ? `$${currentScenario.metrics.total_monthly_rent.toLocaleString()}`
-                                : '-'
-                            }
+                            value={formatCurrency(currentScenario.metrics?.total_monthly_rent ?? null)}
                           />
                           <SummaryCell
                             label="Total Annual Rent"
-                            value={
-                              currentScenario.metrics?.total_annual_rent
-                                ? `$${currentScenario.metrics.total_annual_rent.toLocaleString()}`
-                                : '-'
-                            }
+                            value={formatCurrency(currentScenario.metrics?.total_annual_rent ?? null)}
                           />
                           <SummaryCell
                             label="40% Units"
@@ -1014,13 +1057,38 @@ export default function DashboardPage() {
                               currentScenario.metrics?.band_mix
                                 ?.map(
                                   (entry: ScenarioBandMixEntry) =>
-                                    `${entry.band}% (${entry.units} units · ${(entry.share_of_sf * 100).toFixed(1)}% SF)`
+                                    `${entry.band}% (${entry.units} units - ${(entry.share_of_sf * 100).toFixed(1)}% SF)`
                                 )
                                 .join('; ') || '-'
                             }
                             span
                           />
                         </div>
+
+                        {scenarioRentSummary && (
+                          <div className="mt-4 rounded-md border border-slate-100 bg-slate-50 p-4">
+                            <h4 className="text-sm font-semibold text-slate-700">Rent Breakdown</h4>
+                            <div className="mt-2 space-y-1 text-sm text-slate-600">
+                              <div>Gross monthly rent: {formatCurrency(scenarioRentSummary.grossMonthly)}</div>
+                              {scenarioRentSummary.allowanceItems.length > 0 ? (
+                                <>
+                                  <div>Tenant-paid allowances:</div>
+                                  <ul className="ml-4 list-disc">
+                                    {scenarioRentSummary.allowanceItems.map(([category, detail]) => (
+                                      <li key={category}>
+                                        {(detail?.label || category) ?? category}: -{formatCurrency(detail?.monthly ?? null)}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  <div>Total allowances: -{formatCurrency(scenarioRentSummary.allowanceMonthlyTotal)}</div>
+                                </>
+                              ) : (
+                                <div>No tenant-paid allowances.</div>
+                              )}
+                              <div>Net monthly rent: {formatCurrency(currentScenario.metrics?.total_monthly_rent ?? null)}</div>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="mt-6 overflow-auto rounded-md border border-slate-200">
                           <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -1031,6 +1099,8 @@ export default function DashboardPage() {
                                 <th className="px-3 py-2">Net SF</th>
                                 <th className="px-3 py-2">Floor</th>
                                 <th className="px-3 py-2">Assigned AMI</th>
+                                <th className="px-3 py-2">Gross Rent</th>
+                                <th className="px-3 py-2">Rent Deductions</th>
                                 <th className="px-3 py-2">Monthly Rent</th>
                                 <th className="px-3 py-2">Annual Rent</th>
                               </tr>
@@ -1043,16 +1113,24 @@ export default function DashboardPage() {
                                   <td className="px-3 py-2">{unit.net_sf}</td>
                                   <td className="px-3 py-2">{unit.floor ?? '-'}</td>
                                   <td className="px-3 py-2">{`${(unit.assigned_ami * 100).toFixed(0)}%`}</td>
+                                  <td className="px-3 py-2">{formatCurrency(unit.gross_rent ?? null)}</td>
                                   <td className="px-3 py-2">
-                                    {unit.monthly_rent !== undefined
-                                      ? `$${unit.monthly_rent.toLocaleString()}`
-                                      : '-'}
+                                    {unit.allowance_total && unit.allowance_total > 0 ? (
+                                      <>
+                                        <div>-{formatCurrency(unit.allowance_total ?? null)}</div>
+                                        <div className="text-xs text-slate-500">
+                                          {unit.allowances
+                                            ?.filter((detail) => detail?.amount)
+                                            ?.map((detail) => detail.label || detail.category)
+                                            ?.join(', ')}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      '-'
+                                    )}
                                   </td>
-                                  <td className="px-3 py-2">
-                                    {unit.annual_rent !== undefined
-                                      ? `$${unit.annual_rent.toLocaleString()}`
-                                      : '-'}
-                                  </td>
+                                  <td className="px-3 py-2">{formatCurrency(unit.monthly_rent ?? null)}</td>
+                                  <td className="px-3 py-2">{formatCurrency(unit.annual_rent ?? null)}</td>
                                 </tr>
                               ))}
                             </tbody>
