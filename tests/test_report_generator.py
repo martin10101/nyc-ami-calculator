@@ -5,7 +5,12 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from ami_optix.report_generator import create_excel_reports
-from ami_optix.rent_calculator import COOKING_OPTIONS, HEAT_OPTIONS, HOT_WATER_OPTIONS
+from ami_optix.rent_calculator import (
+    COOKING_OPTIONS,
+    HEAT_OPTIONS,
+    ELECTRICITY_OPTIONS,
+    HOT_WATER_OPTIONS,
+)
 
 
 def test_create_excel_reports_adds_scenario_columns(tmp_path):
@@ -140,7 +145,12 @@ def test_rent_workbook_written_when_available(tmp_path):
         },
     }
 
-    utilities = {'cooking': 'gas', 'heat': 'gas', 'hot_water': 'electric_heat_pump'}
+    utilities = {
+        'electricity': 'tenant_pays',
+        'cooking': 'gas',
+        'heat': 'gas',
+        'hot_water': 'electric_heat_pump',
+    }
 
     files = create_excel_reports(
         analysis_json,
@@ -156,6 +166,7 @@ def test_rent_workbook_written_when_available(tmp_path):
 
     workbook = load_workbook(rent_files[0])
     sheet = workbook['AMI & Rent']
+    assert sheet.cell(row=17, column=2).value == ELECTRICITY_OPTIONS['tenant_pays']
     assert sheet.cell(row=17, column=3).value == COOKING_OPTIONS['gas']
     assert sheet.cell(row=17, column=5).value == HEAT_OPTIONS['gas']
     assert sheet.cell(row=17, column=10).value == HOT_WATER_OPTIONS['electric_heat_pump']

@@ -26,7 +26,7 @@ def default_converter(o):
     raise TypeError
 
 
-DEFAULT_UTILITIES = {"cooking": "na", "heat": "na", "hot_water": "na"}
+DEFAULT_UTILITIES = {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"}
 
 
 def _sanitize_utilities(payload: Dict[str, Any] | None) -> Dict[str, str]:

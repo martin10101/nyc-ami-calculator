@@ -17,6 +17,7 @@ type FloorRuleRow = {
 };
 
 type UtilitiesState = {
+  electricity: string;
   cooking: string;
   heat: string;
   hot_water: string;
@@ -117,6 +118,7 @@ const formatCurrency = (value?: number | null) => {
 };
 
 const DEFAULT_UTILITIES: UtilitiesState = {
+  electricity: 'na',
   cooking: 'na',
   heat: 'na',
   hot_water: 'na',
@@ -125,9 +127,14 @@ const DEFAULT_UTILITIES: UtilitiesState = {
 const STEP_CONFIG = [
   { title: 'Upload Units', subtitle: 'Provide the project rent roll (.xlsx, .xlsm, or .xlsb).' },
   { title: 'Rent Workbook', subtitle: 'Attach the annual rent calculator if you need updated allowances.' },
-  { title: 'Utilities', subtitle: 'Tell us who pays for cooking, heat, and hot water.' },
+  { title: 'Utilities', subtitle: 'Tell us who pays for electricity, cooking, heat, and hot water.' },
   { title: 'Overrides & Settings', subtitle: 'Fine tune solver preferences, overrides, and export settings.' },
   { title: 'Review & Run', subtitle: 'Verify inputs, run the solver, and download reports.' },
+];
+
+const ELECTRICITY_OPTIONS = [
+  { value: 'tenant_pays', label: 'Apartment electricity – tenant pays' },
+  { value: 'na', label: 'Apartment electricity – owner pays' },
 ];
 
 const COOKING_OPTIONS = [
@@ -557,7 +564,25 @@ export default function DashboardPage() {
                   These answers populate row 17 of the client&apos;s rent calculator and determine the net rents (column H). If everything is owner-paid, choose N/A for each category.
                 </p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-md border border-slate-200 p-4">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Electricity
+                  </label>
+                  <select
+                    value={utilities.electricity}
+                    onChange={(event) =>
+                      setUtilities((prev) => ({ ...prev, electricity: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    {ELECTRICITY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="rounded-md border border-slate-200 p-4">
                   <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Cooking
@@ -906,6 +931,10 @@ export default function DashboardPage() {
                     Utilities
                   </h3>
                   <ul className="mt-2 space-y-1">
+                    <li>
+                      <span className="font-medium text-slate-600">Electricity:</span>{' '}
+                      {ELECTRICITY_OPTIONS.find((item) => item.value === utilities.electricity)?.label ?? utilities.electricity}
+                    </li>
                     <li>
                       <span className="font-medium text-slate-600">Cooking:</span>{' '}
                       {COOKING_OPTIONS.find((item) => item.value === utilities.cooking)?.label ?? utilities.cooking}

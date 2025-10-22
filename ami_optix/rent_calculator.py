@@ -31,6 +31,11 @@ HEAT_OPTIONS = {
     "na": "N/A or owner pays",
 }
 
+ELECTRICITY_OPTIONS = {
+    "tenant_pays": "Tenant Pays",
+    "na": "N/A or owner pays",
+}
+
 HOT_WATER_OPTIONS = {
     "electric_heat_pump": "Electric Hot Water - Heat Pump",
     "electric_other": "Electric Hot Water - Other",
@@ -41,6 +46,7 @@ HOT_WATER_OPTIONS = {
 
 
 UTILITY_OPTION_MAP = {
+    'electricity': ELECTRICITY_OPTIONS,
     'cooking': COOKING_OPTIONS,
     'heat': HEAT_OPTIONS,
     'hot_water': HOT_WATER_OPTIONS,
@@ -48,6 +54,7 @@ UTILITY_OPTION_MAP = {
 
 LABEL_TO_CATEGORY = {label: key for key, options in UTILITY_OPTION_MAP.items() for label in options.values()}
 HEADER_TO_CATEGORY = {
+    "apartment electricity only": "electricity",
     "cooking": "cooking",
     "heat": "heat",
     "hot water": "hot_water",
@@ -136,6 +143,9 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
                         current_category = option_category
 
         option = sheet.iloc[15, col_idx]
+        if not isinstance(option, str) or not option.strip():
+            fallback_option = sheet.iloc[16, col_idx] if sheet.shape[0] > 16 else None
+            option = fallback_option if isinstance(fallback_option, str) else option
         if not isinstance(option, str):
             continue
         cleaned_option = option.strip()
@@ -211,6 +221,7 @@ def _normalize_bedroom_label(bedrooms: float) -> str:
 
 def _resolve_option_label(category: str, choice_key: str) -> str:
     mappings = {
+        "electricity": ELECTRICITY_OPTIONS,
         "cooking": COOKING_OPTIONS,
         "heat": HEAT_OPTIONS,
         "hot_water": HOT_WATER_OPTIONS,
@@ -309,6 +320,7 @@ def save_rent_workbook_with_utilities(
     sheet = workbook["AMI & Rent"]
 
     mapping = [
+        ("electricity", 17, 2, ELECTRICITY_OPTIONS),
         ("cooking", 17, 3, COOKING_OPTIONS),
         ("heat", 17, 5, HEAT_OPTIONS),
         ("hot_water", 17, 10, HOT_WATER_OPTIONS),
