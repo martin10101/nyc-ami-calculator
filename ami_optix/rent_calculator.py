@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any
 import os
 import math
+import re
 
 import pandas as pd
 from pathlib import Path
@@ -127,7 +128,25 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
             bedroom_map = {}
             for offset, bedroom in enumerate(BEDROOM_LABELS):
                 value = sheet.iloc[17 + offset, col_idx]
-                bedroom_map[bedroom] = float(value) if not pd.isna(value) else 0.0
+                numeric = 0.0
+                if not pd.isna(value):
+                    if isinstance(value, (int, float)):
+                        numeric = float(value)
+                    elif isinstance(value, str):
+                        value_str = value.strip()
+                        if value_str.startswith('='):
+                            match = re.search(r',\s*([-]?[0-9]+(?:\.[0-9]+)?)', value_str)
+                            if match:
+                                try:
+                                    numeric = float(match.group(1))
+                                except ValueError:
+                                    numeric = 0.0
+                        else:
+                            try:
+                                numeric = float(value_str)
+                            except ValueError:
+                                numeric = 0.0
+                bedroom_map[bedroom] = numeric
             allowances[current_category][cleaned_option] = bedroom_map
     return allowances
 
