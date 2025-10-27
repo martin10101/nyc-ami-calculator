@@ -112,6 +112,26 @@ def _pandas_engine_for(path: str) -> str | None:
     return None
 
 
+def load_excel_file(file_path: str):
+    """Load an Excel workbook with macro preservation and faster parsing.
+
+    Uses ``data_only=True`` to avoid parsing formulas and ``keep_links=False``
+    to skip external link binding so large templates load noticeably faster.
+    """
+    if file_path.lower().endswith('.xlsm'):
+        return load_workbook(
+            file_path,
+            keep_vba=True,
+            data_only=True,
+            keep_links=False,
+        )
+    return load_workbook(
+        file_path,
+        data_only=True,
+        keep_links=False,
+    )
+
+
 def load_rent_schedule(workbook_path: str) -> RentSchedule:
     if not os.path.exists(workbook_path):
         raise FileNotFoundError(f"Rent calculator workbook not found: {workbook_path}")
@@ -315,8 +335,7 @@ def save_rent_workbook_with_utilities(
     if source_ext == ".xlsb":
         raise ValueError("Writing utility selections into .xlsb workbooks is not supported.")
 
-    keep_vba = source_ext == ".xlsm"
-    workbook = load_workbook(source_path, keep_vba=keep_vba)
+    workbook = load_excel_file(source_path)
     sheet = workbook["AMI & Rent"]
 
     mapping = [
@@ -333,3 +352,4 @@ def save_rent_workbook_with_utilities(
 
     workbook.save(destination_path)
     return destination_path
+
