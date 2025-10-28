@@ -1,6 +1,8 @@
 import pytest
 import pandas as pd
 import os
+from openpyxl import Workbook
+
 from ami_optix.parser import Parser
 
 @pytest.fixture
@@ -153,4 +155,110 @@ def test_headers_with_whitespace_variations(temp_dir):
     assert df['net_sf'].tolist() == [450.0, 595.0, 407.0]
     assert df['client_ami'].tolist()[0] == 0.60
 
+
+def test_ami_for_35_years_header(temp_dir):
+    """Parser should recognize HPD-style 'AMI FOR 35 Years' headers."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI FOR 35 Years']
+    data = [
+        ['101', 0, 412, 0.6],
+        ['201', 1, 511, 0.8],
+        ['301', 2, 750, ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_for_35_years.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['client_ami'].tolist() == [0.6, 0.8]
+
+
+def test_ami_header_with_extra_text(temp_dir):
+    """Parser should fall back to partial matches when headers contain extra text."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI requirement (HPD 35 Years)']
+    data = [
+        ['101', 0, 412, '60%'],
+        ['201', 1, 511, '80%'],
+        ['301', 2, 750, ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_with_extra_text.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['client_ami'].tolist() == [0.6, 0.8]
+
+
+def test_client_ami_forward_fills_for_unit_rows(temp_dir):
+    """Parser should inherit AMI values for units when the workbook uses merged cells."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI FOR 35 Years', 'AMI AFTER 35 YEARS']
+    data = [
+        ['Commercial Retail', '', '', '', ''],
+        ['101', 0, 412, '40%', 'After'],
+        ['102', 0, 405, '', ''],
+        ['103', 1, 550, '', ''],
+        ['201', 1, 600, '60%', 'After'],
+        ['202', 1, 620, '', ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_forward_fill.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['unit_id'].tolist() == ['101', '102', '103', '201', '202']
+    assert df['client_ami'].tolist() == [0.4, 0.4, 0.4, 0.6, 0.6]
+
+
+def test_project_worksheet_unit_table_is_preferred(tmp_path):
+    """Parser should prefer the PROJECT WORKSHEET unit table when available."""
+
+    path = tmp_path / "project_worksheet.xlsx"
+
+    wb = Workbook()
+
+    ws = wb.active
+    ws.title = "PROJECT WORKSHEET"
+
+    ws.append([])
+    ws.append([])
+    ws.append(["UNIT INFORMATION"])
+    ws.append(
+        [
+            "Unit No.",
+            "Building Segment #",
+            "Construction Story",
+            "Marketing Story",
+            "Apt #",
+            "Number of Bedrooms",
+            "Net Square Feet",
+            "Affordable Housing Unit",
+            "Affordable Housing Unit AMI Band",
+        ]
+    )
+
+    unit_rows = [
+        (1, None, 2, 2, "201", 1, 459.38, "YES", "60%"),
+        (2, None, 2, 2, "202", 1, 480.25, "NO", ""),
+        (3, None, 2, 2, "203", 2, 752.00, "YES", "60%"),
+        (4, None, 3, 3, "301", 1, 459.38, "YES", "80%"),
+        (5, None, 3, 3, "302", 2, 752.00, "NO", ""),
+        (6, None, 3, 3, "303", 1, 490.58, "YES", "40%"),
+    ]
+
+    for row in unit_rows:
+        ws.append(row)
+
+    ws.append(["Totals", None, None, None, None, None, None, None, None])
+
+    rentroll = wb.create_sheet("RentRoll")
+    rentroll.append(["UNIT", "BEDS", "NET SF", "AMI FOR 35 Years"])
+    rentroll.append(["201", 0, 400, "60%"])
+
+    wb.save(path)
+
+    parser = Parser(str(path))
+    df = parser.get_affordable_units()
+
+    assert sorted(df["unit_id"].tolist()) == ["201", "203", "301", "303"]
+    assert df["bedrooms"].tolist() == [1.0, 2.0, 1.0, 1.0]
+    assert df["client_ami"].tolist() == [0.6, 0.6, 0.8, 0.4]
 

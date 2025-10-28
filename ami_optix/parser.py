@@ -4,12 +4,54 @@ import re
 
 # As defined in the Project Charter, Section 3.2
 HEADER_MAPPING = {
-    "unit_id": ["APT", "UNIT", "UNIT ID", "APARTMENT", "APT #"],
-    "bedrooms": ["BED", "BEDS", "BEDROOMS"],
-    "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA"],
-    "floor": ["FLOOR", "STORY", "LEVEL"],
+    "unit_id": [
+        "APT #",
+        "APT",
+        "UNIT",
+        "UNIT ID",
+        "APARTMENT",
+        "UNIT NO.",
+        "APT NUMBER",
+    ],
+    "bedrooms": [
+        "BED",
+        "BEDS",
+        "BEDROOMS",
+        "NUMBER OF BEDROOMS",
+    ],
+    "net_sf": [
+        "NET SF",
+        "NETSF",
+        "SF",
+        "S.F.",
+        "SQFT",
+        "SQ FT",
+        "AREA",
+        "NET SQUARE FEET",
+    ],
+    "floor": [
+        "FLOOR",
+        "STORY",
+        "LEVEL",
+        "CONSTRUCTION STORY",
+        "MARKETING STORY",
+    ],
     "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
-    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT"],
+    "client_ami": [
+        "AMI",
+        "AFFORDABILITY",
+        "AFF %",
+        "AFF",
+        "AMI_INPUT",
+        "AMI FOR 35 YEARS",
+        "AFFORDABLE HOUSING UNIT AMI BAND",
+        "AMI BAND",
+    ],
+}
+
+
+HEADER_PARTIAL_MATCHES = {
+    "client_ami": ["ami for", "ami", "aff", "ami band"],
 }
 
 
@@ -58,7 +100,7 @@ class Parser:
         engine = "pyxlsb" if ext == ".xlsb" else None
         excel = pd.ExcelFile(self.file_path, engine=engine)
 
-        preferred = ["RentRoll", "Units", "Sheet1"]
+        preferred = ["PROJECT WORKSHEET", "RentRoll", "Units", "Sheet1"]
         ordered = preferred + [name for name in excel.sheet_names if name not in preferred]
 
         for sheet in ordered:
@@ -128,6 +170,21 @@ class Parser:
                     self.mapped_headers[key] = normalized_to_original[normalized_candidate]
                     break
 
+            if key not in self.mapped_headers and key in HEADER_PARTIAL_MATCHES:
+                fragments = HEADER_PARTIAL_MATCHES[key]
+                for fragment in fragments:
+                    match = next(
+                        (
+                            original
+                            for normalized, original in normalized_to_original.items()
+                            if fragment in normalized and normalized
+                        ),
+                        None,
+                    )
+                    if match:
+                        self.mapped_headers[key] = match
+                        break
+
         required_columns = ["unit_id", "bedrooms", "net_sf"]
         for col in required_columns:
             if col not in self.mapped_headers:
@@ -164,6 +221,39 @@ class Parser:
             raise ValueError(
                 "Error: The 'Client AMI' column (e.g., 'AMI', 'AFF %') is required to identify affordable units, but it was not found."
             )
+
+        if df["client_ami"].isna().any():
+            client_ami_header = self.mapped_headers.get("client_ami", "")
+            normalized_header = _normalize_header(client_ami_header)
+            normalized_columns = {
+                _normalize_header(col)
+                for col in self.data.columns
+                if col is not None
+            }
+            has_ami_after_column = any(
+                "ami after 35 year" in column for column in normalized_columns
+            )
+
+            if "35 year" in normalized_header and has_ami_after_column:
+                bedrooms_numeric = pd.to_numeric(df["bedrooms"], errors="coerce")
+                unit_has_digit = df["unit_id"].astype(str).str.contains(r"\d", regex=True, na=False)
+                fill_mask = (
+                    df["client_ami"].isna()
+                    & bedrooms_numeric.notna()
+                    & unit_has_digit
+                )
+                if fill_mask.any():
+                    forward_values = {}
+                    last_value = None
+                    for idx, value in df["client_ami"].items():
+                        if pd.notna(value):
+                            last_value = value
+                        forward_values[idx] = last_value
+
+                    for idx in df.index[fill_mask]:
+                        filled_value = forward_values.get(idx)
+                        if filled_value is not None:
+                            df.at[idx, "client_ami"] = filled_value
 
         ami_series = df["client_ami"].astype(str).str.strip()
         is_percent = ami_series.str.contains("%", na=False)
