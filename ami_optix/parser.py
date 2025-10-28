@@ -4,10 +4,38 @@ import re
 
 # As defined in the Project Charter, Section 3.2
 HEADER_MAPPING = {
-    "unit_id": ["APT", "UNIT", "UNIT ID", "APARTMENT", "APT #"],
-    "bedrooms": ["BED", "BEDS", "BEDROOMS"],
-    "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA"],
-    "floor": ["FLOOR", "STORY", "LEVEL"],
+    "unit_id": [
+        "APT #",
+        "APT",
+        "UNIT",
+        "UNIT ID",
+        "APARTMENT",
+        "UNIT NO.",
+        "APT NUMBER",
+    ],
+    "bedrooms": [
+        "BED",
+        "BEDS",
+        "BEDROOMS",
+        "NUMBER OF BEDROOMS",
+    ],
+    "net_sf": [
+        "NET SF",
+        "NETSF",
+        "SF",
+        "S.F.",
+        "SQFT",
+        "SQ FT",
+        "AREA",
+        "NET SQUARE FEET",
+    ],
+    "floor": [
+        "FLOOR",
+        "STORY",
+        "LEVEL",
+        "CONSTRUCTION STORY",
+        "MARKETING STORY",
+    ],
     "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
     "client_ami": [
         "AMI",
@@ -16,12 +44,14 @@ HEADER_MAPPING = {
         "AFF",
         "AMI_INPUT",
         "AMI FOR 35 YEARS",
+        "AFFORDABLE HOUSING UNIT AMI BAND",
+        "AMI BAND",
     ],
 }
 
 
 HEADER_PARTIAL_MATCHES = {
-    "client_ami": ["ami for", "ami", "aff"],
+    "client_ami": ["ami for", "ami", "aff", "ami band"],
 }
 
 
@@ -70,7 +100,7 @@ class Parser:
         engine = "pyxlsb" if ext == ".xlsb" else None
         excel = pd.ExcelFile(self.file_path, engine=engine)
 
-        preferred = ["RentRoll", "Units", "Sheet1"]
+        preferred = ["PROJECT WORKSHEET", "RentRoll", "Units", "Sheet1"]
         ordered = preferred + [name for name in excel.sheet_names if name not in preferred]
 
         for sheet in ordered:
