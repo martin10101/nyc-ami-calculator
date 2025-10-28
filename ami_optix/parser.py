@@ -20,6 +20,11 @@ HEADER_MAPPING = {
 }
 
 
+HEADER_PARTIAL_MATCHES = {
+    "client_ami": ["ami for", "ami", "aff"],
+}
+
+
 def _normalize_header(value):
     """Return a normalized representation of a header for fuzzy matching."""
     if value is None:
@@ -134,6 +139,21 @@ class Parser:
                 if normalized_candidate in normalized_to_original:
                     self.mapped_headers[key] = normalized_to_original[normalized_candidate]
                     break
+
+            if key not in self.mapped_headers and key in HEADER_PARTIAL_MATCHES:
+                fragments = HEADER_PARTIAL_MATCHES[key]
+                for fragment in fragments:
+                    match = next(
+                        (
+                            original
+                            for normalized, original in normalized_to_original.items()
+                            if fragment in normalized and normalized
+                        ),
+                        None,
+                    )
+                    if match:
+                        self.mapped_headers[key] = match
+                        break
 
         required_columns = ["unit_id", "bedrooms", "net_sf"]
         for col in required_columns:

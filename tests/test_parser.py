@@ -170,3 +170,19 @@ def test_ami_for_35_years_header(temp_dir):
     assert df['client_ami'].tolist() == [0.6, 0.8]
 
 
+def test_ami_header_with_extra_text(temp_dir):
+    """Parser should fall back to partial matches when headers contain extra text."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI requirement (HPD 35 Years)']
+    data = [
+        ['101', 0, 412, '60%'],
+        ['201', 1, 511, '80%'],
+        ['301', 2, 750, ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_with_extra_text.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['client_ami'].tolist() == [0.6, 0.8]
+
+
