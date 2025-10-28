@@ -154,3 +154,19 @@ def test_headers_with_whitespace_variations(temp_dir):
     assert df['client_ami'].tolist()[0] == 0.60
 
 
+def test_ami_for_35_years_header(temp_dir):
+    """Parser should recognize HPD-style 'AMI FOR 35 Years' headers."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI FOR 35 Years']
+    data = [
+        ['101', 0, 412, 0.6],
+        ['201', 1, 511, 0.8],
+        ['301', 2, 750, ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_for_35_years.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['client_ami'].tolist() == [0.6, 0.8]
+
+

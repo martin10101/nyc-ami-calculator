@@ -9,7 +9,14 @@ HEADER_MAPPING = {
     "net_sf": ["NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA"],
     "floor": ["FLOOR", "STORY", "LEVEL"],
     "balcony": ["BALCONY", "TERRACE", "OUTDOOR"],
-    "client_ami": ["AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI_INPUT"],
+    "client_ami": [
+        "AMI",
+        "AFFORDABILITY",
+        "AFF %",
+        "AFF",
+        "AMI_INPUT",
+        "AMI FOR 35 YEARS",
+    ],
 }
 
 
