@@ -186,3 +186,23 @@ def test_ami_header_with_extra_text(temp_dir):
     assert df['client_ami'].tolist() == [0.6, 0.8]
 
 
+def test_client_ami_forward_fills_for_unit_rows(temp_dir):
+    """Parser should inherit AMI values for units when the workbook uses merged cells."""
+    headers = ['UNIT', 'BEDS', 'SQ. FT.', 'AMI FOR 35 Years', 'AMI AFTER 35 YEARS']
+    data = [
+        ['Commercial Retail', '', '', '', ''],
+        ['101', 0, 412, '40%', 'After'],
+        ['102', 0, 405, '', ''],
+        ['103', 1, 550, '', ''],
+        ['201', 1, 600, '60%', 'After'],
+        ['202', 1, 620, '', ''],
+    ]
+    filepath = create_csv(temp_dir, "ami_forward_fill.csv", headers, data)
+
+    parser = Parser(filepath)
+    df = parser.get_affordable_units()
+
+    assert df['unit_id'].tolist() == ['101', '102', '103', '201', '202']
+    assert df['client_ami'].tolist() == [0.4, 0.4, 0.4, 0.6, 0.6]
+
+
