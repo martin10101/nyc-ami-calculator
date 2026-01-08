@@ -415,6 +415,26 @@ def find_optimal_scenarios(
         key=lambda x: (x['waami'], x['metrics']['revenue_score'], x['premium_score']),
         reverse=True,
     )
+
+    # --- Dynamic WAAMI Threshold Filtering ---
+    # If a 60%+ scenario exists, hide anything below 60%
+    # This prevents showing "near miss" scenarios like 59.01% when 60% is achievable
+    if sorted_results:
+        best_waami = sorted_results[0]['waami']
+        dynamic_thresholds = [0.60, 0.50, 0.40, 0.30]  # Standard AMI thresholds
+        dynamic_floor = None
+        for threshold in dynamic_thresholds:
+            if best_waami >= threshold:
+                dynamic_floor = threshold
+                break
+        if dynamic_floor:
+            pre_filter_count = len(sorted_results)
+            sorted_results = [r for r in sorted_results if r['waami'] >= dynamic_floor - 0.001]
+            if len(sorted_results) < pre_filter_count:
+                notes.append(
+                    f"Filtered {pre_filter_count - len(sorted_results)} scenario(s) below {dynamic_floor*100:.0f}% WAAMI threshold (better options available)."
+                )
+
     reporting_floor = optimization_rules.get('waami_floor')
     if reporting_floor is None:
         reporting_floor = 0.58
