@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <!--
+    AMI OPTIX - Excel Ribbon Customization
+    Adds "AMI Optix" tab to Excel ribbon with optimization controls
+  -->
+
+  <ribbon>
+    <tabs>
+      <!-- AMI Optix Tab -->
+      <tab id="tabAMIOptix" label="AMI Optix" insertAfterMso="TabView">
+
+        <!-- Main Actions Group -->
+        <group id="grpActions" label="Actions">
+
+          <!-- Optimize Button (Large) -->
+          <button id="btnOptimize"
+                  label="Optimize"
+                  size="large"
+                  imageMso="RecurrenceEdit"
+                  onAction="OnOptimizeClick"
+                  screentip="Run AMI Optimization"
+                  supertip="Analyzes unit data in the current workbook and finds optimal AMI assignments. Results are written to the AMI column and a scenarios sheet is created."/>
+
+          <!-- View Scenarios Button (Large) -->
+          <button id="btnViewScenarios"
+                  label="View Scenarios"
+                  size="large"
+                  imageMso="ViewsGallery"
+                  onAction="OnViewScenariosClick"
+                  screentip="View All Scenarios"
+                  supertip="Navigate to the AMI Scenarios sheet to see all optimization options with rent breakdowns."/>
+
+        </group>
+
+        <!-- Configuration Group -->
+        <group id="grpConfig" label="Configuration">
+
+          <!-- Utilities Button -->
+          <button id="btnUtilities"
+                  label="Utilities"
+                  size="large"
+                  imageMso="ControlLayoutStacked"
+                  onAction="OnUtilitiesClick"
+                  screentip="Configure Utilities"
+                  supertip="Set which utilities the tenant pays vs. owner pays. This affects rent calculations through utility allowances."/>
+
+        </group>
+
+        <!-- Help Group -->
+        <group id="grpHelp" label="Help">
+
+          <!-- About Button -->
+          <button id="btnAbout"
+                  label="About"
+                  size="normal"
+                  imageMso="Info"
+                  onAction="OnAboutClick"
+                  screentip="About AMI Optix"
+                  supertip="Information about the AMI Optix add-in and API connection."/>
+
+        </group>
+
+      </tab>
+    </tabs>
+  </ribbon>
+
+</customUI>

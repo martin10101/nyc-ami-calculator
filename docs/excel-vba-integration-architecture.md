@@ -4,7 +4,36 @@
 
 This document describes the complete architecture for integrating the NYC AMI Calculator with Excel via VBA. The solution allows clients to use their existing Excel workbooks without installing Python, while leveraging the powerful OR-Tools optimization engine hosted on Render.
 
-**Key Principle**: Excel stays 100% intact. VBA reads data, calls API, writes results back. No file round-trip that destroys formatting.
+**Key Principles**:
+1. Excel stays 100% intact - VBA reads data, calls API, writes results back
+2. **Excel Add-in (.xlam)** - Works with ANY workbook, not tied to a template
+3. **Web dashboard remains available** as backup at https://nyc-ami-calculator.onrender.com
+4. Best scenario auto-applied, all scenarios shown on comparison sheet
+
+## Implementation: Excel Add-in
+
+The solution is packaged as an **Excel Add-in (.xlam)** that:
+- Installs once, works everywhere
+- Adds "AMI Optix" tab to Excel ribbon
+- Available for any workbook the client opens
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Excel Ribbon                                                   │
+│  [File] [Home] [Insert] [AMI Optix] [View] ...                 │
+│                            │                                    │
+│                            ├── [Optimize]      ← Main button   │
+│                            ├── [Utilities]     ← Config form   │
+│                            ├── [View Scenarios]← Results sheet │
+│                            └── [About]                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Source Files**: See `/excel-addin/` folder:
+- `src/*.bas` - VBA modules
+- `forms/*.frm` - UserForms
+- `customUI/*.xml` - Ribbon customization
+- `INSTALL.md` - Installation guide
 
 ---
 
