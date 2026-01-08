@@ -5,16 +5,36 @@ import zipfile
 import json
 import math
 import numpy as np
+import pandas as pd
 from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from main import main as run_ami_optix_analysis, default_converter
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
+from ami_optix.config_loader import load_config
+from ami_optix.solver import find_optimal_scenarios
+from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
 
 app = Flask(__name__)
 UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
 DASHBOARD_DIR = os.path.join(os.getcwd(), 'dashboard_static')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+# API Key for Excel Add-in authentication
+# Set this in environment variable: AMI_OPTIX_API_KEY
+API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')
+
+
+def _validate_api_key():
+    """Validate API key from request header. Returns error response or None if valid."""
+    if not API_KEY:
+        # No API key configured - allow all requests (dev mode)
+        return None
+
+    provided_key = request.headers.get('X-API-Key', '')
+    if provided_key != API_KEY:
+        return jsonify({"error": "Invalid or missing API key"}), 401
+    return None
 
 
 def _sanitize_for_json(value):
@@ -47,6 +67,144 @@ def _dashboard_file_exists(filename: str) -> bool:
 def healthcheck():
     """Lightweight health endpoint for uptime checks."""
     return jsonify({"status": "ok"})
+
+
+@app.route('/api/optimize', methods=['POST'])
+def optimize_units():
+    """
+    JSON-based optimization endpoint for Excel VBA Add-in.
+
+    Accepts unit data directly as JSON (no file upload needed).
+    Requires API key authentication via X-API-Key header.
+
+    Request body:
+    {
+        "units": [
+            {"unit_id": "1A", "bedrooms": 2, "net_sf": 850, "floor": 1},
+            {"unit_id": "1B", "bedrooms": 1, "net_sf": 650, "floor": 2}
+        ],
+        "utilities": {
+            "electricity": "tenant_pays",
+            "cooking": "gas",
+            "heat": "gas",
+            "hot_water": "gas"
+        }
+    }
+
+    Returns:
+    {
+        "scenarios": { ... },
+        "notes": [ ... ],
+        "project_summary": { ... }
+    }
+    """
+    # Validate API key
+    auth_error = _validate_api_key()
+    if auth_error:
+        return auth_error
+
+    # Parse JSON body
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body must be JSON"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
+
+    # Extract units
+    units = data.get('units', [])
+    if not units or not isinstance(units, list):
+        return jsonify({"error": "Missing or invalid 'units' array"}), 400
+
+    # Validate required fields for each unit
+    required_fields = ['unit_id', 'bedrooms', 'net_sf']
+    for i, unit in enumerate(units):
+        for field in required_fields:
+            if field not in unit:
+                return jsonify({"error": f"Unit {i+1} missing required field: {field}"}), 400
+
+    # Extract utilities (with defaults)
+    utilities = data.get('utilities', {})
+    utilities_clean = {
+        'electricity': utilities.get('electricity', 'na'),
+        'cooking': utilities.get('cooking', 'na'),
+        'heat': utilities.get('heat', 'na'),
+        'hot_water': utilities.get('hot_water', 'na'),
+    }
+
+    try:
+        # Convert units to DataFrame (same format parser produces)
+        df_units = pd.DataFrame(units)
+
+        # Ensure required columns exist with correct types
+        df_units['unit_id'] = df_units['unit_id'].astype(str)
+        df_units['bedrooms'] = pd.to_numeric(df_units['bedrooms'], errors='coerce')
+        df_units['net_sf'] = pd.to_numeric(df_units['net_sf'], errors='coerce')
+
+        # Optional columns
+        if 'floor' in df_units.columns:
+            df_units['floor'] = pd.to_numeric(df_units['floor'], errors='coerce')
+        if 'balcony' in df_units.columns:
+            df_units['balcony'] = df_units['balcony'].astype(bool)
+
+        # Add client_ami column (required by solver, will be overwritten)
+        # Set to a placeholder that indicates "needs assignment"
+        if 'client_ami' not in df_units.columns:
+            df_units['client_ami'] = 0.6  # Default placeholder
+
+        # Load config
+        config = load_config()
+
+        # Run solver
+        solver_results = find_optimal_scenarios(df_units, config)
+        scenarios = solver_results.get('scenarios', {})
+        notes = solver_results.get('notes', [])
+
+        if not scenarios or not scenarios.get('absolute_best'):
+            return jsonify({
+                "success": False,
+                "error": "No optimal solution found",
+                "notes": notes
+            }), 200
+
+        # Load rent schedule and apply rent calculations
+        rent_schedule = None
+        default_rent_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
+        if os.path.exists(default_rent_path):
+            try:
+                rent_schedule = load_rent_schedule(default_rent_path)
+            except Exception as e:
+                notes.append(f"Warning: Could not load rent calculator: {str(e)}")
+
+        # Apply rent calculations to each scenario
+        if rent_schedule:
+            for scenario_key, scenario in scenarios.items():
+                if scenario and 'assignments' in scenario:
+                    assignments, rent_totals = compute_rents_for_assignments(
+                        rent_schedule,
+                        scenario['assignments'],
+                        utilities_clean
+                    )
+                    scenario['assignments'] = assignments
+                    scenario['rent_totals'] = rent_totals
+
+        # Build response
+        response = {
+            "success": True,
+            "scenarios": _sanitize_for_json(scenarios),
+            "notes": notes,
+            "project_summary": {
+                "total_units": len(df_units),
+                "total_sf": float(df_units['net_sf'].sum()),
+                "utility_selections": utilities_clean
+            }
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        app.logger.exception("optimize_units failed: %s", e)
+        return jsonify({"error": f"Optimization failed: {str(e)}"}), 500
 
 
 @app.route('/api/analyze', methods=['POST'])

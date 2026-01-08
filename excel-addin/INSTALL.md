@@ -91,6 +91,18 @@ If you don't see the ribbon tab, you can run macros directly:
 
 ## Using the Add-in
 
+### Configure API Key (Required - One-time setup)
+
+Before using the add-in, you must configure your API key:
+
+1. Click **API Key** button in the AMI Optix ribbon
+2. Enter your API key (provided by your administrator)
+3. Click **OK**
+
+The key is stored securely in Windows Registry and persists across sessions.
+
+**See [API_KEY_SETUP.md](API_KEY_SETUP.md) for detailed instructions.**
+
 ### Configure Utilities (One-time setup)
 
 1. Click **Utilities** button (or run `frmUtilities.Show` macro)

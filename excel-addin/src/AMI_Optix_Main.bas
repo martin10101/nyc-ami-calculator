@@ -12,8 +12,32 @@ Option Explicit
 Public Const API_BASE_URL As String = "https://nyc-ami-calculator.onrender.com"
 Public Const API_TIMEOUT_MS As Long = 90000  ' 90 seconds for cold start
 
+' API Key - stored in Windows Registry for security
+' User sets this once via the Settings form
+Private Const API_KEY_REGISTRY_PATH As String = "AMI_Optix"
+Private Const API_KEY_REGISTRY_KEY As String = "APIKey"
+
 ' Global state
 Public g_LastScenarios As Object  ' Stores last API response for viewing
+
+'-------------------------------------------------------------------------------
+' API KEY MANAGEMENT
+'-------------------------------------------------------------------------------
+
+Public Function GetAPIKey() As String
+    ' Retrieves API key from Windows Registry
+    GetAPIKey = GetSetting(API_KEY_REGISTRY_PATH, "Settings", API_KEY_REGISTRY_KEY, "")
+End Function
+
+Public Sub SetAPIKey(apiKey As String)
+    ' Saves API key to Windows Registry
+    SaveSetting API_KEY_REGISTRY_PATH, "Settings", API_KEY_REGISTRY_KEY, apiKey
+End Sub
+
+Public Function HasAPIKey() As Boolean
+    ' Checks if API key is configured
+    HasAPIKey = (Len(GetAPIKey()) > 0)
+End Function
 
 '-------------------------------------------------------------------------------
 ' RIBBON BUTTON HANDLERS
@@ -69,13 +93,63 @@ ErrorHandler:
 End Sub
 
 Public Sub OnAboutClick(control As IRibbonControl)
+    Dim keyStatus As String
+    If HasAPIKey() Then
+        keyStatus = "Configured"
+    Else
+        keyStatus = "NOT SET - Click Settings to configure"
+    End If
+
     MsgBox "AMI Optix - NYC Affordable Housing Optimizer" & vbCrLf & vbCrLf & _
            "Version 1.0" & vbCrLf & _
-           "API: " & API_BASE_URL & vbCrLf & vbCrLf & _
+           "API: " & API_BASE_URL & vbCrLf & _
+           "API Key: " & keyStatus & vbCrLf & vbCrLf & _
            "This add-in connects to the AMI optimization API." & vbCrLf & _
            "The web dashboard is also available as a backup at:" & vbCrLf & _
            API_BASE_URL, _
            vbInformation, "About AMI Optix"
+End Sub
+
+Public Sub OnSettingsClick(control As IRibbonControl)
+    ' Show settings dialog for API key configuration
+    On Error GoTo ErrorHandler
+
+    Dim currentKey As String
+    Dim newKey As String
+    Dim maskedKey As String
+
+    currentKey = GetAPIKey()
+
+    ' Mask the current key for display
+    If Len(currentKey) > 8 Then
+        maskedKey = Left(currentKey, 4) & "..." & Right(currentKey, 4)
+    ElseIf Len(currentKey) > 0 Then
+        maskedKey = "****"
+    Else
+        maskedKey = "(not set)"
+    End If
+
+    newKey = InputBox("Enter your API Key:" & vbCrLf & vbCrLf & _
+                      "Current: " & maskedKey & vbCrLf & vbCrLf & _
+                      "Leave blank to keep current key." & vbCrLf & _
+                      "Enter 'CLEAR' to remove the key.", _
+                      "AMI Optix - API Key Settings", "")
+
+    If newKey = "" Then
+        ' User cancelled or left blank - keep current
+        Exit Sub
+    ElseIf UCase(newKey) = "CLEAR" Then
+        SetAPIKey ""
+        MsgBox "API key has been cleared.", vbInformation, "AMI Optix"
+    Else
+        SetAPIKey newKey
+        MsgBox "API key has been saved.", vbInformation, "AMI Optix"
+    End If
+
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error: " & Err.Description, vbCritical, "AMI Optix"
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -90,6 +164,21 @@ Public Sub RunOptimization()
     Dim result As Object
 
     On Error GoTo ErrorHandler
+
+    ' Step 0: Check API key is configured
+    If Not HasAPIKey() Then
+        Dim setupNow As VbMsgBoxResult
+        setupNow = MsgBox("API key is not configured." & vbCrLf & vbCrLf & _
+                          "You need an API key to use the optimization service." & vbCrLf & _
+                          "Would you like to enter it now?", _
+                          vbYesNo + vbQuestion, "AMI Optix - Setup Required")
+        If setupNow = vbYes Then
+            OnSettingsClick Nothing
+        End If
+        If Not HasAPIKey() Then
+            Exit Sub
+        End If
+    End If
 
     ' Step 1: Show progress
     Application.StatusBar = "AMI Optix: Reading unit data..."

@@ -12,13 +12,18 @@ Option Explicit
 Public Function CallOptimizeAPI(payload As String) As String
     ' Makes POST request to /api/optimize endpoint
     ' Returns response body or empty string on failure
+    ' Includes API key authentication header
 
     Dim http As Object
     Dim url As String
+    Dim apiKey As String
 
     On Error GoTo ErrorHandler
 
     url = API_BASE_URL & "/api/optimize"
+
+    ' Get API key from registry
+    apiKey = GetAPIKey()
 
     ' Create HTTP object
     Set http = CreateObject("MSXML2.XMLHTTP")
@@ -27,6 +32,11 @@ Public Function CallOptimizeAPI(payload As String) As String
     http.Open "POST", url, False
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "Accept", "application/json"
+
+    ' Add API key authentication header
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
 
     ' Set timeout (note: XMLHTTP doesn't have direct timeout, we handle via error)
     ' For longer timeout, use ServerXMLHTTP instead
@@ -37,6 +47,12 @@ Public Function CallOptimizeAPI(payload As String) As String
     ' Check response
     If http.Status = 200 Then
         CallOptimizeAPI = http.responseText
+    ElseIf http.Status = 401 Then
+        ' Unauthorized - invalid API key
+        MsgBox "Invalid API key." & vbCrLf & vbCrLf & _
+               "Please check your API key in Settings.", _
+               vbCritical, "AMI Optix - Authentication Failed"
+        CallOptimizeAPI = ""
     ElseIf http.Status = 504 Or http.Status = 502 Then
         ' Gateway timeout - server might be cold starting
         MsgBox "Server is starting up (cold start). Please wait 30 seconds and try again.", _
@@ -46,6 +62,8 @@ Public Function CallOptimizeAPI(payload As String) As String
         ' Other error
         Debug.Print "API Error: " & http.Status & " - " & http.statusText
         Debug.Print "Response: " & http.responseText
+        MsgBox "API Error: " & http.Status & " - " & http.statusText, _
+               vbExclamation, "AMI Optix"
         CallOptimizeAPI = ""
     End If
 

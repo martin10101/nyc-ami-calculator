@@ -47,8 +47,17 @@
 
         </group>
 
-        <!-- Help Group -->
-        <group id="grpHelp" label="Help">
+        <!-- Settings Group -->
+        <group id="grpSettings" label="Settings">
+
+          <!-- API Key Settings Button -->
+          <button id="btnSettings"
+                  label="API Key"
+                  size="normal"
+                  imageMso="DatabasePermissions"
+                  onAction="OnSettingsClick"
+                  screentip="Configure API Key"
+                  supertip="Enter or update your API key for authentication with the optimization service."/>
 
           <!-- About Button -->
           <button id="btnAbout"
@@ -57,7 +66,7 @@
                   imageMso="Info"
                   onAction="OnAboutClick"
                   screentip="About AMI Optix"
-                  supertip="Information about the AMI Optix add-in and API connection."/>
+                  supertip="Information about the AMI Optix add-in and API connection status."/>
 
         </group>
 
