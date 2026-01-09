@@ -20,7 +20,7 @@ developer_preferences:
 # Core Optimization Constraints
 optimization_rules:
   waami_cap_percent: 60.0
-  waami_floor: 0.58
+  waami_floor: 0.591
   max_bands_per_scenario: 3
   potential_bands: [40, 60, 70, 80, 90, 100]
   deep_affordability_sf_threshold: 0

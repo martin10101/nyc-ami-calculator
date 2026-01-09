@@ -270,19 +270,17 @@ Private Function IsFloorHeader(header As String) As Boolean
 End Function
 
 Private Function IsAMIHeader(header As String) As Boolean
-    ' Match AMI but NOT "AMI AFTER" or "AMI FOR 35"
+    ' Match AMI columns but NOT "AMI AFTER 35" (which is a different column)
+    ' DO include "AMI FOR 35 YEARS" - that's the user's input AMI column
     If InStr(header, "AMI AFTER") > 0 Then
         IsAMIHeader = False
         Exit Function
     End If
 
-    If InStr(header, "AMI FOR 35") > 0 Then
-        IsAMIHeader = False
-        Exit Function
-    End If
-
     Dim patterns As Variant
-    patterns = Array("AMI", "AFFORDABILITY", "AFF %", "AFF", "AMI BAND")
+    ' Match these patterns - aligned with parser.py HEADER_MAPPING["client_ami"]
+    patterns = Array("AMI FOR 35 YEARS", "AMI FOR 35", "AMI BAND", "AFFORDABLE HOUSING UNIT AMI BAND", _
+                     "AMI", "AFFORDABILITY", "AFF %", "AFF")
     IsAMIHeader = MatchesAny(header, patterns)
 End Function
 
@@ -403,6 +401,11 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
     If m_AMICol > 0 Then
         clientAMI = ws.Cells(row, m_AMICol).Value
 
+        ' DEBUG: Show first 10 units' AMI values
+        If row <= m_HeaderRow + 10 Then
+            Debug.Print "DEBUG Row " & row & " Unit " & unitId & ": AMI='" & clientAMI & "' IsNumeric=" & IsNumeric(clientAMI)
+        End If
+
         ' Handle percentage format (0.6 or 60% both become 0.6)
         If IsNumeric(clientAMI) Then
             If CDbl(clientAMI) <= 0 Then
@@ -415,6 +418,9 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
             Set ReadUnitRow = Nothing
             Exit Function
         End If
+    Else
+        ' No AMI column - include all units but warn
+        Debug.Print "WARNING: No AMI column found (m_AMICol=0), including all units"
     End If
 
     ' Create unit dictionary
@@ -423,6 +429,18 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
     unit("bedrooms") = CDbl(bedrooms)
     unit("net_sf") = CDbl(netSF)
     unit("row") = row  ' Store row number for writing back
+
+    ' CRITICAL: Store the client_ami value so it gets sent to the API
+    ' Normalize to decimal (0.6) if it was percentage (60)
+    If m_AMICol > 0 And IsNumeric(clientAMI) Then
+        Dim amiValue As Double
+        amiValue = CDbl(clientAMI)
+        ' If value > 1, assume it's a percentage like 60 and convert to 0.6
+        If amiValue > 1 Then
+            amiValue = amiValue / 100
+        End If
+        unit("client_ami") = amiValue
+    End If
 
     ' Optional: Floor
     If m_FloorCol > 0 Then
