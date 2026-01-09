@@ -15,11 +15,13 @@ Public Sub ApplyBestScenario(result As Object)
     Dim scenarios As Object
     Dim bestScenario As Object
     Dim assignments As Object
+    Dim assignment As Object
     Dim ws As Worksheet
     Dim amiCol As Long
     Dim i As Long
     Dim unitId As String
     Dim ami As Double
+    Dim amiValue As Double
     Dim row As Long
     Dim updatedCount As Long
 
@@ -73,7 +75,6 @@ Public Sub ApplyBestScenario(result As Object)
     updatedCount = 0
 
     For i = 1 To assignments.Count
-        Dim assignment As Object
         Set assignment = assignments(i)
 
         unitId = CStr(assignment("unit_id"))
@@ -83,8 +84,16 @@ Public Sub ApplyBestScenario(result As Object)
         If unitRows.Exists(unitId) Then
             row = unitRows(unitId)
 
-            ' Write AMI value (as decimal, e.g., 0.60 for 60%)
-            ws.Cells(row, amiCol).Value = ami
+            ' Write AMI value
+            ' API returns integer (60, 80, 130) - convert to decimal for percentage format
+            If ami > 1 Then
+                amiValue = ami / 100  ' Convert 60 to 0.60
+            Else
+                amiValue = ami  ' Already decimal
+            End If
+
+            ws.Cells(row, amiCol).Value = amiValue
+            ws.Cells(row, amiCol).NumberFormat = "0%"  ' Ensure percentage format
 
             ' Highlight the cell
             ws.Cells(row, amiCol).Interior.Color = RGB(255, 255, 200)  ' Light yellow
@@ -395,15 +404,16 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
 
     ' Apply
     Dim i As Long
+    Dim assignment As Object
     Dim unitId As String
     Dim ami As Double
+    Dim amiValue As Double
     Dim row As Long
     Dim updatedCount As Long
 
     updatedCount = 0
 
     For i = 1 To assignments.Count
-        Dim assignment As Object
         Set assignment = assignments(i)
 
         unitId = CStr(assignment("unit_id"))
@@ -411,7 +421,16 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
 
         If unitRows.Exists(unitId) Then
             row = unitRows(unitId)
-            ws.Cells(row, amiCol).Value = ami
+
+            ' API returns integer (60, 80, 130) - convert to decimal for percentage format
+            If ami > 1 Then
+                amiValue = ami / 100  ' Convert 60 to 0.60
+            Else
+                amiValue = ami  ' Already decimal
+            End If
+
+            ws.Cells(row, amiCol).Value = amiValue
+            ws.Cells(row, amiCol).NumberFormat = "0%"  ' Ensure percentage format
             ws.Cells(row, amiCol).Interior.Color = RGB(200, 255, 200)  ' Light green
             updatedCount = updatedCount + 1
         End If
