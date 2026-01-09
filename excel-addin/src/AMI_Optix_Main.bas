@@ -221,10 +221,18 @@ Public Sub RunOptimization()
 
     ' Step 6: Parse response
     Application.StatusBar = "AMI Optix: Processing results..."
+
+    ' DEBUG: Print raw response to Immediate window
+    Debug.Print "=== RAW API RESPONSE (length: " & Len(response) & ") ==="
+    Debug.Print response
+    Debug.Print "=== END RAW RESPONSE ==="
+
     Set result = ParseJSON(response)
 
     If result Is Nothing Then
-        MsgBox "Invalid response from server.", vbCritical, "AMI Optix"
+        MsgBox "Invalid response from server." & vbCrLf & vbCrLf & _
+               "Raw response (" & Len(response) & " chars):" & vbCrLf & _
+               Left(response, 500), vbCritical, "AMI Optix"
         GoTo Cleanup
     End If
 
