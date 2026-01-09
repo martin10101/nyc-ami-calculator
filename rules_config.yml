@@ -1,0 +1,49 @@
+# NYC Housing Guide Rules
+nyc_rules:
+  validation_checks:
+    size_minima:
+      studio: 400
+      one_bedroom: 575
+      two_bedroom: 775
+      three_bedroom: 950
+      four_bedroom: 1125
+    mix_checks:
+      max_studio_percent: 25.0
+      min_two_br_plus_percent: 50.0
+# Developer Preferences
+developer_preferences:
+  premium_score_weights:
+    floor: 0.45
+    net_sf: 0.30
+    bedrooms: 0.15
+    balcony: 0.10
+# Core Optimization Constraints
+optimization_rules:
+  waami_cap_percent: 60.0
+  waami_floor: 0.58
+  max_bands_per_scenario: 3
+  potential_bands: [40, 60, 70, 80, 90, 100]
+  deep_affordability_sf_threshold: 0
+  deep_affordability_min_share: 0.20
+  deep_affordability_max_share: 0.21
+  deep_affordability_widen_step: 0.005
+  deep_affordability_widen_cap: 0.4
+  low_band_band_threshold: 40
+  scenario_time_limit_seconds: 3
+  max_unique_scenarios: 25
+  max_band_combo_checks: 50
+  priority_band_combos:
+    - [40, 60, 90]
+    - [40, 60, 100]
+    - [40, 60, 80]
+    - [40, 80, 100]
+    - [40, 90, 100]
+  small_project_priority_band_combos:
+    - [40, 70]
+    - [40, 90]
+  small_project_combo_allowance: 8
+  small_project_max_unique_scenarios: 6
+  # "Smart Search" fallback rules for small projects
+  small_project_unit_threshold: 10
+  relaxed_search_waami_floor: 59.7
+

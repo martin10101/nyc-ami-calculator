@@ -1,0 +1,149 @@
+================================================================================
+FORM DESIGN: frmUtilities (Utility Configuration)
+================================================================================
+
+This file describes how to create the UserForm visually in VBA Editor.
+
+FORM PROPERTIES:
+- Name: frmUtilities
+- Caption: "Utility Configuration"
+- Width: 360
+- Height: 300
+- StartUpPosition: CenterOwner
+
+--------------------------------------------------------------------------------
+CONTROLS TO ADD:
+--------------------------------------------------------------------------------
+
+1. LABEL: lblTitle
+   - Caption: "Select Utility Payment Responsibilities"
+   - Top: 12
+   - Left: 12
+   - Width: 330
+   - Font: Bold, 10pt
+
+2. LABEL: lblElectricity
+   - Caption: "Electricity:"
+   - Top: 48
+   - Left: 12
+   - Width: 100
+
+3. COMBOBOX: cboElectricity
+   - Top: 45
+   - Left: 120
+   - Width: 220
+   - ColumnCount: 2
+   - BoundColumn: 1
+   - ColumnWidths: "200;0"
+   - Style: fmStyleDropDownList
+
+4. LABEL: lblCooking
+   - Caption: "Cooking:"
+   - Top: 78
+   - Left: 12
+   - Width: 100
+
+5. COMBOBOX: cboCooking
+   - Top: 75
+   - Left: 120
+   - Width: 220
+   - ColumnCount: 2
+   - BoundColumn: 1
+   - ColumnWidths: "200;0"
+   - Style: fmStyleDropDownList
+
+6. LABEL: lblHeat
+   - Caption: "Heat:"
+   - Top: 108
+   - Left: 12
+   - Width: 100
+
+7. COMBOBOX: cboHeat
+   - Top: 105
+   - Left: 120
+   - Width: 220
+   - ColumnCount: 2
+   - BoundColumn: 1
+   - ColumnWidths: "200;0"
+   - Style: fmStyleDropDownList
+
+8. LABEL: lblHotWater
+   - Caption: "Hot Water:"
+   - Top: 138
+   - Left: 12
+   - Width: 100
+
+9. COMBOBOX: cboHotWater
+   - Top: 135
+   - Left: 120
+   - Width: 220
+   - ColumnCount: 2
+   - BoundColumn: 1
+   - ColumnWidths: "200;0"
+   - Style: fmStyleDropDownList
+
+10. FRAME: fraInfo
+    - Caption: "Note"
+    - Top: 175
+    - Left: 12
+    - Width: 330
+    - Height: 50
+
+11. LABEL: lblInfo (inside fraInfo)
+    - Caption: "Select 'N/A or owner pays' if the landlord covers this utility. These settings affect the rent calculations."
+    - Top: 15
+    - Left: 6
+    - Width: 315
+    - WordWrap: True
+
+12. COMMANDBUTTON: btnSave
+    - Caption: "Save"
+    - Top: 240
+    - Left: 120
+    - Width: 72
+    - Height: 24
+    - Default: True
+
+13. COMMANDBUTTON: btnCancel
+    - Caption: "Cancel"
+    - Top: 240
+    - Left: 200
+    - Width: 72
+    - Height: 24
+    - Cancel: True
+
+14. COMMANDBUTTON: btnReset
+    - Caption: "Reset to Defaults"
+    - Top: 240
+    - Left: 12
+    - Width: 96
+    - Height: 24
+
+--------------------------------------------------------------------------------
+VISUAL LAYOUT:
+--------------------------------------------------------------------------------
+
++----------------------------------------------------------+
+| Utility Configuration                               [X]  |
++----------------------------------------------------------+
+|                                                          |
+|  Select Utility Payment Responsibilities                 |
+|                                                          |
+|  Electricity:  [Tenant Pays              v]              |
+|                                                          |
+|  Cooking:      [Gas Stove                v]              |
+|                                                          |
+|  Heat:         [Gas Heat                 v]              |
+|                                                          |
+|  Hot Water:    [Gas Hot Water            v]              |
+|                                                          |
+|  +-- Note ------------------------------------+          |
+|  | Select 'N/A or owner pays' if the        |          |
+|  | landlord covers this utility.             |          |
+|  +-------------------------------------------+          |
+|                                                          |
+|  [Reset to Defaults]    [Save]    [Cancel]              |
+|                                                          |
++----------------------------------------------------------+
+
+================================================================================

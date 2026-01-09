@@ -1,0 +1,225 @@
+import shutil
+from pathlib import Path
+
+import pandas as pd
+from ami_optix.rent_calculator import load_excel_file
+
+from ami_optix.report_generator import create_excel_reports
+from ami_optix.rent_calculator import (
+    COOKING_OPTIONS,
+    HEAT_OPTIONS,
+    ELECTRICITY_OPTIONS,
+    HOT_WATER_OPTIONS,
+)
+
+
+def test_create_excel_reports_adds_scenario_columns(tmp_path):
+    original_path = tmp_path / "input.xlsx"
+    original_df = pd.DataFrame({
+        'APT': ['1A', '1B'],
+        'AMI': ['50%', '60%'],
+        'NET SF': [500, 700],
+        'FLOOR': [1, 2],
+    })
+    original_df.to_excel(original_path, index=False)
+
+    scenario_template = {
+        'status': 'OPTIMAL',
+        'bands': [40, 60, 80],
+        'assignments': [
+            {'unit_id': '1A', 'bedrooms': 1, 'net_sf': 500, 'floor': 1, 'client_ami': 0.5, 'premium_score': 0.1, 'assigned_ami': 0.4, 'gross_rent': 1500, 'monthly_rent': 1400, 'annual_rent': 16800, 'allowance_total': 100, 'allowances': [{'category': 'cooking', 'label': 'Electric Stove', 'amount': 100}]},
+            {'unit_id': '1B', 'bedrooms': 2, 'net_sf': 700, 'floor': 2, 'client_ami': 0.6, 'premium_score': 0.2, 'assigned_ami': 0.6, 'gross_rent': 2000, 'monthly_rent': 1900, 'annual_rent': 22800, 'allowance_total': 100, 'allowances': [{'category': 'cooking', 'label': 'Electric Stove', 'amount': 100}]},
+        ],
+        'metrics': {
+            'waami_percent': 50.0,
+            'total_units': 2,
+            'total_sf': 1200,
+            'revenue_score': 550.0,
+            'band_mix': [
+                {'band': 40, 'units': 1, 'net_sf': 500, 'share_of_sf': 500/1200},
+                {'band': 60, 'units': 1, 'net_sf': 700, 'share_of_sf': 700/1200},
+            ],
+            'gross_monthly_rent': 3500,
+            'gross_annual_rent': 42000,
+            'total_monthly_rent': 3300,
+            'total_annual_rent': 39600,
+            'allowance_monthly_total': 200,
+            'allowance_breakdown': {
+                'cooking': {'label': 'Electric Stove', 'monthly': 200, 'annual': 2400}
+            },
+        },
+    }
+
+    analysis_json = {
+        'scenario_absolute_best': scenario_template,
+        'scenario_client_oriented': scenario_template,
+        'scenario_best_3_band': scenario_template,
+        'scenario_best_2_band': {**scenario_template, 'bands': [40, 80]},
+        'scenario_alternative': {**scenario_template, 'bands': [50, 90]},
+        'scenarios': {
+            'absolute_best': scenario_template,
+            'client_oriented': scenario_template,
+            'best_3_band': scenario_template,
+            'best_2_band': {**scenario_template, 'bands': [40, 80]},
+            'alternative': {**scenario_template, 'bands': [50, 90]},
+        },
+    }
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path)
+    )
+
+    assert all(path.endswith('.xlsx') for path in files)
+
+    updated_path = [p for p in files if p.endswith('Updated_Source.xlsx')][0]
+    units_df = pd.read_excel(updated_path, sheet_name='Units')
+    assert 'AMI_S1_Absolute_Best' in units_df.columns
+    assert 'AMI_S2_Client_Oriented' in units_df.columns
+    scenario_workbook = [p for p in files if p.endswith('S1_Absolute_Best_Report.xlsx')][0]
+    scenario_df = pd.read_excel(scenario_workbook, sheet_name='Assignments')
+    assert 'Gross Rent' in scenario_df.columns
+    assert 'Rent Deductions' in scenario_df.columns
+    assert 'Allowance Detail' in scenario_df.columns
+
+    summary_df = pd.read_excel(updated_path, sheet_name='Scenario Summary')
+    assert 'Gross Monthly Rent' in summary_df.columns
+    assert 'Rent Deductions (Monthly)' in summary_df.columns
+    assert not summary_df.empty
+
+
+def test_prefer_xlsb_adds_note(tmp_path):
+    original_path = tmp_path / "input.xlsx"
+    pd.DataFrame({'APT': ['1A'], 'AMI': ['40%'], 'NET SF': [500]}).to_excel(original_path, index=False)
+
+    analysis_json = {
+        'analysis_notes': [],
+        'scenario_absolute_best': {
+            'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+            'metrics': {'band_mix': [], 'waami_percent': 40.0},
+            'bands': [40],
+        },
+        'scenarios': {
+            'absolute_best': {
+                'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+                'metrics': {'band_mix': [], 'waami_percent': 40.0},
+                'bands': [40],
+            }
+        },
+    }
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path),
+        prefer_xlsb=True,
+    )
+
+    assert all(path.endswith('.xlsx') for path in files)
+    assert any('only delivers .xlsx files' in note for note in analysis_json.get('analysis_notes', []))
+
+
+def test_rent_workbook_written_when_available(tmp_path):
+    original_path = tmp_path / "input.xlsx"
+    pd.DataFrame({'APT': ['1A'], 'AMI': ['40%'], 'NET SF': [500]}).to_excel(original_path, index=False)
+
+    rent_source = tmp_path / "rent.xlsx"
+    shutil.copy(Path("2025 AMI Rent Calculator Unlocked.xlsx"), rent_source)
+
+    analysis_json = {
+        'analysis_notes': [],
+        'scenario_absolute_best': {
+            'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+            'metrics': {'band_mix': [], 'waami_percent': 40.0},
+            'bands': [40],
+        },
+        'scenarios': {
+            'absolute_best': {
+                'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+                'metrics': {'band_mix': [], 'waami_percent': 40.0},
+                'bands': [40],
+            }
+        },
+    }
+
+    utilities = {
+        'electricity': 'tenant_pays',
+        'cooking': 'gas',
+        'heat': 'gas',
+        'hot_water': 'electric_heat_pump',
+    }
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path),
+        utilities=utilities,
+        rent_workbook_path=str(rent_source),
+    )
+
+    rent_files = [f for f in files if 'Rent_Calculator' in Path(f).name]
+    assert rent_files, "Expected an updated rent workbook in the exported files."
+
+    workbook = load_excel_file(rent_files[0])
+    sheet = workbook['AMI & Rent']
+    assert sheet.cell(row=17, column=2).value == ELECTRICITY_OPTIONS['tenant_pays']
+    assert sheet.cell(row=17, column=3).value == COOKING_OPTIONS['gas']
+    assert sheet.cell(row=17, column=5).value == HEAT_OPTIONS['gas']
+    assert sheet.cell(row=17, column=10).value == HOT_WATER_OPTIONS['electric_heat_pump']
+
+
+def test_rent_workbook_accepts_xlsm(tmp_path):
+    original_path = tmp_path / "input.xlsx"
+    pd.DataFrame({'APT': ['1A'], 'AMI': ['40%'], 'NET SF': [500]}).to_excel(original_path, index=False)
+
+    rent_source = tmp_path / "rent.xlsm"
+    shutil.copy(Path("2025 AMI Rent Calculator Unlocked.xlsx"), rent_source)
+
+    analysis_json = {
+        'analysis_notes': [],
+        'scenario_absolute_best': {
+            'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+            'metrics': {'band_mix': [], 'waami_percent': 40.0},
+            'bands': [40],
+        },
+        'scenarios': {
+            'absolute_best': {
+                'assignments': [{'unit_id': '1A', 'net_sf': 500, 'assigned_ami': 0.4, 'premium_score': 0.1}],
+                'metrics': {'band_mix': [], 'waami_percent': 40.0},
+                'bands': [40],
+            }
+        },
+    }
+
+    utilities = {
+        'electricity': 'tenant_pays',
+        'cooking': 'gas',
+        'heat': 'gas',
+        'hot_water': 'electric_heat_pump',
+    }
+
+    files = create_excel_reports(
+        analysis_json,
+        str(original_path),
+        {'unit_id': 'APT', 'client_ami': 'AMI'},
+        output_dir=str(tmp_path),
+        utilities=utilities,
+        rent_workbook_path=str(rent_source),
+    )
+
+    rent_files = [Path(f) for f in files if Path(f).suffix == '.xlsm']
+    assert rent_files, "Expected an updated rent workbook with .xlsm extension."
+
+    workbook = load_excel_file(str(rent_files[0]))
+    sheet = workbook['AMI & Rent']
+    try:
+        assert sheet.cell(row=17, column=2).value == ELECTRICITY_OPTIONS['tenant_pays']
+        assert sheet.cell(row=17, column=3).value == COOKING_OPTIONS['gas']
+        assert sheet.cell(row=17, column=5).value == HEAT_OPTIONS['gas']
+        assert sheet.cell(row=17, column=10).value == HOT_WATER_OPTIONS['electric_heat_pump']
+    finally:
+        workbook.close()
