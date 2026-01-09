@@ -30,8 +30,8 @@ optimization_rules:
   deep_affordability_widen_cap: 0.4
   low_band_band_threshold: 40
   scenario_time_limit_seconds: 3
-  max_unique_scenarios: 4
-  max_band_combo_checks: 4
+  max_unique_scenarios: 25
+  max_band_combo_checks: 50
   priority_band_combos:
     - [40, 60, 90]
     - [40, 60, 100]
