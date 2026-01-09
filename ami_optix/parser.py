@@ -100,7 +100,7 @@ class Parser:
         engine = "pyxlsb" if ext == ".xlsb" else None
         excel = pd.ExcelFile(self.file_path, engine=engine)
 
-        preferred = ["PROJECT WORKSHEET", "RentRoll", "Units", "Sheet1"]
+        preferred = ["UAP", "PROJECT WORKSHEET", "RentRoll", "Units", "Sheet1"]
         ordered = preferred + [name for name in excel.sheet_names if name not in preferred]
 
         for sheet in ordered:
