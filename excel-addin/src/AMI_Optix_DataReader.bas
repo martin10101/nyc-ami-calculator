@@ -365,10 +365,12 @@ End Function
 
 Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
     ' Reads a single unit row into a Dictionary
+    ' Only includes units where AMI column has a positive value (matches web parser behavior)
     Dim unit As Object
     Dim unitId As String
     Dim bedrooms As Variant
     Dim netSF As Variant
+    Dim clientAMI As Variant
 
     On Error GoTo ErrorHandler
 
@@ -393,6 +395,26 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
     If CDbl(bedrooms) < 0 Or CDbl(netSF) <= 0 Then
         Set ReadUnitRow = Nothing
         Exit Function
+    End If
+
+    ' CRITICAL: Only include units where AMI column has a positive value
+    ' This matches the web parser behavior (parser.py line 266)
+    ' Units without AMI values are NOT meant to be optimized
+    If m_AMICol > 0 Then
+        clientAMI = ws.Cells(row, m_AMICol).Value
+
+        ' Handle percentage format (0.6 or 60% both become 0.6)
+        If IsNumeric(clientAMI) Then
+            If CDbl(clientAMI) <= 0 Then
+                ' No AMI value or zero - skip this unit
+                Set ReadUnitRow = Nothing
+                Exit Function
+            End If
+        Else
+            ' Non-numeric or empty - skip this unit
+            Set ReadUnitRow = Nothing
+            Exit Function
+        End If
     End If
 
     ' Create unit dictionary
