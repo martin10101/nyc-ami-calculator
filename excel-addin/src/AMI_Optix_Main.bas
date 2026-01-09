@@ -206,6 +206,21 @@ Public Sub RunOptimization()
     Application.StatusBar = "AMI Optix: Building request..."
     payload = BuildAPIPayload(units, utilities)
 
+    ' DEBUG: Print payload being sent
+    Debug.Print "=== UNITS READ FROM WORKBOOK ==="
+    Debug.Print "Total units: " & units.Count
+    Dim debugUnit As Object
+    Dim debugIdx As Long
+    For debugIdx = 1 To Application.Min(5, units.Count)  ' Show first 5 units
+        Set debugUnit = units(debugIdx)
+        Debug.Print "Unit " & debugIdx & ": ID=" & debugUnit("unit_id") & _
+                    ", BR=" & debugUnit("bedrooms") & _
+                    ", SF=" & debugUnit("net_sf")
+    Next debugIdx
+    Debug.Print "=== PAYLOAD BEING SENT (first 1000 chars) ==="
+    Debug.Print Left(payload, 1000)
+    Debug.Print "=== END PAYLOAD ==="
+
     ' Step 5: Call API
     Application.StatusBar = "AMI Optix: Calling optimization API (this may take up to 60 seconds)..."
     response = CallOptimizeAPI(payload)
