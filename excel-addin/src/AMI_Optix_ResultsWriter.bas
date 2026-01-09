@@ -28,14 +28,12 @@ Public Sub ApplyBestScenario(result As Object)
     ' Get scenarios
     Set scenarios = result("scenarios")
 
-    ' Find best scenario (first one returned, already sorted by solver)
-    ' The solver returns scenarios keyed by type: "developer_first", "client_oriented", etc.
-    Dim scenarioKeys As Variant
+    ' Find best scenario - use correct keys from solver
     Dim bestKey As String
 
-    ' Priority order for best scenario
+    ' Priority order for best scenario (matches solver output)
     Dim priorities As Variant
-    priorities = Array("developer_first", "highest_waami", "client_oriented")
+    priorities = Array("absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented")
 
     For i = LBound(priorities) To UBound(priorities)
         If scenarios.Exists(CStr(priorities(i))) Then
@@ -205,7 +203,7 @@ Public Sub CreateScenariosSheet(result As Object)
         Set scenario = scenarios(scenarioKey)
 
         ' Scenario header
-        ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & UCase(CStr(scenarioKey))
+        ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
         ws.Cells(row, 1).Font.Bold = True
         ws.Cells(row, 1).Font.Size = 14
         ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(200, 220, 255)
@@ -217,17 +215,17 @@ Public Sub CreateScenariosSheet(result As Object)
         ws.Cells(row, 2).Font.Bold = True
         row = row + 1
 
-        ' Bands used
-        If scenario.Exists("band_combination") Then
+        ' Bands used (Fixed: was "band_combination", now "bands")
+        If scenario.Exists("bands") Then
             ws.Cells(row, 1).Value = "Bands Used:"
             Dim bands As Object
-            Set bands = scenario("band_combination")
+            Set bands = scenario("bands")
             Dim bandStr As String
             bandStr = ""
             Dim b As Long
             For b = 1 To bands.Count
                 If bandStr <> "" Then bandStr = bandStr & ", "
-                bandStr = bandStr & Format(bands(b) * 100, "0") & "%"
+                bandStr = bandStr & Format(bands(b), "0") & "%"
             Next b
             ws.Cells(row, 2).Value = bandStr
         End If
@@ -335,6 +333,24 @@ ErrorHandler:
     Debug.Print "CreateScenariosSheet Error: " & Err.Description
 End Sub
 
+Private Function FormatScenarioName(key As String) As String
+    ' Formats scenario key into readable name
+    Select Case key
+        Case "absolute_best"
+            FormatScenarioName = "ABSOLUTE BEST"
+        Case "best_3_band"
+            FormatScenarioName = "BEST 3-BAND"
+        Case "best_2_band"
+            FormatScenarioName = "BEST 2-BAND"
+        Case "alternative"
+            FormatScenarioName = "ALTERNATIVE"
+        Case "client_oriented"
+            FormatScenarioName = "CLIENT ORIENTED (MAX REVENUE)"
+        Case Else
+            FormatScenarioName = UCase(Replace(key, "_", " "))
+    End Select
+End Function
+
 '-------------------------------------------------------------------------------
 ' APPLY SPECIFIC SCENARIO (for manual selection)
 '-------------------------------------------------------------------------------
@@ -401,7 +417,7 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
         End If
     Next i
 
-    MsgBox "Applied scenario '" & scenarioKey & "'" & vbCrLf & _
+    MsgBox "Applied scenario '" & FormatScenarioName(scenarioKey) & "'" & vbCrLf & _
            "Updated " & updatedCount & " units.", vbInformation, "AMI Optix"
 
     ' Switch to data sheet

@@ -2,6 +2,8 @@ Attribute VB_Name = "AMI_Optix_API"
 '===============================================================================
 ' AMI OPTIX - API Communication Module
 ' Handles HTTP requests to the optimization API and JSON parsing
+'
+' Compatible with both 32-bit and 64-bit Office
 '===============================================================================
 Option Explicit
 
@@ -13,6 +15,7 @@ Public Function CallOptimizeAPI(payload As String) As String
     ' Makes POST request to /api/optimize endpoint
     ' Returns response body or empty string on failure
     ' Includes API key authentication header
+    ' Uses ServerXMLHTTP for timeout support
 
     Dim http As Object
     Dim url As String
@@ -25,8 +28,12 @@ Public Function CallOptimizeAPI(payload As String) As String
     ' Get API key from registry
     apiKey = GetAPIKey()
 
-    ' Create HTTP object
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    ' Create HTTP object with timeout support
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+
+    ' Configure timeouts (ms): Resolve, Connect, Send, Receive
+    ' 5 sec resolve, 30 sec connect, 30 sec send, 120 sec receive (for cold start)
+    http.setTimeouts 5000, 30000, 30000, 120000
 
     ' Configure request
     http.Open "POST", url, False
@@ -37,9 +44,6 @@ Public Function CallOptimizeAPI(payload As String) As String
     If Len(apiKey) > 0 Then
         http.setRequestHeader "X-API-Key", apiKey
     End If
-
-    ' Set timeout (note: XMLHTTP doesn't have direct timeout, we handle via error)
-    ' For longer timeout, use ServerXMLHTTP instead
 
     ' Send request
     http.send payload
@@ -71,6 +75,9 @@ Public Function CallOptimizeAPI(payload As String) As String
 
 ErrorHandler:
     Debug.Print "HTTP Error: " & Err.Description
+    MsgBox "Connection error: " & Err.Description & vbCrLf & vbCrLf & _
+           "The server may be starting up. Please wait 30 seconds and try again.", _
+           vbExclamation, "AMI Optix"
     CallOptimizeAPI = ""
 End Function
 
@@ -81,9 +88,10 @@ Public Function CallHealthAPI() As Boolean
 
     On Error GoTo ErrorHandler
 
-    url = API_BASE_URL & "/health"
+    url = API_BASE_URL & "/healthz"  ' Fixed: was /health
 
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 10000, 10000, 10000
     http.Open "GET", url, False
     http.send
 
@@ -161,93 +169,277 @@ Private Function EscapeJSON(str As String) As String
 End Function
 
 '-------------------------------------------------------------------------------
-' JSON PARSER (Simple implementation for our specific response structure)
+' JSON PARSER (Works with both 32-bit and 64-bit Office)
+' This is a custom parser that doesn't rely on ScriptControl
 '-------------------------------------------------------------------------------
 
 Public Function ParseJSON(jsonString As String) As Object
     ' Parses JSON response into Dictionary/Collection structure
-    ' This is a simplified parser for our known response format
+    ' Compatible with 64-bit Office (no ScriptControl dependency)
 
     Dim result As Object
-    Set result = CreateObject("Scripting.Dictionary")
+    Dim pos As Long
 
     On Error GoTo ErrorHandler
 
-    ' Use ScriptControl for JSON parsing (Windows only)
-    Dim sc As Object
-    Set sc = CreateObject("MSScriptControl.ScriptControl")
-    sc.Language = "JScript"
+    pos = 1
+    SkipWhitespace jsonString, pos
 
-    ' Add JSON parse helper
-    sc.AddCode "function parseJSON(str) { return eval('(' + str + ')'); }"
-    sc.AddCode "function getKeys(obj) { var keys = []; for(var k in obj) keys.push(k); return keys; }"
-    sc.AddCode "function getValue(obj, key) { return obj[key]; }"
-    sc.AddCode "function isArray(obj) { return Object.prototype.toString.call(obj) === '[object Array]'; }"
-    sc.AddCode "function getLength(arr) { return arr.length; }"
-    sc.AddCode "function getItem(arr, idx) { return arr[idx]; }"
-
-    ' Parse JSON
-    Dim jsObj As Object
-    Set jsObj = sc.Run("parseJSON", jsonString)
-
-    ' Convert to VBA structure
-    Set result = JSObjectToDict(sc, jsObj)
+    If Mid(jsonString, pos, 1) = "{" Then
+        Set result = ParseObject(jsonString, pos)
+    ElseIf Mid(jsonString, pos, 1) = "[" Then
+        Set result = ParseArray(jsonString, pos)
+    Else
+        Set result = Nothing
+    End If
 
     Set ParseJSON = result
     Exit Function
 
 ErrorHandler:
-    Debug.Print "JSON Parse Error: " & Err.Description
+    Debug.Print "JSON Parse Error at position " & pos & ": " & Err.Description
     Set ParseJSON = Nothing
 End Function
 
-Private Function JSObjectToDict(sc As Object, jsObj As Object) As Object
-    ' Recursively convert JavaScript object to VBA Dictionary
-    Dim result As Object
-    Dim keys As Variant
-    Dim i As Long
+Private Function ParseObject(jsonString As String, ByRef pos As Long) As Object
+    ' Parses a JSON object into a Dictionary
+    Dim dict As Object
     Dim key As String
     Dim val As Variant
 
-    On Error GoTo ErrorHandler
+    Set dict = CreateObject("Scripting.Dictionary")
 
-    ' Check if array
-    If sc.Run("isArray", jsObj) Then
-        Set result = New Collection
-        Dim arrLen As Long
-        arrLen = sc.Run("getLength", jsObj)
+    ' Skip opening brace
+    pos = pos + 1
+    SkipWhitespace jsonString, pos
 
-        For i = 0 To arrLen - 1
-            val = sc.Run("getItem", jsObj, i)
-            If IsObject(val) Then
-                result.Add JSObjectToDict(sc, val)
-            Else
-                result.Add val
-            End If
-        Next i
-    Else
-        Set result = CreateObject("Scripting.Dictionary")
-
-        ' Get keys
-        keys = sc.Run("getKeys", jsObj)
-        Dim keyLen As Long
-        keyLen = sc.Run("getLength", keys)
-
-        For i = 0 To keyLen - 1
-            key = sc.Run("getItem", keys, i)
-            val = sc.Run("getValue", jsObj, key)
-
-            If IsObject(val) Then
-                result(key) = JSObjectToDict(sc, val)
-            Else
-                result(key) = val
-            End If
-        Next i
+    ' Empty object
+    If Mid(jsonString, pos, 1) = "}" Then
+        pos = pos + 1
+        Set ParseObject = dict
+        Exit Function
     End If
 
-    Set JSObjectToDict = result
-    Exit Function
+    Do
+        SkipWhitespace jsonString, pos
 
-ErrorHandler:
-    Set JSObjectToDict = CreateObject("Scripting.Dictionary")
+        ' Parse key
+        key = ParseString(jsonString, pos)
+
+        SkipWhitespace jsonString, pos
+
+        ' Skip colon
+        If Mid(jsonString, pos, 1) = ":" Then
+            pos = pos + 1
+        End If
+
+        SkipWhitespace jsonString, pos
+
+        ' Parse value
+        val = ParseValue(jsonString, pos)
+
+        ' Store in dictionary (use Set for objects)
+        If IsObject(val) Then
+            Set dict(key) = val
+        Else
+            dict(key) = val
+        End If
+
+        SkipWhitespace jsonString, pos
+
+        ' Check for comma or end
+        If Mid(jsonString, pos, 1) = "," Then
+            pos = pos + 1
+        ElseIf Mid(jsonString, pos, 1) = "}" Then
+            pos = pos + 1
+            Exit Do
+        Else
+            Exit Do
+        End If
+    Loop
+
+    Set ParseObject = dict
 End Function
+
+Private Function ParseArray(jsonString As String, ByRef pos As Long) As Collection
+    ' Parses a JSON array into a Collection
+    Dim coll As Collection
+    Dim val As Variant
+
+    Set coll = New Collection
+
+    ' Skip opening bracket
+    pos = pos + 1
+    SkipWhitespace jsonString, pos
+
+    ' Empty array
+    If Mid(jsonString, pos, 1) = "]" Then
+        pos = pos + 1
+        Set ParseArray = coll
+        Exit Function
+    End If
+
+    Do
+        SkipWhitespace jsonString, pos
+
+        ' Parse value
+        val = ParseValue(jsonString, pos)
+
+        ' Add to collection
+        If IsObject(val) Then
+            coll.Add val
+        Else
+            coll.Add val
+        End If
+
+        SkipWhitespace jsonString, pos
+
+        ' Check for comma or end
+        If Mid(jsonString, pos, 1) = "," Then
+            pos = pos + 1
+        ElseIf Mid(jsonString, pos, 1) = "]" Then
+            pos = pos + 1
+            Exit Do
+        Else
+            Exit Do
+        End If
+    Loop
+
+    Set ParseArray = coll
+End Function
+
+Private Function ParseValue(jsonString As String, ByRef pos As Long) As Variant
+    ' Parses any JSON value
+    Dim char As String
+
+    SkipWhitespace jsonString, pos
+    char = Mid(jsonString, pos, 1)
+
+    If char = """" Then
+        ParseValue = ParseString(jsonString, pos)
+    ElseIf char = "{" Then
+        Set ParseValue = ParseObject(jsonString, pos)
+    ElseIf char = "[" Then
+        Set ParseValue = ParseArray(jsonString, pos)
+    ElseIf char = "t" Then
+        ' true
+        pos = pos + 4
+        ParseValue = True
+    ElseIf char = "f" Then
+        ' false
+        pos = pos + 5
+        ParseValue = False
+    ElseIf char = "n" Then
+        ' null
+        pos = pos + 4
+        ParseValue = Null
+    Else
+        ' Number
+        ParseValue = ParseNumber(jsonString, pos)
+    End If
+End Function
+
+Private Function ParseString(jsonString As String, ByRef pos As Long) As String
+    ' Parses a JSON string
+    Dim result As String
+    Dim char As String
+    Dim nextChar As String
+
+    result = ""
+
+    ' Skip opening quote
+    pos = pos + 1
+
+    Do While pos <= Len(jsonString)
+        char = Mid(jsonString, pos, 1)
+
+        If char = """" Then
+            pos = pos + 1
+            Exit Do
+        ElseIf char = "\" Then
+            pos = pos + 1
+            nextChar = Mid(jsonString, pos, 1)
+            Select Case nextChar
+                Case """"
+                    result = result & """"
+                Case "\"
+                    result = result & "\"
+                Case "/"
+                    result = result & "/"
+                Case "b"
+                    result = result & vbBack
+                Case "f"
+                    result = result & vbFormFeed
+                Case "n"
+                    result = result & vbLf
+                Case "r"
+                    result = result & vbCr
+                Case "t"
+                    result = result & vbTab
+                Case "u"
+                    ' Unicode escape - skip for now
+                    pos = pos + 4
+                Case Else
+                    result = result & nextChar
+            End Select
+            pos = pos + 1
+        Else
+            result = result & char
+            pos = pos + 1
+        End If
+    Loop
+
+    ParseString = result
+End Function
+
+Private Function ParseNumber(jsonString As String, ByRef pos As Long) As Double
+    ' Parses a JSON number
+    Dim startPos As Long
+    Dim char As String
+    Dim numStr As String
+
+    startPos = pos
+
+    Do While pos <= Len(jsonString)
+        char = Mid(jsonString, pos, 1)
+        ' Check for valid number characters (digits, decimal, exponent, signs)
+        ' Using explicit checks to avoid VBA Like operator ambiguity with hyphen
+        If (char >= "0" And char <= "9") Or char = "." Or char = "e" Or _
+           char = "E" Or char = "+" Or char = "-" Then
+            pos = pos + 1
+        Else
+            Exit Do
+        End If
+    Loop
+
+    numStr = Mid(jsonString, startPos, pos - startPos)
+
+    ' Handle empty or invalid number string
+    If Len(numStr) = 0 Then
+        ParseNumber = 0
+    Else
+        ' Replace any locale-specific decimal separator issues
+        numStr = Replace(numStr, ",", ".")
+        On Error Resume Next
+        ParseNumber = CDbl(numStr)
+        If Err.Number <> 0 Then
+            ParseNumber = 0
+            Err.Clear
+        End If
+        On Error GoTo 0
+    End If
+End Function
+
+Private Sub SkipWhitespace(jsonString As String, ByRef pos As Long)
+    ' Skips whitespace characters
+    Dim char As String
+
+    Do While pos <= Len(jsonString)
+        char = Mid(jsonString, pos, 1)
+        If char = " " Or char = vbCr Or char = vbLf Or char = vbTab Then
+            pos = pos + 1
+        Else
+            Exit Do
+        End If
+    Loop
+End Sub

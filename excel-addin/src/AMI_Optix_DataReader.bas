@@ -253,8 +253,13 @@ Private Function IsBedroomsHeader(header As String) As Boolean
 End Function
 
 Private Function IsNetSFHeader(header As String) As Boolean
+    ' More specific patterns to avoid false positives
+    ' Removed "SF" alone (too broad - could match STAFF, SATISFACTION, etc.)
+    ' Removed "AREA" alone (too broad - could match PROJECT AREA, etc.)
     Dim patterns As Variant
-    patterns = Array("NET SF", "NETSF", "SF", "S.F.", "SQFT", "SQ FT", "AREA", "NET SQUARE FEET", "SQUARE FEET")
+    patterns = Array("NET SF", "NETSF", "NET S.F.", "SQFT", "SQ FT", "SQ. FT.", _
+                     "NET SQUARE FEET", "SQUARE FEET", "NET SQFT", "UNIT SF", _
+                     "UNIT SQFT", "APT SF", "APT SQFT", "RENTABLE SF", "RENTABLE SQFT")
     IsNetSFHeader = MatchesAny(header, patterns)
 End Function
 
@@ -288,8 +293,15 @@ Private Function IsBalconyHeader(header As String) As Boolean
 End Function
 
 Private Function MatchesAny(header As String, patterns As Variant) As Boolean
+    ' Matches header against patterns using smart matching rules:
+    ' 1. Exact match always succeeds
+    ' 2. Contains match only if pattern is at word boundary
+
     Dim i As Long
     Dim pattern As String
+    Dim pos As Long
+    Dim charBefore As String
+    Dim charAfter As String
 
     For i = LBound(patterns) To UBound(patterns)
         pattern = UCase(CStr(patterns(i)))
@@ -300,10 +312,29 @@ Private Function MatchesAny(header As String, patterns As Variant) As Boolean
             Exit Function
         End If
 
-        ' Contains match (for longer headers)
-        If Len(header) > Len(pattern) And InStr(header, pattern) > 0 Then
-            MatchesAny = True
-            Exit Function
+        ' Contains match - but only at word boundaries to avoid false positives
+        ' e.g., "NET SF" in "UNIT NET SF" is OK, but "SF" in "STAFF" is not
+        pos = InStr(header, pattern)
+        If pos > 0 Then
+            ' Check character before pattern (should be start or space/punctuation)
+            If pos = 1 Then
+                charBefore = " "  ' Start of string is OK
+            Else
+                charBefore = Mid(header, pos - 1, 1)
+            End If
+
+            ' Check character after pattern (should be end or space/punctuation)
+            If pos + Len(pattern) > Len(header) Then
+                charAfter = " "  ' End of string is OK
+            Else
+                charAfter = Mid(header, pos + Len(pattern), 1)
+            End If
+
+            ' Word boundary check: before and after should not be alphanumeric
+            If Not (charBefore Like "[A-Z0-9]") And Not (charAfter Like "[A-Z0-9]") Then
+                MatchesAny = True
+                Exit Function
+            End If
         End If
     Next i
 

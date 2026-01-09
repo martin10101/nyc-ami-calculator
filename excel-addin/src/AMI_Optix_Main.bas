@@ -231,19 +231,49 @@ Public Sub RunOptimization()
     ' Store for later viewing
     Set g_LastScenarios = result
 
-    ' Step 7: Check for scenarios
-    If Not result.Exists("scenarios") Or result("scenarios").Count = 0 Then
-        Dim notes As String
-        notes = ""
-        If result.Exists("notes") Then
-            Dim i As Long
-            For i = 1 To result("notes").Count
-                notes = notes & "- " & result("notes")(i) & vbCrLf
-            Next i
+    ' Step 7: Check for success and scenarios
+    ' First check if API returned an error
+    If result.Exists("error") Then
+        MsgBox "API Error: " & result("error"), vbExclamation, "AMI Optix"
+        GoTo Cleanup
+    End If
+
+    ' Check for success flag (API returns success: false if no solution)
+    If result.Exists("success") Then
+        If result("success") = False Then
+            Dim errorMsg As String
+            errorMsg = "No optimal solution found."
+            If result.Exists("error") Then
+                errorMsg = result("error")
+            End If
+
+            Dim notes As String
+            notes = ""
+            If result.Exists("notes") Then
+                Dim i As Long
+                For i = 1 To result("notes").Count
+                    notes = notes & "- " & result("notes")(i) & vbCrLf
+                Next i
+            End If
+
+            MsgBox errorMsg & vbCrLf & vbCrLf & _
+                   "Notes from solver:" & vbCrLf & notes, _
+                   vbInformation, "AMI Optix"
+            GoTo Cleanup
         End If
-        MsgBox "No optimal scenarios found." & vbCrLf & vbCrLf & _
-               "Notes from solver:" & vbCrLf & notes, _
-               vbInformation, "AMI Optix"
+    End If
+
+    ' Check scenarios exist
+    If Not result.Exists("scenarios") Then
+        MsgBox "Invalid response: no scenarios returned.", vbExclamation, "AMI Optix"
+        GoTo Cleanup
+    End If
+
+    Dim scenariosObj As Object
+    Set scenariosObj = result("scenarios")
+
+    If scenariosObj.Count = 0 Then
+        MsgBox "No scenarios returned from solver.", vbInformation, "AMI Optix"
         GoTo Cleanup
     End If
 
