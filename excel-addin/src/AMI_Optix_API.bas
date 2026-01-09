@@ -206,6 +206,7 @@ Private Function ParseObject(jsonString As String, ByRef pos As Long) As Object
     Dim dict As Object
     Dim key As String
     Dim val As Variant
+    Dim peekChar As String
 
     Set dict = CreateObject("Scripting.Dictionary")
 
@@ -235,13 +236,20 @@ Private Function ParseObject(jsonString As String, ByRef pos As Long) As Object
 
         SkipWhitespace jsonString, pos
 
-        ' Parse value
-        val = ParseValue(jsonString, pos)
+        ' Parse value - peek at type first to handle object assignment correctly
+        peekChar = Mid(jsonString, pos, 1)
 
-        ' Store in dictionary (use Set for objects)
-        If IsObject(val) Then
+        If peekChar = "{" Then
+            ' Object - use Set
+            Set val = ParseObject(jsonString, pos)
+            Set dict(key) = val
+        ElseIf peekChar = "[" Then
+            ' Array - use Set
+            Set val = ParseArray(jsonString, pos)
             Set dict(key) = val
         Else
+            ' Scalar (string, number, boolean, null)
+            val = ParseScalarValue(jsonString, pos)
             dict(key) = val
         End If
 
@@ -265,6 +273,7 @@ Private Function ParseArray(jsonString As String, ByRef pos As Long) As Collecti
     ' Parses a JSON array into a Collection
     Dim coll As Collection
     Dim val As Variant
+    Dim peekChar As String
 
     Set coll = New Collection
 
@@ -282,13 +291,20 @@ Private Function ParseArray(jsonString As String, ByRef pos As Long) As Collecti
     Do
         SkipWhitespace jsonString, pos
 
-        ' Parse value
-        val = ParseValue(jsonString, pos)
+        ' Parse value - peek at type first to handle object assignment correctly
+        peekChar = Mid(jsonString, pos, 1)
 
-        ' Add to collection
-        If IsObject(val) Then
+        If peekChar = "{" Then
+            ' Object - use Set
+            Set val = ParseObject(jsonString, pos)
+            coll.Add val
+        ElseIf peekChar = "[" Then
+            ' Nested array - use Set
+            Set val = ParseArray(jsonString, pos)
             coll.Add val
         Else
+            ' Scalar (string, number, boolean, null)
+            val = ParseScalarValue(jsonString, pos)
             coll.Add val
         End If
 
@@ -308,34 +324,31 @@ Private Function ParseArray(jsonString As String, ByRef pos As Long) As Collecti
     Set ParseArray = coll
 End Function
 
-Private Function ParseValue(jsonString As String, ByRef pos As Long) As Variant
-    ' Parses any JSON value
+Private Function ParseScalarValue(jsonString As String, ByRef pos As Long) As Variant
+    ' Parses scalar JSON values (string, number, boolean, null)
+    ' Objects and arrays are handled separately in ParseObject/ParseArray
     Dim char As String
 
     SkipWhitespace jsonString, pos
     char = Mid(jsonString, pos, 1)
 
     If char = """" Then
-        ParseValue = ParseString(jsonString, pos)
-    ElseIf char = "{" Then
-        Set ParseValue = ParseObject(jsonString, pos)
-    ElseIf char = "[" Then
-        Set ParseValue = ParseArray(jsonString, pos)
+        ParseScalarValue = ParseString(jsonString, pos)
     ElseIf char = "t" Then
         ' true
         pos = pos + 4
-        ParseValue = True
+        ParseScalarValue = True
     ElseIf char = "f" Then
         ' false
         pos = pos + 5
-        ParseValue = False
+        ParseScalarValue = False
     ElseIf char = "n" Then
         ' null
         pos = pos + 4
-        ParseValue = Null
+        ParseScalarValue = Null
     Else
         ' Number
-        ParseValue = ParseNumber(jsonString, pos)
+        ParseScalarValue = ParseNumber(jsonString, pos)
     End If
 End Function
 
