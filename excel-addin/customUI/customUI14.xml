@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon>
+    <tabs>
+      <tab id="tabAMIOptix" label="AMI Optix">
+        <group id="grpSolver" label="Optimization">
+          <button id="btnRunSolver"
+                  label="Run Solver"
+                  size="large"
+                  imageMso="CalculateNow"
+                  onAction="Ribbon_RunSolver"
+                  supertip="Run the AMI optimization solver on the current workbook. Reads units with AMI values and finds optimal band assignments."/>
+          <button id="btnViewScenarios"
+                  label="View Scenarios"
+                  size="large"
+                  imageMso="TableDesign"
+                  onAction="Ribbon_ViewScenarios"
+                  supertip="View and apply different optimization scenarios from the last solver run."/>
+        </group>
+        <group id="grpRentRoll" label="Rent Roll">
+          <dropDown id="ddRentRoll"
+                    label="Select Rent Roll"
+                    showLabel="true"
+                    onAction="Ribbon_SelectRentRoll"
+                    getItemCount="Ribbon_GetRentRollCount"
+                    getItemLabel="Ribbon_GetRentRollLabel"
+                    getItemID="Ribbon_GetRentRollID"
+                    supertip="Select which rent roll sheet to use for optimization."/>
+          <button id="btnRefreshRentRolls"
+                  label="Refresh List"
+                  size="normal"
+                  imageMso="Refresh"
+                  onAction="Ribbon_RefreshRentRolls"
+                  supertip="Refresh the list of available rent roll sheets."/>
+        </group>
+        <group id="grpSettings" label="Settings">
+          <button id="btnUtilities"
+                  label="Utilities"
+                  size="normal"
+                  imageMso="PropertySheet"
+                  onAction="Ribbon_OpenUtilities"
+                  supertip="Configure utility payment settings (electricity, gas, heat, hot water)."/>
+          <button id="btnAPISettings"
+                  label="API Settings"
+                  size="normal"
+                  imageMso="ServerConnection"
+                  onAction="Ribbon_OpenAPISettings"
+                  supertip="Configure API connection settings and authentication."/>
+        </group>
+        <group id="grpHelp" label="Help">
+          <button id="btnAbout"
+                  label="About"
+                  size="normal"
+                  imageMso="Info"
+                  onAction="Ribbon_ShowAbout"
+                  supertip="About AMI Optix Excel Add-in."/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>
