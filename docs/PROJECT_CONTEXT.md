@@ -325,6 +325,9 @@ Response:
 | Results wrote to ALL units | Now only writes to optimized units |
 | WAAMI floor too low | Raised from 58% to 59.1% |
 | Missing ribbon functions | Added `ShowUtilityForm()`, `ShowSettingsForm()`, `ShowScenarioSelector()` |
+| Type mismatch on ribbon load | Fixed `OnUtilitiesClick` to call `ShowUtilityForm` instead of broken `frmUtilities.Show` |
+| Utilities only Yes/No prompt | Added individual InputBox prompts for each utility category (electricity, cooking, heat, hot water) |
+| frmUtilities form broken (missing .frx) | Bypassed form entirely with InputBox-based utility selection |
 
 ---
 
@@ -359,6 +362,29 @@ Response:
 3. **No 50% AMI**: Explicitly excluded as it's not a valid NYC affordable housing band.
 
 4. **20-21% at 40% AMI window**: Very tight (1% range) which limits scenario diversity but meets client requirements.
+
+5. **Dynamic WAAMI Filtering**: The solver filters out scenarios below the best achieved threshold. If 60% WAAMI is found, scenarios at 59.x% are hidden. A 1% tolerance can be enabled to show alternative scenarios within 1% of the best.
+
+---
+
+## Solver Scenario Selection Logic
+
+The solver always returns the **highest WAAMI scenario as "absolute_best"**. Additional scenarios are selected for variety:
+
+| Scenario | Description |
+|----------|-------------|
+| `absolute_best` | Highest WAAMI (best revenue), always shown first |
+| `best_3_band` | Best 3-band scenario distinct from absolute_best |
+| `best_2_band` | Best 2-band scenario |
+| `alternative` | Different unit assignment mix |
+| `client_oriented` | Maximizes revenue score |
+
+**Filtering Logic** (solver.py lines 419-436):
+- If best WAAMI >= 60%, filter out scenarios < 60%
+- If best WAAMI >= 50%, filter out scenarios < 50%
+- And so on for 40%, 30%
+
+This prevents showing "near miss" scenarios when better options exist.
 
 ---
 
@@ -412,4 +438,4 @@ All endpoints require `X-API-Key` header.
 
 ---
 
-*Last updated: January 12, 2025*
+*Last updated: January 13, 2025*
