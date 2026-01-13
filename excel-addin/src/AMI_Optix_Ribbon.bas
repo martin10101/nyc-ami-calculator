@@ -234,12 +234,26 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Public Sub ShowUtilityForm()
-    ' Shows the utility configuration form
-    On Error GoTo ErrorHandler
-    frmUtilities.Show
-    Exit Sub
-ErrorHandler:
-    MsgBox "Error opening utilities form: " & Err.Description, vbCritical, "AMI Optix"
+    ' Simple utility configuration using InputBox (bypasses broken form)
+    Dim msg As String
+    Dim choice As String
+
+    msg = "Utility Settings:" & vbCrLf & vbCrLf & _
+          "For most NYC affordable housing, select:" & vbCrLf & _
+          "  - Electricity: Tenant pays" & vbCrLf & _
+          "  - Cooking: Gas" & vbCrLf & _
+          "  - Heat: Gas" & vbCrLf & _
+          "  - Hot Water: Gas" & vbCrLf & vbCrLf & _
+          "Use default settings? (Yes/No)"
+
+    choice = InputBox(msg, "AMI Optix - Utilities", "Yes")
+
+    If UCase(Trim(choice)) = "YES" Or choice = "" Then
+        SaveUtilitySelections "tenant_pays", "gas", "gas", "gas"
+        MsgBox "Default utility settings saved.", vbInformation, "AMI Optix"
+    Else
+        MsgBox "To customize utilities, edit the registry or contact support.", vbInformation, "AMI Optix"
+    End If
 End Sub
 
 Public Sub ShowSettingsForm()
