@@ -234,26 +234,83 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Public Sub ShowUtilityForm()
-    ' Simple utility configuration using InputBox (bypasses broken form)
-    Dim msg As String
+    ' Utility configuration using InputBox prompts for each category
+    Dim electricity As String
+    Dim cooking As String
+    Dim heat As String
+    Dim hotWater As String
     Dim choice As String
 
-    msg = "Utility Settings:" & vbCrLf & vbCrLf & _
-          "For most NYC affordable housing, select:" & vbCrLf & _
-          "  - Electricity: Tenant pays" & vbCrLf & _
-          "  - Cooking: Gas" & vbCrLf & _
-          "  - Heat: Gas" & vbCrLf & _
-          "  - Hot Water: Gas" & vbCrLf & vbCrLf & _
-          "Use default settings? (Yes/No)"
+    ' ELECTRICITY (2 options)
+    choice = InputBox("ELECTRICITY - Who pays?" & vbCrLf & vbCrLf & _
+                      "1. Tenant Pays" & vbCrLf & _
+                      "2. N/A or owner pays" & vbCrLf & vbCrLf & _
+                      "Enter number (1-2):", "AMI Optix - Electricity", "1")
+    If choice = "" Then Exit Sub  ' Cancelled
+    Select Case Trim(choice)
+        Case "1": electricity = "tenant_pays"
+        Case "2": electricity = "na"
+        Case Else: electricity = "tenant_pays"
+    End Select
 
-    choice = InputBox(msg, "AMI Optix - Utilities", "Yes")
+    ' COOKING (3 options)
+    choice = InputBox("COOKING - Type of stove?" & vbCrLf & vbCrLf & _
+                      "1. Electric Stove" & vbCrLf & _
+                      "2. Gas Stove" & vbCrLf & _
+                      "3. N/A or owner pays" & vbCrLf & vbCrLf & _
+                      "Enter number (1-3):", "AMI Optix - Cooking", "2")
+    If choice = "" Then Exit Sub
+    Select Case Trim(choice)
+        Case "1": cooking = "electric"
+        Case "2": cooking = "gas"
+        Case "3": cooking = "na"
+        Case Else: cooking = "gas"
+    End Select
 
-    If UCase(Trim(choice)) = "YES" Or choice = "" Then
-        SaveUtilitySelections "tenant_pays", "gas", "gas", "gas"
-        MsgBox "Default utility settings saved.", vbInformation, "AMI Optix"
-    Else
-        MsgBox "To customize utilities, edit the registry or contact support.", vbInformation, "AMI Optix"
-    End If
+    ' HEAT (5 options)
+    choice = InputBox("HEAT - Type of heating?" & vbCrLf & vbCrLf & _
+                      "1. Electric Heat - ccASHP (Cold Climate Air Source Heat Pump)" & vbCrLf & _
+                      "2. Electric Heat - Other" & vbCrLf & _
+                      "3. Gas Heat" & vbCrLf & _
+                      "4. Oil Heat" & vbCrLf & _
+                      "5. N/A or owner pays" & vbCrLf & vbCrLf & _
+                      "Enter number (1-5):", "AMI Optix - Heat", "3")
+    If choice = "" Then Exit Sub
+    Select Case Trim(choice)
+        Case "1": heat = "electric_ccashp"
+        Case "2": heat = "electric_other"
+        Case "3": heat = "gas"
+        Case "4": heat = "oil"
+        Case "5": heat = "na"
+        Case Else: heat = "gas"
+    End Select
+
+    ' HOT WATER (5 options)
+    choice = InputBox("HOT WATER - Type of water heater?" & vbCrLf & vbCrLf & _
+                      "1. Electric Hot Water - Heat Pump" & vbCrLf & _
+                      "2. Electric Hot Water - Other" & vbCrLf & _
+                      "3. Gas Hot Water" & vbCrLf & _
+                      "4. Oil Hot Water" & vbCrLf & _
+                      "5. N/A or owner pays" & vbCrLf & vbCrLf & _
+                      "Enter number (1-5):", "AMI Optix - Hot Water", "3")
+    If choice = "" Then Exit Sub
+    Select Case Trim(choice)
+        Case "1": hotWater = "electric_heat_pump"
+        Case "2": hotWater = "electric_other"
+        Case "3": hotWater = "gas"
+        Case "4": hotWater = "oil"
+        Case "5": hotWater = "na"
+        Case Else: hotWater = "gas"
+    End Select
+
+    ' Save selections
+    SaveUtilitySelections electricity, cooking, heat, hotWater
+
+    MsgBox "Utility settings saved:" & vbCrLf & vbCrLf & _
+           "Electricity: " & electricity & vbCrLf & _
+           "Cooking: " & cooking & vbCrLf & _
+           "Heat: " & heat & vbCrLf & _
+           "Hot Water: " & hotWater, vbInformation, "AMI Optix"
 End Sub
 
 Public Sub ShowSettingsForm()
