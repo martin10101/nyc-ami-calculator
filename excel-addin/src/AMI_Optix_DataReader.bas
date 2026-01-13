@@ -406,7 +406,18 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
             Debug.Print "DEBUG Row " & row & " Unit " & unitId & ": AMI='" & clientAMI & "' IsNumeric=" & IsNumeric(clientAMI)
         End If
 
-        ' Handle percentage format (0.6 or 60% both become 0.6)
+        ' Handle text percentages like "60%" - strip the % sign
+        If VarType(clientAMI) = vbString Then
+            clientAMI = Trim(CStr(clientAMI))
+            ' Remove % sign if present
+            If Right(clientAMI, 1) = "%" Then
+                clientAMI = Left(clientAMI, Len(clientAMI) - 1)
+            End If
+            ' Remove any spaces
+            clientAMI = Replace(clientAMI, " ", "")
+        End If
+
+        ' Handle percentage format (0.6 or 60 both become 0.6)
         If IsNumeric(clientAMI) Then
             If CDbl(clientAMI) <= 0 Then
                 ' No AMI value or zero - skip this unit

@@ -137,6 +137,11 @@ Public Function BuildAPIPayload(units As Collection, utilities As Object) As Str
             json = json & ", ""balcony"": " & IIf(unit("balcony"), "true", "false")
         End If
 
+        ' CRITICAL: Include client_ami so API knows the user's AMI selection
+        If unit.Exists("client_ami") Then
+            json = json & ", ""client_ami"": " & unit("client_ami")
+        End If
+
         json = json & "}"
     Next i
 
