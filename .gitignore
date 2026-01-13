@@ -14,3 +14,7 @@ venv/
 env/
 ENV/
 dashboard_static/
+
+# Uploaded files
+uploads/
+rent_calculators/

@@ -362,10 +362,42 @@ Response:
 
 ---
 
+## Rent Calculator Management
+
+Admins can upload new rent calculator files (yearly updates) without redeploying.
+
+### Admin UI
+Access: `https://nyc-ami-calculator.onrender.com/admin/rent-calculators`
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/rent-calculators` | GET | List all available rent calculators |
+| `/api/rent-calculators/upload` | POST | Upload new rent calculator (.xlsx/.xlsm) |
+| `/api/rent-calculators/activate` | POST | Set the active rent calculator |
+| `/api/rent-calculators/<filename>` | DELETE | Delete a rent calculator |
+
+All endpoints require `X-API-Key` header.
+
+### Storage
+- **Default**: `2025 AMI Rent Calculator Unlocked.xlsx` in repo root (cannot be deleted)
+- **Uploaded**: Stored in `rent_calculators/` folder (Render persistent disk recommended)
+
+### Render Persistent Disk Setup
+1. In Render dashboard, add a Disk to your service
+2. Set mount path to `/var/data`
+3. Add environment variable: `RENT_CALCULATOR_DIR=/var/data/rent_calculators`
+
+---
+
 ## Environment Variables (Server)
 
-- `AMI_OPTIX_API_KEY` - API authentication key
-- Stored in Render environment settings
+| Variable | Description |
+|----------|-------------|
+| `AMI_OPTIX_API_KEY` | API authentication key |
+| `AMI_OPTIX_ADMIN_KEY` | Admin key for rent calculator management (optional, defaults to API key) |
+| `RENT_CALCULATOR_DIR` | Directory for uploaded rent calculators (Render disk mount) |
 
 ## Registry Keys (Excel Client)
 
@@ -374,9 +406,9 @@ Response:
 
 ---
 
-## Pending Features
+## Completed Features
 
-1. **Website PDF Rent Roll Upload** - Allow clients to upload new rent roll PDFs yearly with year selection
+1. **Rent Calculator Upload** - Admins can upload new rent calculator Excel files yearly via `/admin/rent-calculators`
 
 ---
 

@@ -20,9 +20,17 @@ UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
 DASHBOARD_DIR = os.path.join(os.getcwd(), 'dashboard_static')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
+# Rent calculator storage - uses Render persistent disk if available
+# Set RENT_CALCULATOR_DIR env var to your Render disk mount (e.g., /var/data/rent_calculators)
+RENT_CALCULATORS_DIR = os.environ.get('RENT_CALCULATOR_DIR', os.path.join(os.getcwd(), 'rent_calculators'))
+ACTIVE_CALCULATOR_FILE = os.path.join(RENT_CALCULATORS_DIR, '.active')
+os.makedirs(RENT_CALCULATORS_DIR, exist_ok=True)
+
 # API Key for Excel Add-in authentication
 # Set this in environment variable: AMI_OPTIX_API_KEY
 API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')
+# Admin key for rent calculator management (optional, defaults to API key)
+ADMIN_KEY = os.environ.get('AMI_OPTIX_ADMIN_KEY', API_KEY)
 
 
 def _validate_api_key():
@@ -35,6 +43,79 @@ def _validate_api_key():
     if provided_key != API_KEY:
         return jsonify({"error": "Invalid or missing API key"}), 401
     return None
+
+
+def _validate_admin_key():
+    """Validate admin key for rent calculator management. Returns error response or None if valid."""
+    if not ADMIN_KEY:
+        # No admin key configured - allow all requests (dev mode)
+        return None
+
+    provided_key = request.headers.get('X-API-Key', '') or request.headers.get('X-Admin-Key', '')
+    if provided_key != ADMIN_KEY:
+        return jsonify({"error": "Invalid or missing admin key"}), 401
+    return None
+
+
+def _get_active_rent_calculator_path():
+    """Get the path to the active rent calculator file."""
+    # Check if there's an active selection
+    if os.path.exists(ACTIVE_CALCULATOR_FILE):
+        with open(ACTIVE_CALCULATOR_FILE, 'r') as f:
+            active_name = f.read().strip()
+        if active_name:
+            active_path = os.path.join(RENT_CALCULATORS_DIR, active_name)
+            if os.path.exists(active_path):
+                return active_path
+
+    # Fall back to default in repo root
+    default_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
+    if os.path.exists(default_path):
+        return default_path
+
+    return None
+
+
+def _list_rent_calculators():
+    """List all available rent calculator files."""
+    calculators = []
+    active_name = None
+
+    # Get active calculator name
+    if os.path.exists(ACTIVE_CALCULATOR_FILE):
+        with open(ACTIVE_CALCULATOR_FILE, 'r') as f:
+            active_name = f.read().strip()
+
+    # List uploaded calculators
+    if os.path.exists(RENT_CALCULATORS_DIR):
+        for filename in os.listdir(RENT_CALCULATORS_DIR):
+            if filename.startswith('.'):
+                continue
+            if filename.lower().endswith(('.xlsx', '.xlsm')):
+                filepath = os.path.join(RENT_CALCULATORS_DIR, filename)
+                stat = os.stat(filepath)
+                calculators.append({
+                    'name': filename,
+                    'size': stat.st_size,
+                    'modified': stat.st_mtime,
+                    'is_active': filename == active_name,
+                    'source': 'uploaded'
+                })
+
+    # Add default calculator if it exists
+    default_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
+    if os.path.exists(default_path):
+        stat = os.stat(default_path)
+        is_default_active = not active_name  # Default is active if no selection
+        calculators.append({
+            'name': '2025 AMI Rent Calculator Unlocked.xlsx',
+            'size': stat.st_size,
+            'modified': stat.st_mtime,
+            'is_active': is_default_active,
+            'source': 'default'
+        })
+
+    return calculators
 
 
 def _sanitize_for_json(value):
@@ -169,10 +250,10 @@ def optimize_units():
 
         # Load rent schedule and apply rent calculations
         rent_schedule = None
-        default_rent_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
-        if os.path.exists(default_rent_path):
+        rent_calc_path = _get_active_rent_calculator_path()
+        if rent_calc_path:
             try:
-                rent_schedule = load_rent_schedule(default_rent_path)
+                rent_schedule = load_rent_schedule(rent_calc_path)
             except Exception as e:
                 notes.append(f"Warning: Could not load rent calculator: {str(e)}")
 
@@ -316,6 +397,329 @@ def download_report(filename):
         return send_from_directory(UPLOADS_DIR, filename, as_attachment=True)
     except FileNotFoundError:
         return jsonify({"error": "File not found."}), 404
+
+
+# =============================================================================
+# RENT CALCULATOR MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.route('/api/rent-calculators', methods=['GET'])
+def list_rent_calculators():
+    """List all available rent calculator files."""
+    auth_error = _validate_admin_key()
+    if auth_error:
+        return auth_error
+
+    calculators = _list_rent_calculators()
+    active_path = _get_active_rent_calculator_path()
+
+    return jsonify({
+        "calculators": calculators,
+        "active_path": active_path,
+        "storage_dir": RENT_CALCULATORS_DIR
+    })
+
+
+@app.route('/api/rent-calculators/upload', methods=['POST'])
+def upload_rent_calculator():
+    """Upload a new rent calculator file."""
+    auth_error = _validate_admin_key()
+    if auth_error:
+        return auth_error
+
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+
+    # Validate file extension
+    filename = secure_filename(file.filename)
+    if not filename.lower().endswith(('.xlsx', '.xlsm')):
+        return jsonify({"error": "Only .xlsx and .xlsm files are supported"}), 400
+
+    # Save the file
+    filepath = os.path.join(RENT_CALCULATORS_DIR, filename)
+
+    # Check if file already exists
+    if os.path.exists(filepath):
+        overwrite = request.form.get('overwrite', 'false').lower() == 'true'
+        if not overwrite:
+            return jsonify({"error": f"File '{filename}' already exists. Set overwrite=true to replace."}), 409
+
+    try:
+        file.save(filepath)
+
+        # Validate the file is a valid rent calculator by trying to load it
+        try:
+            schedule = load_rent_schedule(filepath)
+            # Basic validation - check it has rent data
+            if not schedule.gross_rents:
+                os.remove(filepath)
+                return jsonify({"error": "File does not appear to be a valid rent calculator (no rent data found)"}), 400
+        except Exception as e:
+            os.remove(filepath)
+            return jsonify({"error": f"Invalid rent calculator file: {str(e)}"}), 400
+
+        return jsonify({
+            "success": True,
+            "message": f"Uploaded {filename}",
+            "filename": filename
+        })
+
+    except Exception as e:
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
+
+
+@app.route('/api/rent-calculators/activate', methods=['POST'])
+def activate_rent_calculator():
+    """Set the active rent calculator."""
+    auth_error = _validate_admin_key()
+    if auth_error:
+        return auth_error
+
+    data = request.get_json()
+    if not data or 'name' not in data:
+        return jsonify({"error": "Missing 'name' in request body"}), 400
+
+    name = data['name']
+
+    # Check if it's the default (clear the active selection)
+    if name == '2025 AMI Rent Calculator Unlocked.xlsx' or name == 'default':
+        if os.path.exists(ACTIVE_CALCULATOR_FILE):
+            os.remove(ACTIVE_CALCULATOR_FILE)
+        return jsonify({
+            "success": True,
+            "message": "Activated default rent calculator",
+            "active": "2025 AMI Rent Calculator Unlocked.xlsx"
+        })
+
+    # Verify the file exists
+    filepath = os.path.join(RENT_CALCULATORS_DIR, name)
+    if not os.path.exists(filepath):
+        return jsonify({"error": f"Rent calculator '{name}' not found"}), 404
+
+    # Set as active
+    with open(ACTIVE_CALCULATOR_FILE, 'w') as f:
+        f.write(name)
+
+    return jsonify({
+        "success": True,
+        "message": f"Activated {name}",
+        "active": name
+    })
+
+
+@app.route('/api/rent-calculators/<filename>', methods=['DELETE'])
+def delete_rent_calculator(filename):
+    """Delete a rent calculator file."""
+    auth_error = _validate_admin_key()
+    if auth_error:
+        return auth_error
+
+    # Cannot delete the default
+    if filename == '2025 AMI Rent Calculator Unlocked.xlsx':
+        return jsonify({"error": "Cannot delete the default rent calculator"}), 400
+
+    filepath = os.path.join(RENT_CALCULATORS_DIR, secure_filename(filename))
+    if not os.path.exists(filepath):
+        return jsonify({"error": f"File '{filename}' not found"}), 404
+
+    # If this was the active calculator, clear the selection
+    if os.path.exists(ACTIVE_CALCULATOR_FILE):
+        with open(ACTIVE_CALCULATOR_FILE, 'r') as f:
+            active_name = f.read().strip()
+        if active_name == filename:
+            os.remove(ACTIVE_CALCULATOR_FILE)
+
+    os.remove(filepath)
+
+    return jsonify({
+        "success": True,
+        "message": f"Deleted {filename}"
+    })
+
+
+@app.route('/admin/rent-calculators')
+def rent_calculator_admin():
+    """Simple admin page for rent calculator management."""
+    html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AMI Optix - Rent Calculator Admin</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+        h1 { color: #2c3e50; }
+        .card { background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0; }
+        .active { background: #d4edda; border-left: 4px solid #28a745; }
+        .default { background: #e7f3ff; border-left: 4px solid #007bff; }
+        button { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+        button:hover { background: #0056b3; }
+        button.danger { background: #dc3545; }
+        button.danger:hover { background: #c82333; }
+        button.success { background: #28a745; }
+        input[type="file"] { margin: 10px 0; }
+        .status { padding: 10px; border-radius: 4px; margin: 10px 0; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.success { background: #d4edda; color: #155724; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .badge.active { background: #28a745; color: white; }
+        .badge.default { background: #007bff; color: white; }
+    </style>
+</head>
+<body>
+    <h1>🏠 Rent Calculator Admin</h1>
+
+    <div class="card">
+        <h2>Upload New Calculator</h2>
+        <p>Upload a new rent calculator Excel file (.xlsx or .xlsm)</p>
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm">
+        <br>
+        <label><input type="checkbox" id="overwrite"> Overwrite if exists</label>
+        <br><br>
+        <button onclick="uploadFile()">Upload</button>
+        <div id="uploadStatus"></div>
+    </div>
+
+    <div class="card">
+        <h2>Available Calculators</h2>
+        <div id="calculatorList">Loading...</div>
+    </div>
+
+    <script>
+        const apiKey = prompt('Enter API Key:');
+
+        async function fetchCalculators() {
+            try {
+                const res = await fetch('/api/rent-calculators', {
+                    headers: { 'X-API-Key': apiKey }
+                });
+                const data = await res.json();
+                if (data.error) {
+                    document.getElementById('calculatorList').innerHTML = '<p class="status error">' + data.error + '</p>';
+                    return;
+                }
+                renderCalculators(data.calculators);
+            } catch (e) {
+                document.getElementById('calculatorList').innerHTML = '<p class="status error">Failed to load: ' + e.message + '</p>';
+            }
+        }
+
+        function renderCalculators(calculators) {
+            if (!calculators || calculators.length === 0) {
+                document.getElementById('calculatorList').innerHTML = '<p>No calculators found.</p>';
+                return;
+            }
+
+            let html = '<table><tr><th>Name</th><th>Source</th><th>Size</th><th>Actions</th></tr>';
+            calculators.forEach(calc => {
+                const badges = [];
+                if (calc.is_active) badges.push('<span class="badge active">Active</span>');
+                if (calc.source === 'default') badges.push('<span class="badge default">Default</span>');
+
+                const actions = [];
+                if (!calc.is_active) {
+                    actions.push('<button onclick="activateCalc(\\'' + calc.name + '\\')">Activate</button>');
+                }
+                if (calc.source !== 'default') {
+                    actions.push('<button class="danger" onclick="deleteCalc(\\'' + calc.name + '\\')">Delete</button>');
+                }
+
+                html += '<tr class="' + (calc.is_active ? 'active' : '') + ' ' + (calc.source === 'default' ? 'default' : '') + '">';
+                html += '<td>' + calc.name + ' ' + badges.join(' ') + '</td>';
+                html += '<td>' + calc.source + '</td>';
+                html += '<td>' + Math.round(calc.size / 1024) + ' KB</td>';
+                html += '<td>' + actions.join('') + '</td>';
+                html += '</tr>';
+            });
+            html += '</table>';
+            document.getElementById('calculatorList').innerHTML = html;
+        }
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const overwrite = document.getElementById('overwrite').checked;
+            const statusDiv = document.getElementById('uploadStatus');
+
+            if (!fileInput.files[0]) {
+                statusDiv.innerHTML = '<p class="status error">Please select a file</p>';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('overwrite', overwrite);
+
+            statusDiv.innerHTML = '<p>Uploading...</p>';
+
+            try {
+                const res = await fetch('/api/rent-calculators/upload', {
+                    method: 'POST',
+                    headers: { 'X-API-Key': apiKey },
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.error) {
+                    statusDiv.innerHTML = '<p class="status error">' + data.error + '</p>';
+                } else {
+                    statusDiv.innerHTML = '<p class="status success">' + data.message + '</p>';
+                    fetchCalculators();
+                }
+            } catch (e) {
+                statusDiv.innerHTML = '<p class="status error">Upload failed: ' + e.message + '</p>';
+            }
+        }
+
+        async function activateCalc(name) {
+            try {
+                const res = await fetch('/api/rent-calculators/activate', {
+                    method: 'POST',
+                    headers: {
+                        'X-API-Key': apiKey,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: name })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                } else {
+                    fetchCalculators();
+                }
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+
+        async function deleteCalc(name) {
+            if (!confirm('Delete ' + name + '?')) return;
+
+            try {
+                const res = await fetch('/api/rent-calculators/' + encodeURIComponent(name), {
+                    method: 'DELETE',
+                    headers: { 'X-API-Key': apiKey }
+                });
+                const data = await res.json();
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                } else {
+                    fetchCalculators();
+                }
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+
+        fetchCalculators();
+    </script>
+</body>
+</html>
+"""
+    return html, 200, {'Content-Type': 'text/html'}
 
 
 @app.route('/', defaults={'path': ''})
