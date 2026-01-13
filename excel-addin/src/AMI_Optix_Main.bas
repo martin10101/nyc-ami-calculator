@@ -62,14 +62,8 @@ ErrorHandler:
 End Sub
 
 Public Sub OnUtilitiesClick(control As IRibbonControl)
-    ' Show utilities configuration form
-    On Error GoTo ErrorHandler
-
-    frmUtilities.Show
-    Exit Sub
-
-ErrorHandler:
-    MsgBox "Error opening utilities form: " & Err.Description, vbCritical, "AMI Optix"
+    ' Show utilities configuration using InputBox prompts
+    ShowUtilityForm
 End Sub
 
 Public Sub OnViewScenariosClick(control As IRibbonControl)
