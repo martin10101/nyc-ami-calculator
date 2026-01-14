@@ -410,6 +410,10 @@ def find_optimal_scenarios(
         )
     if not unique_results:
         return {"scenarios": {}, "notes": ["The solver could not find any optimal solutions given the project constraints."]}
+
+    # Add diagnostic note about scenarios found
+    notes.append(f"Found {len(unique_results)} unique scenario(s) from {combos_checked} band combinations checked.")
+
     sorted_results = sorted(
         unique_results.values(),
         key=lambda x: (x['waami'], x['metrics']['revenue_score'], x['premium_score']),
@@ -419,29 +423,27 @@ def find_optimal_scenarios(
     # --- Dynamic WAAMI Threshold Filtering ---
     # If a 60%+ scenario exists, allow scenarios within 1% of best to show as alternatives
     # This shows alternative band mixes even if they have slightly lower WAAMI
-    if sorted_results:
-        best_waami = sorted_results[0]['waami']
-        dynamic_thresholds = [0.60, 0.50, 0.40, 0.30]  # Standard AMI thresholds
-        dynamic_floor = None
-        for threshold in dynamic_thresholds:
-            if best_waami >= threshold:
-                # Allow 1% tolerance below the threshold for alternative scenarios
-                dynamic_floor = threshold - 0.01
-                break
-        if dynamic_floor:
-            pre_filter_count = len(sorted_results)
-            sorted_results = [r for r in sorted_results if r['waami'] >= dynamic_floor - 0.001]
-            if len(sorted_results) < pre_filter_count:
-                notes.append(
-                    f"Filtered {pre_filter_count - len(sorted_results)} scenario(s) below {(dynamic_floor + 0.01)*100:.0f}% WAAMI threshold (with 1% tolerance for alternatives)."
-                )
-
     reporting_floor = optimization_rules.get('waami_floor')
     if reporting_floor is None:
         reporting_floor = 0.58
     reporting_floor = max(0.58, reporting_floor)
+
+    # Determine effective floor based on best result
+    effective_floor = reporting_floor
+    if sorted_results:
+        best_waami = sorted_results[0]['waami']
+        # If best WAAMI is close to cap (60%), show alternatives down to 59%
+        # This allows scenarios like 59.8% to appear alongside 60%
+        if best_waami >= 0.595:
+            # Best is near 60%, allow scenarios down to 59%
+            effective_floor = min(reporting_floor, 0.59)
+            notes.append(f"Showing alternative scenarios down to 59% WAAMI (best found: {best_waami*100:.2f}%).")
+        elif best_waami >= reporting_floor:
+            # Allow 1% tolerance below best
+            effective_floor = max(0.58, best_waami - 0.01)
+
     epsilon = 1e-9
-    filtered_results = [r for r in sorted_results if r['waami'] + epsilon >= reporting_floor]
+    filtered_results = [r for r in sorted_results if r['waami'] + epsilon >= effective_floor]
     if filtered_results:
         if len(filtered_results) < len(sorted_results):
             notes.append(

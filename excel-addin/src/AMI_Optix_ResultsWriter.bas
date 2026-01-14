@@ -188,6 +188,10 @@ Public Sub CreateScenariosSheet(result As Object)
     ws.Cells(row, 1).Font.Size = 16
     row = row + 2
 
+    ' Display utility settings at the top
+    row = WriteUtilitySettings(ws, row)
+    row = row + 1
+
     ' Notes from solver
     If result.Exists("notes") Then
         ws.Cells(row, 1).Value = "Solver Notes:"
@@ -272,7 +276,7 @@ Public Sub CreateScenariosSheet(result As Object)
 
         row = row + 1
 
-        ' Unit assignments table header
+        ' Unit assignments table header - expanded for utility breakdown
         ws.Cells(row, 1).Value = "Unit"
         ws.Cells(row, 2).Value = "Bedrooms"
         ws.Cells(row, 3).Value = "AMI"
@@ -303,7 +307,45 @@ Public Sub CreateScenariosSheet(result As Object)
                     ws.Cells(row, 4).NumberFormat = "$#,##0.00"
                 End If
 
-                If assignment.Exists("allowance_total") Then
+                ' Show allowance breakdown if available
+                If assignment.Exists("allowances") Then
+                    Dim allowances As Object
+                    Set allowances = assignment("allowances")
+                    Dim allowanceStr As String
+                    allowanceStr = ""
+
+                    ' Build breakdown string: Elec($X) + Cook($Y) + Heat($Z) + HW($W)
+                    If allowances.Exists("electricity") Then
+                        If CDbl(allowances("electricity")) > 0 Then
+                            allowanceStr = "Elec($" & Format(allowances("electricity"), "0") & ")"
+                        End If
+                    End If
+                    If allowances.Exists("cooking") Then
+                        If CDbl(allowances("cooking")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "Cook($" & Format(allowances("cooking"), "0") & ")"
+                        End If
+                    End If
+                    If allowances.Exists("heat") Then
+                        If CDbl(allowances("heat")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "Heat($" & Format(allowances("heat"), "0") & ")"
+                        End If
+                    End If
+                    If allowances.Exists("hot_water") Then
+                        If CDbl(allowances("hot_water")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "HW($" & Format(allowances("hot_water"), "0") & ")"
+                        End If
+                    End If
+
+                    If allowanceStr <> "" Then
+                        ws.Cells(row, 5).Value = allowanceStr
+                    ElseIf assignment.Exists("allowance_total") Then
+                        ws.Cells(row, 5).Value = assignment("allowance_total")
+                        ws.Cells(row, 5).NumberFormat = "$#,##0.00"
+                    End If
+                ElseIf assignment.Exists("allowance_total") Then
                     ws.Cells(row, 5).Value = assignment("allowance_total")
                     ws.Cells(row, 5).NumberFormat = "$#,##0.00"
                 End If
@@ -357,6 +399,108 @@ Private Function FormatScenarioName(key As String) As String
             FormatScenarioName = "CLIENT ORIENTED (MAX REVENUE)"
         Case Else
             FormatScenarioName = UCase(Replace(key, "_", " "))
+    End Select
+End Function
+
+'-------------------------------------------------------------------------------
+' UTILITY SETTINGS DISPLAY
+'-------------------------------------------------------------------------------
+
+Private Function WriteUtilitySettings(ws As Worksheet, startRow As Long) As Long
+    ' Writes the current utility settings to the scenarios sheet
+    ' Shows which utilities the TENANT pays for (affects rent calculations)
+
+    Dim row As Long
+    row = startRow
+
+    ' Header
+    ws.Cells(row, 1).Value = "TENANT-PAID UTILITIES (Affects Rent Allowances)"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 12
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(255, 230, 200)
+    row = row + 1
+
+    ' Get current utility settings from registry
+    Dim elec As String, cook As String, heat As String, hw As String
+    elec = GetSetting("AMI_Optix", "Utilities", "electricity", "na")
+    cook = GetSetting("AMI_Optix", "Utilities", "cooking", "na")
+    heat = GetSetting("AMI_Optix", "Utilities", "heat", "na")
+    hw = GetSetting("AMI_Optix", "Utilities", "hot_water", "na")
+
+    ' Column headers
+    ws.Cells(row, 1).Value = "Utility"
+    ws.Cells(row, 2).Value = "Tenant Pays?"
+    ws.Cells(row, 3).Value = "Type"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Interior.Color = RGB(230, 230, 230)
+    row = row + 1
+
+    ' Electricity
+    ws.Cells(row, 1).Value = "Electricity"
+    If elec = "tenant_pays" Then
+        ws.Cells(row, 2).Value = "YES"
+        ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
+        ws.Cells(row, 3).Value = "Standard"
+    Else
+        ws.Cells(row, 2).Value = "NO"
+        ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
+        ws.Cells(row, 3).Value = "Owner Pays"
+    End If
+    row = row + 1
+
+    ' Cooking
+    ws.Cells(row, 1).Value = "Cooking"
+    If cook <> "na" Then
+        ws.Cells(row, 2).Value = "YES"
+        ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
+        ws.Cells(row, 3).Value = FormatUtilityType(cook)
+    Else
+        ws.Cells(row, 2).Value = "NO"
+        ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
+        ws.Cells(row, 3).Value = "Owner Pays"
+    End If
+    row = row + 1
+
+    ' Heat
+    ws.Cells(row, 1).Value = "Heat"
+    If heat <> "na" Then
+        ws.Cells(row, 2).Value = "YES"
+        ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
+        ws.Cells(row, 3).Value = FormatUtilityType(heat)
+    Else
+        ws.Cells(row, 2).Value = "NO"
+        ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
+        ws.Cells(row, 3).Value = "Owner Pays"
+    End If
+    row = row + 1
+
+    ' Hot Water
+    ws.Cells(row, 1).Value = "Hot Water"
+    If hw <> "na" Then
+        ws.Cells(row, 2).Value = "YES"
+        ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
+        ws.Cells(row, 3).Value = FormatUtilityType(hw)
+    Else
+        ws.Cells(row, 2).Value = "NO"
+        ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
+        ws.Cells(row, 3).Value = "Owner Pays"
+    End If
+    row = row + 1
+
+    WriteUtilitySettings = row
+End Function
+
+Private Function FormatUtilityType(value As String) As String
+    ' Formats utility type code to display name
+    Select Case value
+        Case "electric", "electric_stove": FormatUtilityType = "Electric"
+        Case "gas": FormatUtilityType = "Gas"
+        Case "oil": FormatUtilityType = "Oil"
+        Case "electric_ccashp": FormatUtilityType = "Electric (ccASHP)"
+        Case "electric_other": FormatUtilityType = "Electric (Other)"
+        Case "electric_heat_pump": FormatUtilityType = "Electric (Heat Pump)"
+        Case "tenant_pays": FormatUtilityType = "Standard"
+        Case Else: FormatUtilityType = value
     End Select
 End Function
 
