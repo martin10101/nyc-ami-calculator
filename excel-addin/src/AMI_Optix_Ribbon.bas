@@ -234,98 +234,71 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Public Sub ShowUtilityForm()
-    ' Utility configuration - ALL options on ONE screen
+    ' Utility configuration - 4 simple prompts with CLEAR options
     Dim electricity As String
     Dim cooking As String
     Dim heat As String
     Dim hotWater As String
     Dim response As String
-    Dim parts() As String
 
-    ' Build the comprehensive prompt showing all options at once
-    Dim prompt As String
-    prompt = "TENANT-PAID UTILITIES CONFIGURATION" & vbCrLf & _
-             String(40, "-") & vbCrLf & vbCrLf & _
-             "A) ELECTRICITY:" & vbCrLf & _
-             "   1 = Tenant Pays" & vbCrLf & _
-             "   2 = Owner Pays / N/A" & vbCrLf & vbCrLf & _
-             "B) COOKING:" & vbCrLf & _
-             "   1 = Electric Stove" & vbCrLf & _
-             "   2 = Gas Stove" & vbCrLf & _
-             "   3 = Owner Pays / N/A" & vbCrLf & vbCrLf & _
-             "C) HEAT:" & vbCrLf & _
-             "   1 = Electric (ccASHP)" & vbCrLf & _
-             "   2 = Electric (Other)" & vbCrLf & _
-             "   3 = Gas" & vbCrLf & _
-             "   4 = Oil" & vbCrLf & _
-             "   5 = Owner Pays / N/A" & vbCrLf & vbCrLf & _
-             "D) HOT WATER:" & vbCrLf & _
-             "   1 = Electric (Heat Pump)" & vbCrLf & _
-             "   2 = Electric (Other)" & vbCrLf & _
-             "   3 = Gas" & vbCrLf & _
-             "   4 = Oil" & vbCrLf & _
-             "   5 = Owner Pays / N/A" & vbCrLf & vbCrLf & _
-             String(40, "-") & vbCrLf & _
-             "Enter 4 numbers separated by commas:" & vbCrLf & _
-             "(A, B, C, D) Example: 1,2,3,3"
+    ' ELECTRICITY - simple Y/N
+    response = MsgBox("Does the TENANT pay for ELECTRICITY?" & vbCrLf & vbCrLf & _
+                      "Click YES if tenant pays" & vbCrLf & _
+                      "Click NO if owner pays or N/A", _
+                      vbYesNoCancel + vbQuestion, "AMI Optix - Electricity")
+    If response = vbCancel Then Exit Sub
+    electricity = IIf(response = vbYes, "tenant_pays", "na")
 
-    ' Get current settings for default value
-    Dim currElec As String, currCook As String, currHeat As String, currHW As String
-    currElec = GetSetting("AMI_Optix", "Utilities", "electricity", "tenant_pays")
-    currCook = GetSetting("AMI_Optix", "Utilities", "cooking", "gas")
-    currHeat = GetSetting("AMI_Optix", "Utilities", "heat", "gas")
-    currHW = GetSetting("AMI_Optix", "Utilities", "hot_water", "gas")
-
-    ' Convert current settings to numbers for default display
-    Dim defaultVal As String
-    defaultVal = UtilityToNumber(currElec, "electricity") & "," & _
-                 UtilityToNumber(currCook, "cooking") & "," & _
-                 UtilityToNumber(currHeat, "heat") & "," & _
-                 UtilityToNumber(currHW, "hot_water")
-
-    response = InputBox(prompt, "AMI Optix - Utility Configuration", defaultVal)
-    If response = "" Then Exit Sub  ' Cancelled
-
-    ' Parse the response
-    parts = Split(Replace(response, " ", ""), ",")
-    If UBound(parts) < 3 Then
-        MsgBox "Invalid input. Please enter 4 numbers separated by commas." & vbCrLf & _
-               "Example: 1,2,3,3", vbExclamation, "AMI Optix"
-        Exit Sub
-    End If
-
-    ' Parse ELECTRICITY
-    Select Case Trim(parts(0))
-        Case "1": electricity = "tenant_pays"
-        Case "2": electricity = "na"
-        Case Else: electricity = "tenant_pays"
-    End Select
-
-    ' Parse COOKING
-    Select Case Trim(parts(1))
-        Case "1": cooking = "electric"
-        Case "2": cooking = "gas"
-        Case "3": cooking = "na"
+    ' COOKING - choose type
+    response = InputBox("COOKING - What type?" & vbCrLf & vbCrLf & _
+                        "E = Electric Stove (tenant pays)" & vbCrLf & _
+                        "G = Gas Stove (tenant pays)" & vbCrLf & _
+                        "N = Owner pays / N/A" & vbCrLf & vbCrLf & _
+                        "Enter E, G, or N:", _
+                        "AMI Optix - Cooking", "G")
+    If response = "" Then Exit Sub
+    Select Case UCase(Trim(response))
+        Case "E": cooking = "electric"
+        Case "G": cooking = "gas"
+        Case "N": cooking = "na"
         Case Else: cooking = "gas"
     End Select
 
-    ' Parse HEAT
-    Select Case Trim(parts(2))
+    ' HEAT - choose type
+    response = InputBox("HEAT - What type does TENANT pay?" & vbCrLf & vbCrLf & _
+                        "1 = Electric (ccASHP)" & vbCrLf & _
+                        "2 = Electric (Other)" & vbCrLf & _
+                        "3 = Gas" & vbCrLf & _
+                        "4 = Oil" & vbCrLf & _
+                        "N = Owner pays / N/A" & vbCrLf & vbCrLf & _
+                        "Enter 1, 2, 3, 4, or N:", _
+                        "AMI Optix - Heat", "3")
+    If response = "" Then Exit Sub
+    Select Case UCase(Trim(response))
         Case "1": heat = "electric_ccashp"
         Case "2": heat = "electric_other"
         Case "3": heat = "gas"
         Case "4": heat = "oil"
-        Case "5": heat = "na"
+        Case "N": heat = "na"
         Case Else: heat = "gas"
     End Select
 
-    ' Parse HOT WATER
-    Select Case Trim(parts(3))
+    ' HOT WATER - choose type
+    response = InputBox("HOT WATER - What type does TENANT pay?" & vbCrLf & vbCrLf & _
+                        "1 = Electric (Heat Pump)" & vbCrLf & _
+                        "2 = Electric (Other)" & vbCrLf & _
+                        "3 = Gas" & vbCrLf & _
+                        "4 = Oil" & vbCrLf & _
+                        "N = Owner pays / N/A" & vbCrLf & vbCrLf & _
+                        "Enter 1, 2, 3, 4, or N:", _
+                        "AMI Optix - Hot Water", "3")
+    If response = "" Then Exit Sub
+    Select Case UCase(Trim(response))
         Case "1": hotWater = "electric_heat_pump"
         Case "2": hotWater = "electric_other"
         Case "3": hotWater = "gas"
         Case "4": hotWater = "oil"
-        Case "5": hotWater = "na"
+        Case "N": hotWater = "na"
         Case Else: hotWater = "gas"
     End Select
 
@@ -339,41 +312,6 @@ Public Sub ShowUtilityForm()
            "Heat: " & UtilityDisplayName(heat) & vbCrLf & _
            "Hot Water: " & UtilityDisplayName(hotWater), vbInformation, "AMI Optix"
 End Sub
-
-Private Function UtilityToNumber(value As String, category As String) As String
-    ' Convert utility code to number for display
-    Select Case category
-        Case "electricity"
-            Select Case value
-                Case "tenant_pays": UtilityToNumber = "1"
-                Case Else: UtilityToNumber = "2"
-            End Select
-        Case "cooking"
-            Select Case value
-                Case "electric": UtilityToNumber = "1"
-                Case "gas": UtilityToNumber = "2"
-                Case Else: UtilityToNumber = "3"
-            End Select
-        Case "heat"
-            Select Case value
-                Case "electric_ccashp": UtilityToNumber = "1"
-                Case "electric_other": UtilityToNumber = "2"
-                Case "gas": UtilityToNumber = "3"
-                Case "oil": UtilityToNumber = "4"
-                Case Else: UtilityToNumber = "5"
-            End Select
-        Case "hot_water"
-            Select Case value
-                Case "electric_heat_pump": UtilityToNumber = "1"
-                Case "electric_other": UtilityToNumber = "2"
-                Case "gas": UtilityToNumber = "3"
-                Case "oil": UtilityToNumber = "4"
-                Case Else: UtilityToNumber = "5"
-            End Select
-        Case Else
-            UtilityToNumber = "1"
-    End Select
-End Function
 
 Private Function UtilityDisplayName(value As String) As String
     ' Convert utility code to friendly display name

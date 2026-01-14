@@ -187,9 +187,24 @@ Public Sub RunOptimization()
                "- Bedrooms (BED, BEDS, etc.)" & vbCrLf & _
                "- Net SF (NET SF, SQFT, etc.)" & vbCrLf & _
                "- Floor (optional)" & vbCrLf & _
-               "- AMI (for writing results)", _
+               "- AMI (must have NUMERIC value to be included)", _
                vbExclamation, "AMI Optix"
         GoTo Cleanup
+    End If
+
+    ' DEBUG: Show unit count - warn if very few
+    Debug.Print "=== UNITS FOUND ==="
+    Debug.Print "Total units with valid AMI values: " & units.Count
+
+    If units.Count <= 3 Then
+        Dim continueAnyway As VbMsgBoxResult
+        continueAnyway = MsgBox("WARNING: Only " & units.Count & " unit(s) found!" & vbCrLf & vbCrLf & _
+                                "Units are only included if the AMI column has a" & vbCrLf & _
+                                "NUMERIC value (like 60, 0.6, or 60%)." & vbCrLf & vbCrLf & _
+                                "Check your AMI column - empty or text values are skipped." & vbCrLf & vbCrLf & _
+                                "Continue with " & units.Count & " unit(s)?", _
+                                vbYesNo + vbExclamation, "AMI Optix - Low Unit Count")
+        If continueAnyway = vbNo Then GoTo Cleanup
     End If
 
     ' Step 3: Get utility selections
