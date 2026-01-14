@@ -397,7 +397,7 @@ End Sub
 
 Public Sub ShowScenarioSelector()
     ' Shows scenario selection dialog to apply different scenarios
-    On Error GoTo ErrorHandler
+    ' Uses InputBox-based selection (no forms needed)
 
     If g_LastScenarios Is Nothing Then
         MsgBox "No scenarios available." & vbCrLf & vbCrLf & _
@@ -410,7 +410,7 @@ Public Sub ShowScenarioSelector()
     Dim ws As Worksheet
     On Error Resume Next
     Set ws = ActiveWorkbook.Worksheets("AMI Scenarios")
-    On Error GoTo ErrorHandler
+    On Error GoTo 0
 
     If ws Is Nothing Then
         MsgBox "No scenarios sheet found." & vbCrLf & vbCrLf & _
@@ -419,12 +419,7 @@ Public Sub ShowScenarioSelector()
         Exit Sub
     End If
 
-    ' Show scenario picker
-    frmScenarioPicker.Show
-    Exit Sub
-
-ErrorHandler:
-    ' If form doesn't exist, show simple list
+    ' Show simple scenario list (InputBox-based)
     ShowScenarioList
 End Sub
 
