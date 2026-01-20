@@ -107,20 +107,93 @@ End Function
 '-------------------------------------------------------------------------------
 
 Public Function BuildAPIPayload(units As Collection, utilities As Object) As String
-    ' Builds JSON payload for API request
+    ' Backward-compatible payload builder (defaults to UAP).
+    BuildAPIPayload = BuildAPIPayloadV2(units, utilities, "UAP", "", 0, 0)
+End Function
+
+Public Function CallEvaluateAPI(payload As String) As String
+    ' Makes POST request to /api/evaluate endpoint
+    Dim http As Object
+    Dim url As String
+    Dim apiKey As String
+
+    On Error GoTo ErrorHandler
+
+    url = API_BASE_URL & "/api/evaluate"
+    apiKey = GetAPIKey()
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 30000, 30000, 120000
+
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Accept", "application/json"
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
+
+    http.send payload
+
+    If http.Status = 200 Then
+        CallEvaluateAPI = http.responseText
+    ElseIf http.Status = 401 Then
+        MsgBox "Invalid API key." & vbCrLf & vbCrLf & _
+               "Please check your API key in Settings.", _
+               vbCritical, "AMI Optix - Authentication Failed"
+        CallEvaluateAPI = ""
+    Else
+        Debug.Print "API Error: " & http.Status & " - " & http.statusText
+        Debug.Print "Response: " & http.responseText
+        MsgBox "API Error: " & http.Status & " - " & http.statusText, _
+               vbExclamation, "AMI Optix"
+        CallEvaluateAPI = ""
+    End If
+
+    Exit Function
+
+ErrorHandler:
+    Debug.Print "HTTP Error: " & Err.Description
+    MsgBox "Connection error: " & Err.Description, vbExclamation, "AMI Optix"
+    CallEvaluateAPI = ""
+End Function
+
+Public Function BuildAPIPayloadV2( _
+    units As Collection, _
+    utilities As Object, _
+    program As String, _
+    mihOption As String, _
+    mihResidentialSF As Double, _
+    mihMaxBandPercent As Long _
+) As String
+    ' Builds JSON payload for API request (supports UAP/MIH).
     Dim json As String
     Dim unit As Object
     Dim i As Long
 
-    ' Start JSON object
+    Dim programNorm As String
+    programNorm = UCase(Trim(program))
+    If programNorm = "" Then programNorm = "UAP"
+
     json = "{"
 
-    ' Add units array
-    json = json & """units"": ["
+    json = json & """program"": """ & EscapeJSON(programNorm) & """, "
 
+    If programNorm = "MIH" Then
+        If mihOption <> "" Then
+            json = json & """mih_option"": """ & EscapeJSON(mihOption) & """, "
+        End If
+        If mihResidentialSF > 0 Then
+            json = json & """mih_residential_sf"": " & Replace(CStr(mihResidentialSF), ",", "") & ", "
+        End If
+        If mihMaxBandPercent > 0 Then
+            json = json & """mih_max_band_percent"": " & mihMaxBandPercent & ", "
+        End If
+    End If
+
+    ' Units array
+    json = json & """units"": ["
     For i = 1 To units.Count
         Set unit = units(i)
-
         If i > 1 Then json = json & ", "
 
         json = json & "{"
@@ -128,26 +201,21 @@ Public Function BuildAPIPayload(units As Collection, utilities As Object) As Str
         json = json & """bedrooms"": " & unit("bedrooms") & ", "
         json = json & """net_sf"": " & unit("net_sf")
 
-        ' Optional fields
         If unit.Exists("floor") Then
             json = json & ", ""floor"": " & unit("floor")
         End If
-
         If unit.Exists("balcony") Then
             json = json & ", ""balcony"": " & IIf(unit("balcony"), "true", "false")
         End If
-
-        ' CRITICAL: Include client_ami so API knows the user's AMI selection
         If unit.Exists("client_ami") Then
             json = json & ", ""client_ami"": " & unit("client_ami")
         End If
 
         json = json & "}"
     Next i
-
     json = json & "], "
 
-    ' Add utilities
+    ' Utilities
     json = json & """utilities"": {"
     json = json & """electricity"": """ & utilities("electricity") & """, "
     json = json & """cooking"": """ & utilities("cooking") & """, "
@@ -155,10 +223,78 @@ Public Function BuildAPIPayload(units As Collection, utilities As Object) As Str
     json = json & """hot_water"": """ & utilities("hot_water") & """"
     json = json & "}"
 
-    ' Close JSON object
     json = json & "}"
 
-    BuildAPIPayload = json
+    BuildAPIPayloadV2 = json
+End Function
+
+Public Function BuildEvaluatePayloadV2( _
+    units As Collection, _
+    utilities As Object, _
+    program As String, _
+    mihOption As String, _
+    mihResidentialSF As Double, _
+    mihMaxBandPercent As Long _
+) As String
+    ' Builds JSON payload for /api/evaluate (explicit assigned_ami per unit).
+    Dim json As String
+    Dim unit As Object
+    Dim i As Long
+    Dim programNorm As String
+
+    programNorm = UCase(Trim(program))
+    If programNorm = "" Then programNorm = "UAP"
+
+    json = "{"
+    json = json & """program"": """ & EscapeJSON(programNorm) & """, "
+
+    If programNorm = "MIH" Then
+        If mihOption <> "" Then
+            json = json & """mih_option"": """ & EscapeJSON(mihOption) & """, "
+        End If
+        If mihResidentialSF > 0 Then
+            json = json & """mih_residential_sf"": " & Replace(CStr(mihResidentialSF), ",", "") & ", "
+        End If
+        If mihMaxBandPercent > 0 Then
+            json = json & """mih_max_band_percent"": " & mihMaxBandPercent & ", "
+        End If
+    End If
+
+    json = json & """utilities"": {"
+    json = json & """electricity"": """ & utilities("electricity") & """, "
+    json = json & """cooking"": """ & utilities("cooking") & """, "
+    json = json & """heat"": """ & utilities("heat") & """, "
+    json = json & """hot_water"": """ & utilities("hot_water") & """"
+    json = json & "}, "
+
+    json = json & """units"": ["
+    For i = 1 To units.Count
+        Set unit = units(i)
+        If i > 1 Then json = json & ", "
+
+        json = json & "{"
+        json = json & """unit_id"": """ & EscapeJSON(CStr(unit("unit_id"))) & """, "
+        json = json & """bedrooms"": " & unit("bedrooms") & ", "
+        json = json & """net_sf"": " & unit("net_sf")
+
+        If unit.Exists("floor") Then
+            json = json & ", ""floor"": " & unit("floor")
+        End If
+        If unit.Exists("balcony") Then
+            json = json & ", ""balcony"": " & IIf(unit("balcony"), "true", "false")
+        End If
+
+        If unit.Exists("client_ami") Then
+            json = json & ", ""assigned_ami"": " & unit("client_ami")
+        End If
+
+        json = json & "}"
+    Next i
+    json = json & "]"
+
+    json = json & "}"
+
+    BuildEvaluatePayloadV2 = json
 End Function
 
 Private Function EscapeJSON(str As String) As String

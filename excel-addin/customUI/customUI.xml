@@ -15,12 +15,21 @@
 
           <!-- Optimize Button (Large) -->
           <button id="btnOptimize"
-                  label="Optimize"
+                  label="Run UAP"
                   size="large"
                   imageMso="RecurrenceEdit"
                   onAction="OnOptimizeClick"
                   screentip="Run AMI Optimization"
                   supertip="Analyzes unit data in the current workbook and finds optimal AMI assignments. Results are written to the AMI column and a scenarios sheet is created."/>
+
+          <!-- Optimize MIH Button (Large) -->
+          <button id="btnOptimizeMIH"
+                  label="Run MIH"
+                  size="large"
+                  imageMso="RecurrenceEdit"
+                  onAction="OnOptimizeMIHClick"
+                  screentip="Run MIH Optimization"
+                  supertip="Runs MIH optimization using MIH!J21 as the residential SF denominator and applying MIH Option 1/Option 4 rules."/>
 
           <!-- View Scenarios Button (Large) -->
           <button id="btnViewScenarios"

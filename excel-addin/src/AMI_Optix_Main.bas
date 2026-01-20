@@ -53,8 +53,24 @@ Public Sub OnOptimizeClick(control As IRibbonControl)
         Exit Sub
     End If
 
-    ' Run the optimization
-    RunOptimization
+    ' Run the optimization (UAP default)
+    RunOptimizationForProgram "UAP"
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error: " & Err.Description, vbCritical, "AMI Optix"
+End Sub
+
+Public Sub OnOptimizeMIHClick(control As IRibbonControl)
+    ' MIH optimize handler (for the alternate Ribbon XML)
+    On Error GoTo ErrorHandler
+
+    If ActiveWorkbook Is Nothing Then
+        MsgBox "Please open a MIH workbook first.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    RunOptimizationForProgram "MIH"
     Exit Sub
 
 ErrorHandler:
@@ -151,13 +167,25 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Public Sub RunOptimization()
+    ' Backward-compatible entrypoint (defaults to UAP)
+    RunOptimizationForProgram "UAP"
+End Sub
+
+Public Sub RunOptimizationForProgram(program As String)
     Dim units As Collection
     Dim utilities As Object
     Dim payload As String
     Dim response As String
     Dim result As Object
+    Dim programNorm As String
+    Dim mihOption As String
+    Dim mihResidentialSF As Double
+    Dim mihMaxBandPercent As Long
 
     On Error GoTo ErrorHandler
+
+    programNorm = UCase(Trim(program))
+    If programNorm = "" Then programNorm = "UAP"
 
     ' Step 0: Check API key is configured
     If Not HasAPIKey() Then
@@ -180,17 +208,8 @@ Public Sub RunOptimization()
 
     ' Step 2: Read unit data from active workbook
     Set units = ReadUnitData()
-    If units Is Nothing Or units.Count = 0 Then
-        MsgBox "No unit data found in the active workbook." & vbCrLf & vbCrLf & _
-               "Please ensure your workbook has columns for:" & vbCrLf & _
-               "- Unit ID (APT, UNIT, etc.)" & vbCrLf & _
-               "- Bedrooms (BED, BEDS, etc.)" & vbCrLf & _
-               "- Net SF (NET SF, SQFT, etc.)" & vbCrLf & _
-               "- Floor (optional)" & vbCrLf & _
-               "- AMI (must have NUMERIC value to be included)", _
-               vbExclamation, "AMI Optix"
-        GoTo Cleanup
-    End If
+    If units Is Nothing Then GoTo NoUnitsFound
+    If units.Count = 0 Then GoTo NoUnitsFound
 
     ' DEBUG: Show unit count - warn if very few
     Debug.Print "=== UNITS FOUND ==="
@@ -209,11 +228,18 @@ Public Sub RunOptimization()
 
     ' Step 3: Get utility selections
     Application.StatusBar = "AMI Optix: Loading utility settings..."
-    Set utilities = GetUtilitySelections()
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
+
+    ' Step 3B: MIH inputs
+    If programNorm = "MIH" Then
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then
+            GoTo Cleanup
+        End If
+    End If
 
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."
-    payload = BuildAPIPayload(units, utilities)
+    payload = BuildAPIPayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
 
     ' DEBUG: Print payload being sent
     Debug.Print "=== UNITS READ FROM WORKBOOK ==="
@@ -334,6 +360,17 @@ Public Sub RunOptimization()
 
     Exit Sub
 
+NoUnitsFound:
+    MsgBox "No unit data found in the active workbook." & vbCrLf & vbCrLf & _
+           "Please ensure your workbook has columns for:" & vbCrLf & _
+           "- Unit ID (APT, UNIT, etc.)" & vbCrLf & _
+           "- Bedrooms (BED, BEDS, etc.)" & vbCrLf & _
+           "- Net SF (NET SF, SQFT, etc.)" & vbCrLf & _
+           "- Floor (optional)" & vbCrLf & _
+           "- AMI (must have NUMERIC value to be included)", _
+           vbExclamation, "AMI Optix"
+    GoTo Cleanup
+
 Cleanup:
     Application.StatusBar = False
     Application.ScreenUpdating = True
@@ -352,17 +389,229 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Private Function GetUtilitySelections() As Object
-    ' Returns utility selections from stored settings or defaults
+    ' Backward-compatible: defaults to stored settings
+    Set GetUtilitySelections = GetUtilitySelectionsForProgram("")
+End Function
+
+Public Function GetUtilitySelectionsForProgram(program As String) As Object
+    ' Returns utility selections from workbook (if present) or stored settings.
     Dim utils As Object
     Set utils = CreateObject("Scripting.Dictionary")
 
-    ' Read from registry or use defaults (owner pays all = "na")
-    utils("electricity") = GetSetting("AMI_Optix", "Utilities", "electricity", "na")
-    utils("cooking") = GetSetting("AMI_Optix", "Utilities", "cooking", "na")
-    utils("heat") = GetSetting("AMI_Optix", "Utilities", "heat", "na")
-    utils("hot_water") = GetSetting("AMI_Optix", "Utilities", "hot_water", "na")
+    Dim programNorm As String
+    programNorm = UCase(Trim(program))
 
-    Set GetUtilitySelections = utils
+    Dim readFromWorkbook As Boolean
+    readFromWorkbook = False
+
+    If programNorm = "MIH" Then
+        readFromWorkbook = TryReadMIHUtilities(utils)
+    Else
+        readFromWorkbook = TryReadUAPUtilities(utils)
+    End If
+
+    If Not readFromWorkbook Then
+        utils("electricity") = GetSetting("AMI_Optix", "Utilities", "electricity", "na")
+        utils("cooking") = GetSetting("AMI_Optix", "Utilities", "cooking", "na")
+        utils("heat") = GetSetting("AMI_Optix", "Utilities", "heat", "na")
+        utils("hot_water") = GetSetting("AMI_Optix", "Utilities", "hot_water", "na")
+    Else
+        ' Persist so the user sees consistent choices if workbook detection isn't available next time.
+        SaveUtilitySelections CStr(utils("electricity")), CStr(utils("cooking")), CStr(utils("heat")), CStr(utils("hot_water"))
+    End If
+
+    Set GetUtilitySelectionsForProgram = utils
+End Function
+
+Private Function IsTenantPays(value As Variant) As Boolean
+    Dim s As String
+    s = UCase(Trim(CStr(value)))
+    IsTenantPays = (s = "TENANT PAYS" Or InStr(s, "TENANT") > 0)
+End Function
+
+Private Function TryReadUAPUtilities(ByRef utils As Object) As Boolean
+    On Error GoTo Fail
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    Set ws = ActiveWorkbook.Worksheets("Calculations")
+    On Error GoTo Fail
+    If ws Is Nothing Then GoTo Fail
+
+    ' Electricity: P3
+    utils("electricity") = IIf(IsTenantPays(ws.Range("P3").Value), "tenant_pays", "na")
+
+    ' Cooking: Q3 electric stove, R3 gas stove
+    If IsTenantPays(ws.Range("Q3").Value) Then
+        utils("cooking") = "electric"
+    ElseIf IsTenantPays(ws.Range("R3").Value) Then
+        utils("cooking") = "gas"
+    Else
+        utils("cooking") = "na"
+    End If
+
+    ' Heat: S3 ccASHP, T3 electric other, U3 gas, V3 oil
+    If IsTenantPays(ws.Range("S3").Value) Then
+        utils("heat") = "electric_ccashp"
+    ElseIf IsTenantPays(ws.Range("T3").Value) Then
+        utils("heat") = "electric_other"
+    ElseIf IsTenantPays(ws.Range("U3").Value) Then
+        utils("heat") = "gas"
+    ElseIf IsTenantPays(ws.Range("V3").Value) Then
+        utils("heat") = "oil"
+    Else
+        utils("heat") = "na"
+    End If
+
+    ' Hot water: X3 heat pump, Y3 electric other, Z3 gas, AA3 oil
+    If IsTenantPays(ws.Range("X3").Value) Then
+        utils("hot_water") = "electric_heat_pump"
+    ElseIf IsTenantPays(ws.Range("Y3").Value) Then
+        utils("hot_water") = "electric_other"
+    ElseIf IsTenantPays(ws.Range("Z3").Value) Then
+        utils("hot_water") = "gas"
+    ElseIf IsTenantPays(ws.Range("AA3").Value) Then
+        utils("hot_water") = "oil"
+    Else
+        utils("hot_water") = "na"
+    End If
+
+    TryReadUAPUtilities = True
+    Exit Function
+
+Fail:
+    TryReadUAPUtilities = False
+End Function
+
+Private Function TryReadMIHUtilities(ByRef utils As Object) As Boolean
+    On Error GoTo Fail
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    Set ws = ActiveWorkbook.Worksheets("Rents & Utilities")
+    On Error GoTo Fail
+    If ws Is Nothing Then GoTo Fail
+
+    Dim col As Long
+    Dim lastCol As Long
+    lastCol = ws.Cells(14, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol < 2 Then GoTo Fail
+
+    ' Defaults
+    utils("electricity") = "na"
+    utils("cooking") = "na"
+    utils("heat") = "na"
+    utils("hot_water") = "na"
+
+    For col = 1 To lastCol
+        Dim header As String
+        Dim optionLabel As String
+        Dim selected As Variant
+        header = UCase(Trim(CStr(ws.Cells(14, col).Value)))
+        optionLabel = UCase(Trim(CStr(ws.Cells(15, col).Value)))
+        selected = ws.Cells(16, col).Value
+
+        If Not IsTenantPays(selected) Then
+            GoTo NextCol
+        End If
+
+        If InStr(header, "APARTMENT ELECTRICITY") > 0 Then
+            utils("electricity") = "tenant_pays"
+        ElseIf header = "COOKING" Then
+            If InStr(optionLabel, "ELECTRIC") > 0 Then
+                utils("cooking") = "electric"
+            ElseIf InStr(optionLabel, "GAS") > 0 Then
+                utils("cooking") = "gas"
+            End If
+        ElseIf header = "HEAT" Then
+            If InStr(optionLabel, "CCASHP") > 0 Then
+                utils("heat") = "electric_ccashp"
+            ElseIf InStr(optionLabel, "ELECTRIC") > 0 Then
+                utils("heat") = "electric_other"
+            ElseIf InStr(optionLabel, "GAS") > 0 Then
+                utils("heat") = "gas"
+            ElseIf InStr(optionLabel, "OIL") > 0 Then
+                utils("heat") = "oil"
+            End If
+        ElseIf InStr(header, "HOT WATER") > 0 Then
+            If InStr(optionLabel, "HEAT PUMP") > 0 Then
+                utils("hot_water") = "electric_heat_pump"
+            ElseIf InStr(optionLabel, "ELECTRIC") > 0 Then
+                utils("hot_water") = "electric_other"
+            ElseIf InStr(optionLabel, "GAS") > 0 Then
+                utils("hot_water") = "gas"
+            ElseIf InStr(optionLabel, "OIL") > 0 Then
+                utils("hot_water") = "oil"
+            End If
+        End If
+
+NextCol:
+    Next col
+
+    TryReadMIHUtilities = True
+    Exit Function
+
+Fail:
+    TryReadMIHUtilities = False
+End Function
+
+Public Function TryReadMIHInputs(ByRef mihOption As String, ByRef residentialSF As Double, ByRef maxBandPercent As Long) As Boolean
+    On Error GoTo Fail
+
+    Dim wsMIH As Worksheet
+    Dim wsProg As Worksheet
+    Set wsMIH = Nothing
+    Set wsProg = Nothing
+
+    On Error Resume Next
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    Set wsProg = ActiveWorkbook.Worksheets("Prog")
+    On Error GoTo Fail
+
+    If wsMIH Is Nothing Then
+        MsgBox "MIH run requires a sheet named 'MIH'.", vbExclamation, "AMI Optix"
+        TryReadMIHInputs = False
+        Exit Function
+    End If
+    If wsProg Is Nothing Then
+        MsgBox "MIH run requires a sheet named 'Prog' (for OptionSelected).", vbExclamation, "AMI Optix"
+        TryReadMIHInputs = False
+        Exit Function
+    End If
+
+    Dim v As Variant
+    v = wsMIH.Range("J21").Value
+    If Not IsNumeric(v) Or CDbl(v) <= 0 Then
+        MsgBox "MIH residential SF is missing." & vbCrLf & vbCrLf & _
+               "Expected a numeric value in MIH!J21.", vbExclamation, "AMI Optix"
+        TryReadMIHInputs = False
+        Exit Function
+    End If
+    residentialSF = CDbl(v)
+
+    mihOption = Trim(CStr(wsProg.Range("K4").Value))
+    If mihOption = "" Then
+        MsgBox "MIH option is missing." & vbCrLf & vbCrLf & _
+               "Expected 'Option 1' or 'Option 4' in Prog!K4.", vbExclamation, "AMI Optix"
+        TryReadMIHInputs = False
+        Exit Function
+    End If
+
+    Dim capFactor As Variant
+    capFactor = wsProg.Range("I4").Value
+    If IsNumeric(capFactor) Then
+        maxBandPercent = CLng(CDbl(capFactor) * 100)
+    Else
+        maxBandPercent = 135
+    End If
+
+    TryReadMIHInputs = True
+    Exit Function
+
+Fail:
+    TryReadMIHInputs = False
 End Function
 
 Public Sub SaveUtilitySelections(electricity As String, cooking As String, _

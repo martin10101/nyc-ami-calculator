@@ -134,34 +134,54 @@ End Function
 
 Private Function FindHeaderRow(ws As Worksheet) As Long
     ' Finds the row containing column headers
-    ' Looks for rows with at least 3 recognized headers
+    ' Requires the 3 key headers (unit_id, bedrooms, net_sf) to avoid
+    ' false positives from unrelated tables (e.g., multiple "bed" columns).
 
     Dim row As Long
     Dim col As Long
     Dim cellValue As String
-    Dim matches As Long
-    Dim maxRow As Long
+    Dim used As Range
+    Dim startRow As Long
+    Dim endRow As Long
+    Dim startCol As Long
+    Dim endCol As Long
 
-    maxRow = Application.Min(50, ws.UsedRange.Rows.Count)  ' Only check first 50 rows
+    On Error Resume Next
+    Set used = ws.UsedRange
+    On Error GoTo 0
 
-    For row = 1 To maxRow
-        matches = 0
+    If used Is Nothing Then
+        FindHeaderRow = 0
+        Exit Function
+    End If
 
-        For col = 1 To Application.Min(20, ws.UsedRange.Columns.Count)
+    startRow = used.row
+    endRow = Application.Min(startRow + used.Rows.Count - 1, startRow + 49) ' Only check first 50 used rows
+
+    startCol = used.Column
+    endCol = Application.Min(startCol + used.Columns.Count - 1, startCol + 19) ' Only check first 20 used cols
+
+    For row = startRow To endRow
+        Dim hasUnitId As Boolean
+        Dim hasBedrooms As Boolean
+        Dim hasNetSF As Boolean
+
+        hasUnitId = False
+        hasBedrooms = False
+        hasNetSF = False
+
+        For col = startCol To endCol
             cellValue = UCase(Trim(CStr(ws.Cells(row, col).Value)))
 
-            If IsUnitIdHeader(cellValue) Then matches = matches + 1
-            If IsBedroomsHeader(cellValue) Then matches = matches + 1
-            If IsNetSFHeader(cellValue) Then matches = matches + 1
-            If IsFloorHeader(cellValue) Then matches = matches + 1
-            If IsAMIHeader(cellValue) Then matches = matches + 1
-        Next col
+            If Not hasUnitId And IsUnitIdHeader(cellValue) Then hasUnitId = True
+            If Not hasBedrooms And IsBedroomsHeader(cellValue) Then hasBedrooms = True
+            If Not hasNetSF And IsNetSFHeader(cellValue) Then hasNetSF = True
 
-        ' Need at least 3 matches (unit_id, bedrooms, net_sf)
-        If matches >= 3 Then
-            FindHeaderRow = row
-            Exit Function
-        End If
+            If hasUnitId And hasBedrooms And hasNetSF Then
+                FindHeaderRow = row
+                Exit Function
+            End If
+        Next col
     Next row
 
     FindHeaderRow = 0
@@ -178,6 +198,9 @@ Private Function MapColumns(ws As Worksheet, headerRow As Long) As Boolean
     Dim col As Long
     Dim cellValue As String
     Dim maxCol As Long
+    Dim used As Range
+    Dim startCol As Long
+    Dim endCol As Long
 
     ' Reset
     m_UnitIdCol = 0
@@ -187,9 +210,19 @@ Private Function MapColumns(ws As Worksheet, headerRow As Long) As Boolean
     m_AMICol = 0
     m_BalconyCol = 0
 
-    maxCol = Application.Min(30, ws.UsedRange.Columns.Count)
+    On Error Resume Next
+    Set used = ws.UsedRange
+    On Error GoTo 0
 
-    For col = 1 To maxCol
+    If used Is Nothing Then
+        MapColumns = False
+        Exit Function
+    End If
+
+    startCol = used.Column
+    endCol = Application.Min(startCol + used.Columns.Count - 1, startCol + 29) ' Only check first 30 used cols
+
+    For col = startCol To endCol
         cellValue = UCase(Trim(CStr(ws.Cells(headerRow, col).Value)))
 
         ' Unit ID

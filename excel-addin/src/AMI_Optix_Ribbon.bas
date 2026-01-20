@@ -16,7 +16,15 @@ Private m_SelectedRentRoll As String
 
 Public Sub Ribbon_RunSolver(control As IRibbonControl)
     ' Called when "Run Solver" button is clicked
-    RunOptimization
+    RunOptimizationForProgram "UAP"
+End Sub
+
+Public Sub Ribbon_RunSolverUAP(control As IRibbonControl)
+    RunOptimizationForProgram "UAP"
+End Sub
+
+Public Sub Ribbon_RunSolverMIH(control As IRibbonControl)
+    RunOptimizationForProgram "MIH"
 End Sub
 
 Public Sub Ribbon_ViewScenarios(control As IRibbonControl)
@@ -28,7 +36,7 @@ End Sub
 ' RIBBON CALLBACKS - RENT ROLL GROUP
 '-------------------------------------------------------------------------------
 
-Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index As Long)
+Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index As Integer)
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then
         m_SelectedRentRoll = m_RentRollSheets(index)
@@ -42,24 +50,45 @@ Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index 
     End If
 End Sub
 
-Public Sub Ribbon_GetRentRollCount(control As IRibbonControl, ByRef count As Long)
+Public Sub Ribbon_GetRentRollCount(control As IRibbonControl, ByRef returnedVal)
     ' Returns the number of rent roll sheets
+    ' NOTE: RibbonX passes this ByRef as a Variant; keep it untyped to avoid "Type mismatch".
+    On Error GoTo Fail
+
     RefreshRentRollList
-    count = m_RentRollCount
+    returnedVal = m_RentRollCount
+    Exit Sub
+
+Fail:
+    returnedVal = 0
 End Sub
 
-Public Sub Ribbon_GetRentRollLabel(control As IRibbonControl, index As Long, ByRef label As String)
+Public Sub Ribbon_GetRentRollLabel(control As IRibbonControl, index As Integer, ByRef returnedVal)
     ' Returns the label for each rent roll item
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant.
+    On Error GoTo Fail
+
     If index >= 0 And index < m_RentRollCount Then
-        label = m_RentRollSheets(index)
+        returnedVal = m_RentRollSheets(index)
     Else
-        label = ""
+        returnedVal = ""
     End If
+    Exit Sub
+
+Fail:
+    returnedVal = ""
 End Sub
 
-Public Sub Ribbon_GetRentRollID(control As IRibbonControl, index As Long, ByRef id As String)
+Public Sub Ribbon_GetRentRollID(control As IRibbonControl, index As Integer, ByRef returnedVal)
     ' Returns unique ID for each rent roll item
-    id = "rentroll_" & index
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant.
+    On Error GoTo Fail
+
+    returnedVal = "rentroll_" & index
+    Exit Sub
+
+Fail:
+    returnedVal = ""
 End Sub
 
 Public Sub Ribbon_RefreshRentRolls(control As IRibbonControl)
@@ -76,6 +105,13 @@ Private Sub RefreshRentRollList()
     Dim preferredNames As Variant
     Dim i As Long
     Dim isPreferred As Boolean
+
+    If ActiveWorkbook Is Nothing Then
+        m_RentRollCount = 1
+        ReDim m_RentRollSheets(0 To 0)
+        m_RentRollSheets(0) = "(No workbook open)"
+        Exit Sub
+    End If
 
     sheetCount = 0
     ReDim tempSheets(0 To 50)  ' Max 50 sheets

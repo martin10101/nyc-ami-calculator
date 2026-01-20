@@ -5,6 +5,10 @@ Attribute VB_Name = "AMI_Optix_ResultsWriter"
 '===============================================================================
 Option Explicit
 
+Private Const MANUAL_BLOCK_HEIGHT As Long = 120
+Private Const MANUAL_BLOCK_START_ROW As Long = 1
+Private Const SCENARIOS_START_ROW As Long = 125
+
 '-------------------------------------------------------------------------------
 ' APPLY BEST SCENARIO
 '-------------------------------------------------------------------------------
@@ -167,30 +171,27 @@ Public Sub CreateScenariosSheet(result As Object)
 
     On Error GoTo ErrorHandler
 
-    ' Delete existing scenarios sheet if it exists
-    Application.DisplayAlerts = False
+    ' Get or create sheet (do not delete; manual scenario sync expects stability)
     On Error Resume Next
-    ActiveWorkbook.Worksheets("AMI Scenarios").Delete
+    Set ws = ActiveWorkbook.Worksheets("AMI Scenarios")
     On Error GoTo ErrorHandler
-    Application.DisplayAlerts = True
 
-    ' Create new sheet
-    Set ws = ActiveWorkbook.Worksheets.Add(After:=ActiveWorkbook.Worksheets(ActiveWorkbook.Worksheets.Count))
-    ws.Name = "AMI Scenarios"
+    If ws Is Nothing Then
+        Set ws = ActiveWorkbook.Worksheets.Add(After:=ActiveWorkbook.Worksheets(ActiveWorkbook.Worksheets.Count))
+        ws.Name = "AMI Scenarios"
+    Else
+        ws.Cells.Clear
+    End If
 
     Set scenarios = result("scenarios")
 
     row = 1
 
-    ' Title
-    ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
-    ws.Cells(row, 1).Font.Bold = True
-    ws.Cells(row, 1).Font.Size = 16
-    row = row + 2
+    ' Manual block (reserved region at top)
+    WriteManualScenarioBlockFromResult ws, result
 
-    ' Display utility settings at the top
-    row = WriteUtilitySettings(ws, row)
-    row = row + 1
+    ' Start solver output below the manual block
+    row = SCENARIOS_START_ROW
 
     ' Notes from solver
     If result.Exists("notes") Then
@@ -306,39 +307,12 @@ Public Sub CreateScenariosSheet(result As Object)
                     ws.Cells(row, 4).Value = assignment("gross_rent")
                     ws.Cells(row, 4).NumberFormat = "$#,##0.00"
                 End If
-
+                
                 ' Show allowance breakdown if available
                 If assignment.Exists("allowances") Then
-                    Dim allowances As Object
-                    Set allowances = assignment("allowances")
                     Dim allowanceStr As String
-                    allowanceStr = ""
-
-                    ' Build breakdown string: Elec($X) + Cook($Y) + Heat($Z) + HW($W)
-                    If allowances.Exists("electricity") Then
-                        If CDbl(allowances("electricity")) > 0 Then
-                            allowanceStr = "Elec($" & Format(allowances("electricity"), "0") & ")"
-                        End If
-                    End If
-                    If allowances.Exists("cooking") Then
-                        If CDbl(allowances("cooking")) > 0 Then
-                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
-                            allowanceStr = allowanceStr & "Cook($" & Format(allowances("cooking"), "0") & ")"
-                        End If
-                    End If
-                    If allowances.Exists("heat") Then
-                        If CDbl(allowances("heat")) > 0 Then
-                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
-                            allowanceStr = allowanceStr & "Heat($" & Format(allowances("heat"), "0") & ")"
-                        End If
-                    End If
-                    If allowances.Exists("hot_water") Then
-                        If CDbl(allowances("hot_water")) > 0 Then
-                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
-                            allowanceStr = allowanceStr & "HW($" & Format(allowances("hot_water"), "0") & ")"
-                        End If
-                    End If
-
+                    allowanceStr = BuildAllowanceBreakdown(assignment("allowances"))
+                    
                     If allowanceStr <> "" Then
                         ws.Cells(row, 5).Value = allowanceStr
                     ElseIf assignment.Exists("allowance_total") Then
@@ -383,6 +357,445 @@ Public Sub CreateScenariosSheet(result As Object)
 ErrorHandler:
     Debug.Print "CreateScenariosSheet Error: " & Err.Description
 End Sub
+
+Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
+    ' Rebuilds the top "Scenario Manual" block from the current UAP/MUH AMI values.
+    On Error GoTo ErrorHandler
+
+    If Not HasAPIKey() Then Exit Sub
+    If ActiveWorkbook Is Nothing Then Exit Sub
+
+    Dim programNorm As String
+    programNorm = "UAP"
+    On Error Resume Next
+    Dim wsMIH As Worksheet
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    On Error GoTo ErrorHandler
+    If Not wsMIH Is Nothing Then programNorm = "MIH"
+
+    Dim mihOption As String
+    Dim mihResidentialSF As Double
+    Dim mihMaxBandPercent As Long
+    mihOption = ""
+    mihResidentialSF = 0
+    mihMaxBandPercent = 0
+    If programNorm = "MIH" Then
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Sub
+    End If
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    ' Read units from the rent roll sheet (prefer UAP/MIH templates by name).
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo ErrorHandler
+
+    If Not dataWs Is Nothing Then
+        dataWs.Activate
+    End If
+
+    Dim units As Collection
+    Set units = ReadUnitData()
+    prevSheet.Activate
+    If units Is Nothing Or units.Count = 0 Then Exit Sub
+
+    Dim utilities As Object
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
+
+    Dim payload As String
+    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
+
+    Dim response As String
+    response = CallEvaluateAPI(payload)
+    If response = "" Then Exit Sub
+
+    Dim evalResult As Object
+    Set evalResult = ParseJSON(response)
+    If evalResult Is Nothing Then Exit Sub
+
+    If evalResult.Exists("success") Then
+        If evalResult("success") = False Then
+            If evalResult.Exists("errors") Then
+                Dim errs As Object
+                Set errs = evalResult("errors")
+                Dim msg As String
+                msg = "Manual scenario is invalid:" & vbCrLf & vbCrLf
+                Dim i As Long
+                For i = 1 To errs.Count
+                    msg = msg & "- " & errs(i) & vbCrLf
+                Next i
+                MsgBox msg, vbExclamation, "AMI Optix"
+            End If
+            If undoOnInvalid Then
+                Application.EnableEvents = False
+                Application.Undo
+                Application.EnableEvents = True
+            End If
+            Exit Sub
+        End If
+    End If
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateScenariosSheet()
+
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+    WriteManualScenarioBlockFromEvaluate ws, evalResult
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+
+    Exit Sub
+
+ErrorHandler:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Debug.Print "UpdateManualScenario Error: " & Err.Description
+End Sub
+
+Private Function GetOrCreateScenariosSheet() As Worksheet
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ActiveWorkbook.Worksheets("AMI Scenarios")
+    On Error GoTo 0
+    If ws Is Nothing Then
+        Set ws = ActiveWorkbook.Worksheets.Add(After:=ActiveWorkbook.Worksheets(ActiveWorkbook.Worksheets.Count))
+        ws.Name = "AMI Scenarios"
+    End If
+    Set GetOrCreateScenariosSheet = ws
+End Function
+
+Private Sub ClearManualBlock(ws As Worksheet)
+    ws.Range("A1:M" & MANUAL_BLOCK_HEIGHT).Clear
+End Sub
+
+Private Sub WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object)
+    ClearManualBlock ws
+
+    Dim row As Long
+    row = MANUAL_BLOCK_START_ROW
+
+    ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 16
+    row = row + 2
+
+    row = WriteUtilitySettings(ws, row)
+    row = row + 1
+
+    ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC)"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 14
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
+    row = row + 1
+
+    Dim scenarioKey As String
+    scenarioKey = GetBestScenarioKey(result)
+    If scenarioKey = "" Then Exit Sub
+
+    Dim scenarios As Object
+    Set scenarios = result("scenarios")
+    If Not scenarios.Exists(scenarioKey) Then Exit Sub
+
+    Dim scenario As Object
+    Set scenario = scenarios(scenarioKey)
+
+    row = WriteScenarioSummaryAndTable(ws, row, scenario)
+End Sub
+
+Private Sub WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object)
+    ClearManualBlock ws
+
+    Dim row As Long
+    row = MANUAL_BLOCK_START_ROW
+
+    ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 16
+    row = row + 2
+
+    row = WriteUtilitySettings(ws, row)
+    row = row + 1
+
+    ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC)"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 14
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
+    row = row + 1
+
+    ' Build a minimal scenario-shaped object from /api/evaluate response.
+    Dim scenario As Object
+    Set scenario = CreateObject("Scripting.Dictionary")
+
+    If evalResult.Exists("summary") Then
+        Dim summary As Object
+        Set summary = evalResult("summary")
+        If summary.Exists("waami") Then scenario("waami") = summary("waami")
+        If summary.Exists("bands_used") Then scenario("bands") = summary("bands_used")
+    End If
+    If evalResult.Exists("assignments") Then
+        scenario("assignments") = evalResult("assignments")
+    End If
+    If evalResult.Exists("rent_totals") And Not IsNull(evalResult("rent_totals")) Then
+        scenario("rent_totals") = evalResult("rent_totals")
+    End If
+
+    row = WriteScenarioSummaryAndTable(ws, row, scenario)
+End Sub
+
+Private Function GetBestScenarioKey(result As Object) As String
+    Dim scenarios As Object
+    If result Is Nothing Then Exit Function
+    If Not result.Exists("scenarios") Then Exit Function
+    Set scenarios = result("scenarios")
+
+    Dim priorities As Variant
+    priorities = Array("absolute_best", "best_3_band", "best_2_band", "alternative")
+
+    Dim i As Long
+    For i = LBound(priorities) To UBound(priorities)
+        If scenarios.Exists(CStr(priorities(i))) Then
+            GetBestScenarioKey = CStr(priorities(i))
+            Exit Function
+        End If
+    Next i
+End Function
+
+Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long, scenario As Object) As Long
+    Dim row As Long
+    row = startRow
+
+    If scenario Is Nothing Then
+        WriteScenarioSummaryAndTable = row
+        Exit Function
+    End If
+
+    If scenario.Exists("waami") Then
+        ws.Cells(row, 1).Value = "WAAMI:"
+        ws.Cells(row, 2).Value = Format(scenario("waami"), "0.00%")
+        ws.Cells(row, 2).Font.Bold = True
+        row = row + 1
+    End If
+
+    If scenario.Exists("bands") Then
+        ws.Cells(row, 1).Value = "Bands Used:"
+        Dim bandStr As String
+        bandStr = ""
+        Dim bands As Variant
+        bands = scenario("bands")
+
+        On Error Resume Next
+        Dim bCount As Long
+        bCount = bands.Count
+        On Error GoTo 0
+
+        If bCount > 0 Then
+            Dim b As Long
+            For b = 1 To bCount
+                If bandStr <> "" Then bandStr = bandStr & ", "
+                bandStr = bandStr & Format(bands(b), "0") & "%"
+            Next b
+        Else
+            ' bands might already be a VBA array
+        End If
+
+        ws.Cells(row, 2).Value = bandStr
+        row = row + 1
+    End If
+
+    If scenario.Exists("rent_totals") Then
+        Dim rentTotals As Object
+        Set rentTotals = scenario("rent_totals")
+
+        ' Show net totals only (gross/total allowances removed per client request)
+        If rentTotals.Exists("net_monthly") Then
+            ws.Cells(row, 1).Value = "Total Monthly Rent:"
+            ws.Cells(row, 2).Value = Format(rentTotals("net_monthly"), "$#,##0.00")
+            row = row + 1
+        End If
+        If rentTotals.Exists("net_annual") Then
+            ws.Cells(row, 1).Value = "Total Annual Rent:"
+            ws.Cells(row, 2).Value = Format(rentTotals("net_annual"), "$#,##0.00")
+            row = row + 1
+        End If
+
+        ' Allowance breakdown (per utility)
+        If rentTotals.Exists("allowances_breakdown") Then
+            Dim ab As Object
+            Set ab = rentTotals("allowances_breakdown")
+            row = row + 1
+            ws.Cells(row, 1).Value = "Utility Allowances (Monthly):"
+            ws.Cells(row, 1).Font.Bold = True
+            row = row + 1
+
+            Dim key As Variant
+            For Each key In ab.keys
+                Dim entry As Object
+                Set entry = ab(key)
+                ws.Cells(row, 1).Value = UCase(CStr(key))
+                If entry.Exists("monthly") Then
+                    ws.Cells(row, 2).Value = Format(entry("monthly"), "$#,##0.00")
+                End If
+                row = row + 1
+            Next key
+        End If
+    End If
+
+    row = row + 1
+
+    ' Assignment table
+    ws.Cells(row, 1).Value = "Unit"
+    ws.Cells(row, 2).Value = "Bedrooms"
+    ws.Cells(row, 3).Value = "Net SF"
+    ws.Cells(row, 4).Value = "Floor"
+    ws.Cells(row, 5).Value = "Balcony"
+    ws.Cells(row, 6).Value = "AMI"
+    ws.Cells(row, 7).Value = "Gross Rent"
+    ws.Cells(row, 8).Value = "Allowances"
+    ws.Cells(row, 9).Value = "Net Rent"
+    ws.Cells(row, 10).Value = "Annual Rent"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(230, 230, 230)
+    row = row + 1
+
+    If scenario.Exists("assignments") Then
+        Dim assignments As Object
+        Set assignments = scenario("assignments")
+        Dim a As Long
+        For a = 1 To assignments.Count
+            Dim assignment As Object
+            Set assignment = assignments(a)
+
+            ws.Cells(row, 1).Value = assignment("unit_id")
+            If assignment.Exists("bedrooms") Then ws.Cells(row, 2).Value = assignment("bedrooms")
+            If assignment.Exists("net_sf") Then ws.Cells(row, 3).Value = assignment("net_sf")
+            If assignment.Exists("floor") Then ws.Cells(row, 4).Value = assignment("floor")
+            If assignment.Exists("balcony") Then ws.Cells(row, 5).Value = IIf(assignment("balcony"), "Y", "")
+            ws.Cells(row, 6).Value = Format(assignment("assigned_ami"), "0%")
+
+            If assignment.Exists("gross_rent") Then
+                ws.Cells(row, 7).Value = assignment("gross_rent")
+                ws.Cells(row, 7).NumberFormat = "$#,##0.00"
+            End If
+
+            If assignment.Exists("allowances") Then
+                ws.Cells(row, 8).Value = BuildAllowanceBreakdown(assignment("allowances"))
+            ElseIf assignment.Exists("allowance_total") Then
+                ws.Cells(row, 8).Value = assignment("allowance_total")
+                ws.Cells(row, 8).NumberFormat = "$#,##0.00"
+            End If
+
+            If assignment.Exists("monthly_rent") Then
+                ws.Cells(row, 9).Value = assignment("monthly_rent")
+                ws.Cells(row, 9).NumberFormat = "$#,##0.00"
+            End If
+
+            If assignment.Exists("annual_rent") Then
+                ws.Cells(row, 10).Value = assignment("annual_rent")
+                ws.Cells(row, 10).NumberFormat = "$#,##0.00"
+            End If
+
+            row = row + 1
+        Next a
+    End If
+
+    WriteScenarioSummaryAndTable = row
+End Function
+
+Private Function BuildAllowanceBreakdown(allowancesValue As Variant) As String
+    ' API returns allowances as an ARRAY (Collection) of objects:
+    '   [{amount, category, label}, ...]
+    ' Older versions may return a Dictionary keyed by category.
+    Dim allowanceStr As String
+    allowanceStr = ""
+    
+    On Error GoTo Cleanup
+    
+    If IsObject(allowancesValue) Then
+        Select Case TypeName(allowancesValue)
+            Case "Collection"
+                Dim allowancesArr As Collection
+                Set allowancesArr = allowancesValue
+                
+                Dim i As Long
+                For i = 1 To allowancesArr.Count
+                    Dim item As Object
+                    Set item = allowancesArr(i)
+                    
+                    If Not item Is Nothing Then
+                        Dim category As String
+                        Dim amount As Double
+                        category = ""
+                        amount = 0
+                        
+                        If item.Exists("category") Then category = CStr(item("category"))
+                        If item.Exists("amount") And IsNumeric(item("amount")) Then amount = CDbl(item("amount"))
+                        
+                        If amount > 0 And category <> "" Then
+                            Dim shortName As String
+                            Select Case LCase(category)
+                                Case "electricity": shortName = "Elec"
+                                Case "cooking": shortName = "Cook"
+                                Case "heat": shortName = "Heat"
+                                Case "hot_water": shortName = "HW"
+                                Case Else: shortName = category
+                            End Select
+                            
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & shortName & "($" & Format(amount, "0") & ")"
+                        End If
+                    End If
+                Next i
+                
+            Case "Dictionary"
+                Dim allowancesDict As Object
+                Set allowancesDict = allowancesValue
+                
+                ' Build breakdown string: Elec($X) + Cook($Y) + Heat($Z) + HW($W)
+                If allowancesDict.Exists("electricity") Then
+                    If IsNumeric(allowancesDict("electricity")) Then
+                        If CDbl(allowancesDict("electricity")) > 0 Then
+                            allowanceStr = "Elec($" & Format(allowancesDict("electricity"), "0") & ")"
+                        End If
+                    End If
+                End If
+                If allowancesDict.Exists("cooking") Then
+                    If IsNumeric(allowancesDict("cooking")) Then
+                        If CDbl(allowancesDict("cooking")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "Cook($" & Format(allowancesDict("cooking"), "0") & ")"
+                        End If
+                    End If
+                End If
+                If allowancesDict.Exists("heat") Then
+                    If IsNumeric(allowancesDict("heat")) Then
+                        If CDbl(allowancesDict("heat")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "Heat($" & Format(allowancesDict("heat"), "0") & ")"
+                        End If
+                    End If
+                End If
+                If allowancesDict.Exists("hot_water") Then
+                    If IsNumeric(allowancesDict("hot_water")) Then
+                        If CDbl(allowancesDict("hot_water")) > 0 Then
+                            If allowanceStr <> "" Then allowanceStr = allowanceStr & " + "
+                            allowanceStr = allowanceStr & "HW($" & Format(allowancesDict("hot_water"), "0") & ")"
+                        End If
+                    End If
+                End If
+        End Select
+    End If
+    
+Cleanup:
+    BuildAllowanceBreakdown = allowanceStr
+End Function
 
 Private Function FormatScenarioName(key As String) As String
     ' Formats scenario key into readable name

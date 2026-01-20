@@ -4,6 +4,7 @@ import tempfile
 import zipfile
 import json
 import math
+import copy
 import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, send_from_directory
@@ -12,7 +13,7 @@ from main import main as run_ami_optix_analysis, default_converter
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 from ami_optix.config_loader import load_config
-from ami_optix.solver import find_optimal_scenarios
+from ami_optix.solver import find_optimal_scenarios, find_max_revenue_scenario
 from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
 
 app = Flask(__name__)
@@ -31,6 +32,73 @@ os.makedirs(RENT_CALCULATORS_DIR, exist_ok=True)
 API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')
 # Admin key for rent calculator management (optional, defaults to API key)
 ADMIN_KEY = os.environ.get('AMI_OPTIX_ADMIN_KEY', API_KEY)
+
+
+def _build_program_config(
+    base_config: dict,
+    program: str,
+    mih_option: str | None = None,
+    mih_residential_sf: float | None = None,
+    mih_max_band_percent: int | None = None,
+) -> dict:
+    config = copy.deepcopy(base_config)
+    rules = config.get('optimization_rules', {}) or {}
+
+    program_norm = (program or 'UAP').strip().upper()
+    if program_norm not in {'UAP', 'MIH'}:
+        raise ValueError("Invalid program. Expected 'UAP' or 'MIH'.")
+
+    if program_norm == 'UAP':
+        config['optimization_rules'] = rules
+        return config
+
+    # MIH mode: do not reuse UAP deep affordability defaults.
+    option_norm = (mih_option or '').strip().upper().replace('_', ' ')
+    if option_norm in {'1', 'OPTION1', 'OPTION 1'}:
+        option_norm = 'OPTION 1'
+    if option_norm in {'4', 'OPTION4', 'OPTION 4'}:
+        option_norm = 'OPTION 4'
+    if option_norm not in {'OPTION 1', 'OPTION 4'}:
+        raise ValueError("MIH requires mih_option = 'Option 1' or 'Option 4'.")
+
+    if mih_residential_sf is None or float(mih_residential_sf) <= 0:
+        raise ValueError("MIH requires mih_residential_sf > 0 (from MIH!J21).")
+
+    # Configure MIH constraints.
+    if option_norm == 'OPTION 1':
+        rules['waami_cap_percent'] = 60.0
+        rules['max_bands_per_scenario'] = 3
+        rules['share_thresholds'] = [
+            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
+        ]
+    else:
+        rules['waami_cap_percent'] = 115.0
+        rules['max_bands_per_scenario'] = 4
+        # Based on client workbook formulas: >=5% at <=70 and >=10% at <=90.
+        rules['share_thresholds'] = [
+            {'band_threshold': 70, 'min_share': 0.05, 'denominator': 'residential'},
+            {'band_threshold': 90, 'min_share': 0.10, 'denominator': 'residential'},
+        ]
+
+    # MIH does not use a WAAMI floor constraint by default.
+    rules['waami_floor'] = None
+
+    # Provide the denominator for residential-share constraints.
+    rules['residential_sf'] = float(mih_residential_sf)
+
+    # Band cap is enforced by limiting potential bands.
+    if mih_max_band_percent is None:
+        mih_max_band_percent = 135
+    max_band = int(mih_max_band_percent)
+    candidate_bands = [40, 60, 70, 80, 90, 100, 110, 120, 130, 135]
+    rules['potential_bands'] = [b for b in candidate_bands if b <= max_band and b != 50]
+
+    # Disable UAP-specific deep affordability defaults.
+    rules['deep_affordability_min_share'] = None
+    rules['deep_affordability_max_share'] = None
+
+    config['optimization_rules'] = rules
+    return config
 
 
 def _validate_api_key():
@@ -144,6 +212,124 @@ def _dashboard_file_exists(filename: str) -> bool:
     return os.path.exists(os.path.join(DASHBOARD_DIR, filename))
 
 
+def _validate_assignment_payload(
+    units: list[dict],
+    config: dict,
+) -> tuple[bool, list[str], dict]:
+    """
+    Validate an explicit unit -> assigned_ami mapping against the active optimization rules.
+
+    Returns: (is_valid, errors, summary)
+    """
+    rules = (config or {}).get('optimization_rules', {}) or {}
+
+    errors: list[str] = []
+    potential_bands = sorted({int(b) for b in (rules.get('potential_bands') or []) if int(b) != 50})
+    max_bands = int(rules.get('max_bands_per_scenario') or 3)
+
+    # Normalize and validate assigned AMIs.
+    total_sf = 0.0
+    waami_num = 0.0
+    used_bands: set[int] = set()
+    low_band_stats: dict[int, float] = {}
+
+    for i, unit in enumerate(units):
+        unit_id = str(unit.get('unit_id', ''))
+        try:
+            net_sf = float(unit.get('net_sf') or 0.0)
+        except Exception:
+            net_sf = 0.0
+        try:
+            assigned = float(unit.get('assigned_ami'))
+        except Exception:
+            assigned = None
+
+        if not unit_id:
+            errors.append(f"Unit {i+1} missing unit_id.")
+            continue
+        if net_sf <= 0:
+            errors.append(f"Unit '{unit_id}' has invalid net_sf.")
+            continue
+        if assigned is None:
+            errors.append(f"Unit '{unit_id}' missing assigned_ami.")
+            continue
+
+        # Allow either 0.6 or 60 inputs; normalize to 0-2 range.
+        if assigned > 2.0:
+            assigned = assigned / 100.0
+        if assigned <= 0 or assigned > 2.0:
+            errors.append(f"Unit '{unit_id}' has invalid assigned_ami value.")
+            continue
+
+        band = int(round(assigned * 100))
+        used_bands.add(band)
+        if potential_bands and band not in potential_bands:
+            errors.append(f"Unit '{unit_id}' uses {band}% which is not an allowed band for this program.")
+
+        total_sf += net_sf
+        waami_num += net_sf * assigned
+        low_band_stats[band] = low_band_stats.get(band, 0.0) + net_sf
+
+    if errors:
+        return False, errors, {}
+
+    if len(used_bands) > max_bands:
+        errors.append(f"Too many bands used ({len(used_bands)}). Max allowed is {max_bands}.")
+
+    waami = (waami_num / total_sf) if total_sf else 0.0
+    waami_cap_percent = float(rules.get('waami_cap_percent') or 60.0)
+    if waami > (waami_cap_percent / 100.0) + 1e-12:
+        errors.append(f"WAAMI {waami*100:.2f}% exceeds cap {waami_cap_percent:.2f}%.")
+
+    waami_floor = rules.get('waami_floor')
+    if waami_floor is not None:
+        try:
+            waami_floor_f = float(waami_floor)
+            if waami_floor_f > 0 and waami + 1e-12 < waami_floor_f:
+                errors.append(f"WAAMI {waami*100:.2f}% is below floor {waami_floor_f*100:.2f}%.")
+        except Exception:
+            pass
+
+    # Share threshold constraints (MIH or legacy UAP deep affordability).
+    thresholds = rules.get('share_thresholds')
+    if not thresholds:
+        min_share = rules.get('deep_affordability_min_share')
+        max_share = rules.get('deep_affordability_max_share')
+        threshold_band = int(rules.get('low_band_band_threshold') or 40)
+        if min_share is not None or max_share is not None:
+            thresholds = [{
+                'band_threshold': threshold_band,
+                'min_share': min_share,
+                'max_share': max_share,
+                'denominator': 'affordable',
+            }]
+
+    if thresholds:
+        residential_sf = rules.get('residential_sf')
+        for t in thresholds:
+            band_threshold = int(t.get('band_threshold') or 40)
+            denom = str(t.get('denominator') or 'affordable').lower()
+            denom_sf = total_sf if denom == 'affordable' else float(residential_sf or 0.0)
+            if denom_sf <= 0:
+                errors.append("Residential SF denominator is missing/invalid for share constraint validation.")
+                continue
+            num_sf = sum(sf for band, sf in low_band_stats.items() if int(band) <= band_threshold)
+            share = num_sf / denom_sf
+            if t.get('min_share') is not None and share + 1e-12 < float(t['min_share']):
+                errors.append(f"Share at <= {band_threshold}% is {share*100:.2f}%, below required {float(t['min_share'])*100:.2f}%.")
+            if t.get('max_share') is not None and share - 1e-12 > float(t['max_share']):
+                errors.append(f"Share at <= {band_threshold}% is {share*100:.2f}%, above maximum {float(t['max_share'])*100:.2f}%.")
+
+    summary = {
+        'waami': waami,
+        'waami_percent': waami * 100.0,
+        'bands_used': sorted(list(used_bands)),
+        'total_sf': total_sf,
+        'total_units': len(units),
+    }
+    return len(errors) == 0, errors, summary
+
+
 @app.route('/healthz')
 def healthcheck():
     """Lightweight health endpoint for uptime checks."""
@@ -214,6 +400,11 @@ def optimize_units():
     }
 
     try:
+        program = (data.get('program') or 'UAP')
+        mih_option = data.get('mih_option')
+        mih_residential_sf = data.get('mih_residential_sf')
+        mih_max_band_percent = data.get('mih_max_band_percent')
+
         # Convert units to DataFrame (same format parser produces)
         df_units = pd.DataFrame(units)
 
@@ -233,8 +424,22 @@ def optimize_units():
         if 'client_ami' not in df_units.columns:
             df_units['client_ami'] = 0.6  # Default placeholder
 
-        # Load config
+        # Load base config and specialize it per program.
         config = load_config()
+        try:
+            config = _build_program_config(
+                config,
+                program=program,
+                mih_option=mih_option,
+                mih_residential_sf=mih_residential_sf,
+                mih_max_band_percent=mih_max_band_percent,
+            )
+        except ValueError as e:
+            return jsonify({
+                "success": False,
+                "error": str(e),
+                "notes": [],
+            }), 200
 
         # Run solver
         solver_results = find_optimal_scenarios(df_units, config)
@@ -269,6 +474,40 @@ def optimize_units():
                     scenario['assignments'] = assignments
                     scenario['rent_totals'] = rent_totals
 
+            # Optional: add an extra "Max Revenue" scenario (UAP only), allowing a slightly lower WAAMI floor.
+            program_norm = str(program or 'UAP').strip().upper()
+            if program_norm == 'UAP':
+                try:
+                    bands = sorted({int(b) for b in config.get('optimization_rules', {}).get('potential_bands', [])})
+                    rent_by_band_cents = {}
+                    for band in bands:
+                        rents = []
+                        for _, unit_row in df_units.iterrows():
+                            components = rent_schedule.rent_components(band / 100.0, unit_row.get('bedrooms', 0), utilities_clean)
+                            rents.append(int(round(float(components['gross']) * 100)))
+                        rent_by_band_cents[int(band)] = rents
+
+                    max_rev = find_max_revenue_scenario(
+                        df_units,
+                        config,
+                        rent_by_band_cents=rent_by_band_cents,
+                        waami_floor=0.589,
+                    )
+                    if max_rev and max_rev.get('status') == 'OPTIMAL':
+                        assignments, rent_totals = compute_rents_for_assignments(
+                            rent_schedule,
+                            max_rev['assignments'],
+                            utilities_clean
+                        )
+                        max_rev['assignments'] = assignments
+                        max_rev['rent_totals'] = rent_totals
+                        scenarios['max_revenue'] = max_rev
+                        notes.append("Added 'Max Revenue' scenario (WAAMI floor 58.9%).")
+                    else:
+                        notes.append("Max Revenue scenario unavailable under the 58.9% WAAMI floor and project constraints.")
+                except Exception as e:
+                    notes.append(f"Warning: Could not compute Max Revenue scenario: {str(e)}")
+
         # Build response
         response = {
             "success": True,
@@ -277,7 +516,10 @@ def optimize_units():
             "project_summary": {
                 "total_units": len(df_units),
                 "total_sf": float(df_units['net_sf'].sum()),
-                "utility_selections": utilities_clean
+                "utility_selections": utilities_clean,
+                "program": (program or 'UAP'),
+                "mih_option": mih_option,
+                "mih_residential_sf": mih_residential_sf,
             }
         }
 
@@ -286,6 +528,112 @@ def optimize_units():
     except Exception as e:
         app.logger.exception("optimize_units failed: %s", e)
         return jsonify({"error": f"Optimization failed: {str(e)}"}), 500
+
+
+@app.route('/api/evaluate', methods=['POST'])
+def evaluate_assignment():
+    """
+    Validate a user-specified unit assignment and compute rents/totals.
+
+    Request body:
+    {
+      "program": "UAP" | "MIH",
+      "mih_option": "Option 1" | "Option 4",
+      "mih_residential_sf": 46197.57,
+      "mih_max_band_percent": 135,
+      "units": [
+        {"unit_id": "207", "bedrooms": 2, "net_sf": 790.58, "assigned_ami": 0.6}
+      ],
+      "utilities": {...}
+    }
+    """
+    auth_error = _validate_api_key()
+    if auth_error:
+        return auth_error
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body must be JSON"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
+
+    units = data.get('units', [])
+    if not units or not isinstance(units, list):
+        return jsonify({"error": "Missing or invalid 'units' array"}), 400
+
+    utilities = data.get('utilities', {})
+    utilities_clean = {
+        'electricity': utilities.get('electricity', 'na'),
+        'cooking': utilities.get('cooking', 'na'),
+        'heat': utilities.get('heat', 'na'),
+        'hot_water': utilities.get('hot_water', 'na'),
+    }
+
+    program = (data.get('program') or 'UAP')
+    mih_option = data.get('mih_option')
+    mih_residential_sf = data.get('mih_residential_sf')
+    mih_max_band_percent = data.get('mih_max_band_percent')
+
+    try:
+        df_units = pd.DataFrame(units)
+        if 'assigned_ami' not in df_units.columns:
+            return jsonify({"error": "Each unit must include 'assigned_ami'."}), 400
+
+        df_units['unit_id'] = df_units['unit_id'].astype(str)
+        df_units['bedrooms'] = pd.to_numeric(df_units.get('bedrooms'), errors='coerce')
+        df_units['net_sf'] = pd.to_numeric(df_units.get('net_sf'), errors='coerce')
+        df_units['assigned_ami'] = pd.to_numeric(df_units.get('assigned_ami'), errors='coerce')
+
+        config = load_config()
+        try:
+            config = _build_program_config(
+                config,
+                program=program,
+                mih_option=mih_option,
+                mih_residential_sf=mih_residential_sf,
+                mih_max_band_percent=mih_max_band_percent,
+            )
+        except ValueError as e:
+            return jsonify({
+                "success": False,
+                "errors": [str(e)],
+                "summary": {},
+            }), 200
+
+        # Validate constraints first.
+        is_valid, errors, summary = _validate_assignment_payload(units, config)
+        if not is_valid:
+            return jsonify({
+                "success": False,
+                "errors": errors,
+                "summary": summary,
+            }), 200
+
+        rent_schedule = None
+        rent_calc_path = _get_active_rent_calculator_path()
+        if rent_calc_path:
+            rent_schedule = load_rent_schedule(rent_calc_path)
+
+        assignments = df_units.to_dict(orient='records')
+        rent_totals = None
+        if rent_schedule:
+            assignments, rent_totals = compute_rents_for_assignments(rent_schedule, assignments, utilities_clean)
+
+        return jsonify({
+            "success": True,
+            "summary": summary,
+            "assignments": _sanitize_for_json(assignments),
+            "rent_totals": _sanitize_for_json(rent_totals),
+            "utility_selections": utilities_clean,
+            "program": program,
+            "mih_option": mih_option,
+            "mih_residential_sf": mih_residential_sf,
+        })
+
+    except Exception as e:
+        app.logger.exception("evaluate_assignment failed: %s", e)
+        return jsonify({"error": f"Evaluation failed: {str(e)}"}), 500
 
 
 @app.route('/api/analyze', methods=['POST'])

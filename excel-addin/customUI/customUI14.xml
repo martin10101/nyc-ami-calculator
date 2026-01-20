@@ -4,12 +4,18 @@
     <tabs>
       <tab id="tabAMIOptix" label="AMI Optix">
         <group id="grpSolver" label="Optimization">
-          <button id="btnRunSolver"
-                  label="Run Solver"
+          <button id="btnRunSolverUAP"
+                  label="Run UAP"
                   size="large"
                   imageMso="CalculateNow"
-                  onAction="Ribbon_RunSolver"
-                  supertip="Run the AMI optimization solver on the current workbook. Reads units with AMI values and finds optimal band assignments."/>
+                  onAction="Ribbon_RunSolverUAP"
+                  supertip="Run the UAP optimization solver on the current workbook. Reads affordable units with AMI values and finds optimal band assignments."/>
+          <button id="btnRunSolverMIH"
+                  label="Run MIH"
+                  size="large"
+                  imageMso="CalculateSheet"
+                  onAction="Ribbon_RunSolverMIH"
+                  supertip="Run the MIH optimization solver on the current workbook. Uses MIH!J21 as the residential SF denominator and applies Option 1/Option 4 rules."/>
           <button id="btnViewScenarios"
                   label="View Scenarios"
                   size="large"
