@@ -14,6 +14,25 @@ Option Explicit
 
 Public WithEvents App As Application
 
+Private m_LastSelectionSheet As String
+Private m_LastSelectionAddress As String
+Private m_LastSelectionValue As Variant
+
+Private Sub App_SheetSelectionChange(ByVal Sh As Object, ByVal Target As Range)
+    On Error GoTo SafeExit
+
+    If g_AMIOptixSuppressEvents Then Exit Sub
+    If Target Is Nothing Then Exit Sub
+    If Target.CountLarge <> 1 Then Exit Sub
+    If TypeName(Sh) <> "Worksheet" Then Exit Sub
+
+    m_LastSelectionSheet = CStr(Sh.Name)
+    m_LastSelectionAddress = Target.Address(False, False)
+    m_LastSelectionValue = Target.Value
+
+SafeExit:
+End Sub
+
 Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     On Error GoTo SafeExit
 
@@ -28,7 +47,33 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     If UCase(ws.Name) = "UAP" Then
         If ChangeIsInAMIColumn(ws, Target) Then
             g_AMIOptixSuppressEvents = True
-            UpdateManualScenario True
+            Dim oldValue As Variant
+            Dim hasOldValue As Boolean
+            hasOldValue = (UCase(m_LastSelectionSheet) = UCase(ws.Name) And m_LastSelectionAddress = Target.Address(False, False))
+            If hasOldValue Then oldValue = m_LastSelectionValue
+
+            Dim ok As Boolean
+            ok = UpdateManualScenario(False, "UAP")
+            If (Not ok) And g_AMIOptixLastManualScenarioInvalid Then
+                ' Revert the invalid edit without relying on Application.Undo (unreliable in event handlers).
+                If hasOldValue Then
+                    Application.EnableEvents = False
+                    Target.Value = oldValue
+                    If IsNumeric(oldValue) Then Target.NumberFormat = "0%"
+                    Application.EnableEvents = True
+
+                    ' Refresh the manual block to match the reverted UAP values.
+                    Call UpdateManualScenario(False, "UAP")
+
+                    ' Keep last selection cache consistent for subsequent edits.
+                    m_LastSelectionValue = oldValue
+                End If
+            ElseIf ok Then
+                ' Keep last selection cache consistent for subsequent edits.
+                m_LastSelectionSheet = CStr(ws.Name)
+                m_LastSelectionAddress = Target.Address(False, False)
+                m_LastSelectionValue = Target.Value
+            End If
             g_AMIOptixSuppressEvents = False
         End If
         Exit Sub
@@ -127,9 +172,29 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
 
     If evalResult.Exists("success") Then
         If evalResult("success") = False Then
+            Dim oldValue As Variant
+            Dim hasOldValue As Boolean
+            hasOldValue = (UCase(m_LastSelectionSheet) = UCase(ws.Name) And m_LastSelectionAddress = target.Address(False, False))
+            If hasOldValue Then oldValue = m_LastSelectionValue
+
+            Dim fallbackValue As Variant
+            Dim hasFallback As Boolean
+            hasFallback = False
+            If Not hasOldValue Then
+                hasFallback = TryGetUapAmiValue(unitId, fallbackValue)
+            End If
+
             g_AMIOptixSuppressEvents = True
             Application.EnableEvents = False
-            Application.Undo
+            If hasOldValue Then
+                target.Value = oldValue
+                If IsNumeric(oldValue) Then target.NumberFormat = "0%"
+                m_LastSelectionValue = oldValue
+            ElseIf hasFallback Then
+                target.Value = fallbackValue
+                If IsNumeric(fallbackValue) Then target.NumberFormat = "0%"
+                m_LastSelectionValue = fallbackValue
+            End If
             Application.EnableEvents = True
             g_AMIOptixSuppressEvents = False
 
@@ -150,13 +215,47 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     ' Apply to UAP (last-edit wins) and refresh manual scenario block.
     g_AMIOptixSuppressEvents = True
     ApplyAmiToUap unitId, newAmi
-    UpdateManualScenario
+    Call UpdateManualScenario(False, "UAP")
     g_AMIOptixSuppressEvents = False
     Exit Sub
 
 Fail:
     g_AMIOptixSuppressEvents = False
 End Sub
+
+Private Function TryGetUapAmiValue(unitId As String, ByRef amiValue As Variant) As Boolean
+    On Error GoTo Fail
+
+    Dim ws As Worksheet
+    Set ws = ActiveWorkbook.Worksheets("UAP")
+
+    Dim headerRow As Long
+    headerRow = FindHeaderRow(ws)
+    If headerRow = 0 Then Exit Function
+
+    Dim unitCol As Long
+    unitCol = FindUnitIdColumn(ws, headerRow)
+    If unitCol = 0 Then unitCol = 2
+
+    Dim amiCol As Long
+    amiCol = FindAMIColumn(ws, headerRow)
+    If amiCol = 0 Then Exit Function
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).row
+
+    Dim r As Long
+    For r = headerRow + 1 To lastRow
+        If Trim(CStr(ws.Cells(r, unitCol).Value)) = unitId Then
+            amiValue = ws.Cells(r, amiCol).Value
+            TryGetUapAmiValue = True
+            Exit Function
+        End If
+    Next r
+
+Fail:
+    TryGetUapAmiValue = False
+End Function
 
 Private Sub ApplyAmiToUap(unitId As String, newAmi As Double)
     On Error GoTo Fail

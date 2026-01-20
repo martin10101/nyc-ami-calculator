@@ -9,6 +9,9 @@ Private Const MANUAL_BLOCK_HEIGHT As Long = 120
 Private Const MANUAL_BLOCK_START_ROW As Long = 1
 Private Const SCENARIOS_START_ROW As Long = 125
 
+' True only when the most recent /api/evaluate call returned success=false.
+Public g_AMIOptixLastManualScenarioInvalid As Boolean
+
 '-------------------------------------------------------------------------------
 ' APPLY BEST SCENARIO
 '-------------------------------------------------------------------------------
@@ -28,6 +31,13 @@ Public Sub ApplyBestScenario(result As Object)
     Dim amiValue As Double
     Dim row As Long
     Dim updatedCount As Long
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
 
     On Error GoTo ErrorHandler
 
@@ -68,7 +78,7 @@ Public Sub ApplyBestScenario(result As Object)
 
     If ws Is Nothing Or amiCol = 0 Then
         MsgBox "Cannot write results: data sheet or AMI column not found.", vbExclamation, "AMI Optix"
-        Exit Sub
+        GoTo Cleanup
     End If
 
     ' Build lookup of unit_id to row number
@@ -107,10 +117,13 @@ Public Sub ApplyBestScenario(result As Object)
     Next i
 
     Debug.Print "Applied best scenario: " & bestKey & " - Updated " & updatedCount & " units"
-    Exit Sub
+    GoTo Cleanup
 
 ErrorHandler:
     Debug.Print "ApplyBestScenario Error: " & Err.Description
+Cleanup:
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
 End Sub
 
 Private Function BuildUnitRowLookup(ws As Worksheet) As Object
@@ -168,6 +181,13 @@ Public Sub CreateScenariosSheet(result As Object)
     Dim scenario As Object
     Dim row As Long
     Dim col As Long
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
 
     On Error GoTo ErrorHandler
 
@@ -346,32 +366,48 @@ Public Sub CreateScenariosSheet(result As Object)
     ws.Columns("A:H").AutoFit
 
     ' Freeze top row
+    On Error Resume Next
+    ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
-
     ws.Cells(1, 1).Select
+    On Error GoTo ErrorHandler
 
     Debug.Print "Created scenarios sheet with " & (scenarioNum - 1) & " scenarios"
-    Exit Sub
+    GoTo Cleanup
 
 ErrorHandler:
     Debug.Print "CreateScenariosSheet Error: " & Err.Description
+Cleanup:
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
 End Sub
 
-Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
+Public Function UpdateManualScenario(Optional undoOnInvalid As Boolean = False, Optional programOverride As String = "") As Boolean
     ' Rebuilds the top "Scenario Manual" block from the current UAP/MUH AMI values.
     On Error GoTo ErrorHandler
 
-    If Not HasAPIKey() Then Exit Sub
-    If ActiveWorkbook Is Nothing Then Exit Sub
+    g_AMIOptixLastManualScenarioInvalid = False
+
+    If Not HasAPIKey() Then
+        UpdateManualScenario = False
+        Exit Function
+    End If
+    If ActiveWorkbook Is Nothing Then
+        UpdateManualScenario = False
+        Exit Function
+    End If
 
     Dim programNorm As String
-    programNorm = "UAP"
-    On Error Resume Next
-    Dim wsMIH As Worksheet
-    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
-    On Error GoTo ErrorHandler
-    If Not wsMIH Is Nothing Then programNorm = "MIH"
+    programNorm = UCase(Trim(programOverride))
+    If programNorm <> "UAP" And programNorm <> "MIH" Then
+        programNorm = "UAP"
+        On Error Resume Next
+        Dim wsMIH As Worksheet
+        Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+        On Error GoTo ErrorHandler
+        If Not wsMIH Is Nothing Then programNorm = "MIH"
+    End If
 
     Dim mihOption As String
     Dim mihResidentialSF As Double
@@ -380,7 +416,10 @@ Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
     mihResidentialSF = 0
     mihMaxBandPercent = 0
     If programNorm = "MIH" Then
-        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Sub
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then
+            UpdateManualScenario = False
+            Exit Function
+        End If
     End If
 
     Dim prevSheet As Worksheet
@@ -405,7 +444,10 @@ Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
     Dim units As Collection
     Set units = ReadUnitData()
     prevSheet.Activate
-    If units Is Nothing Or units.Count = 0 Then Exit Sub
+    If units Is Nothing Or units.Count = 0 Then
+        UpdateManualScenario = False
+        Exit Function
+    End If
 
     Dim utilities As Object
     Set utilities = GetUtilitySelectionsForProgram(programNorm)
@@ -415,14 +457,21 @@ Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
 
     Dim response As String
     response = CallEvaluateAPI(payload)
-    If response = "" Then Exit Sub
+    If response = "" Then
+        UpdateManualScenario = False
+        Exit Function
+    End If
 
     Dim evalResult As Object
     Set evalResult = ParseJSON(response)
-    If evalResult Is Nothing Then Exit Sub
+    If evalResult Is Nothing Then
+        UpdateManualScenario = False
+        Exit Function
+    End If
 
     If evalResult.Exists("success") Then
         If evalResult("success") = False Then
+            g_AMIOptixLastManualScenarioInvalid = True
             If evalResult.Exists("errors") Then
                 Dim errs As Object
                 Set errs = evalResult("errors")
@@ -434,31 +483,36 @@ Public Sub UpdateManualScenario(Optional undoOnInvalid As Boolean = False)
                 Next i
                 MsgBox msg, vbExclamation, "AMI Optix"
             End If
-            If undoOnInvalid Then
-                Application.EnableEvents = False
-                Application.Undo
-                Application.EnableEvents = True
-            End If
-            Exit Sub
+            UpdateManualScenario = False
+            Exit Function
         End If
     End If
 
     Dim ws As Worksheet
     Set ws = GetOrCreateScenariosSheet()
 
+    Dim prevEnableEvents As Boolean
+    Dim prevScreenUpdating As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevScreenUpdating = Application.ScreenUpdating
+
     Application.EnableEvents = False
     Application.ScreenUpdating = False
     WriteManualScenarioBlockFromEvaluate ws, evalResult
-    Application.ScreenUpdating = True
-    Application.EnableEvents = True
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.EnableEvents = prevEnableEvents
 
-    Exit Sub
+    UpdateManualScenario = True
+    Exit Function
 
 ErrorHandler:
+    Debug.Print "UpdateManualScenario Error: " & Err.Description
+    On Error Resume Next
     Application.ScreenUpdating = True
     Application.EnableEvents = True
-    Debug.Print "UpdateManualScenario Error: " & Err.Description
-End Sub
+    On Error GoTo 0
+    UpdateManualScenario = False
+End Function
 
 Private Function GetOrCreateScenariosSheet() As Worksheet
     Dim ws As Worksheet
@@ -538,13 +592,27 @@ Private Sub WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As 
         Dim summary As Object
         Set summary = evalResult("summary")
         If summary.Exists("waami") Then scenario("waami") = summary("waami")
-        If summary.Exists("bands_used") Then scenario("bands") = summary("bands_used")
+        If summary.Exists("bands_used") Then
+            If IsObject(summary("bands_used")) Then
+                Set scenario("bands") = summary("bands_used")
+            Else
+                scenario("bands") = summary("bands_used")
+            End If
+        End If
     End If
     If evalResult.Exists("assignments") Then
-        scenario("assignments") = evalResult("assignments")
+        If IsObject(evalResult("assignments")) Then
+            Set scenario("assignments") = evalResult("assignments")
+        Else
+            scenario("assignments") = evalResult("assignments")
+        End If
     End If
     If evalResult.Exists("rent_totals") And Not IsNull(evalResult("rent_totals")) Then
-        scenario("rent_totals") = evalResult("rent_totals")
+        If IsObject(evalResult("rent_totals")) Then
+            Set scenario("rent_totals") = evalResult("rent_totals")
+        Else
+            scenario("rent_totals") = evalResult("rent_totals")
+        End If
     End If
 
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
