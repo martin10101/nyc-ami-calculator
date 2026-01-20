@@ -36,11 +36,12 @@ Before installing the add-in, ensure Excel allows macros:
    - `AMI_Optix_API.bas`
    - `AMI_Optix_DataReader.bas`
    - `AMI_Optix_ResultsWriter.bas`
+   - `AMI_Optix_EventHooks.bas`
+   - `AMI_Optix_Diagnostic.bas` (optional)
+5. Import the `.cls` class module from the `src/` folder:
+   - `AMI_Optix_AppEvents.cls`
 5. Create the UserForm:
-   - Right-click on your project > **Insert** > **UserForm**
-   - Name it `frmUtilities`
-   - Add controls as described in `forms/frmUtilities_DESIGN.txt`
-   - Copy code from `forms/frmUtilities.frm` into the form's code window
+   - Not required. Utilities are configured via prompts and/or read automatically from the workbook.
 6. Save as Add-in:
    - Go to **File** > **Save As**
    - Change "Save as type" to **Excel Add-in (.xlam)**
@@ -56,7 +57,7 @@ For the custom ribbon tab, you need to:
 3. Close Excel
 4. Use a tool like [Office RibbonX Editor](https://github.com/fernandreu/office-ribbonx-editor):
    - Open `AMI_Optix.xlam` in the editor
-   - Insert contents of `customUI/customUI.xml`
+   - Insert contents of `customUI/customUI.xml` and `customUI/customUI14.xml` (recommended)
    - Save and close
 
 ---
