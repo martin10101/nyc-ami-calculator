@@ -18,27 +18,27 @@ Rule: do **not** push to `main` until approved.
 ## Status Checklist
 
 ### Backend (Python)
-- [ ] Add `program` field to API request payload (`UAP` / `MIH`)
-- [ ] Add MIH mode config + constraints (Option 1 / Option 4)
-- [ ] Read MIH option from workbook-derived payload (from Excel add-in) or future file upload path
-- [ ] Implement **Max Revenue** scenario (WAAMI floor 58.9%) using rent-based objective
-- [ ] Add `/api/evaluate` endpoint to validate a manual assignment + compute rents/totals
-- [ ] Ensure scenario output includes: bands, assignments, metrics, rent_totals, notes
+- [x] Add `program` field to API request payload (`UAP` / `MIH`)
+- [x] Add MIH mode config + constraints (Option 1 / Option 4)
+- [x] Read MIH option from workbook-derived payload (from Excel add-in) or future file upload path
+- [x] Implement **Max Revenue** scenario (WAAMI floor 58.9%) using rent-based objective
+- [x] Add `/api/evaluate` endpoint to validate a manual assignment + compute rents/totals
+- [x] Ensure scenario output includes: bands, assignments, metrics, rent_totals, notes
 
 ### Excel Add-in (VBA + Ribbon)
-- [ ] Ribbon: add separate buttons `Run UAP` and `Run MIH`
-- [ ] Utilities: detect + read selections from workbook matrices (UAP: `Calculations!P3:AA3`; MIH: `Rents & Utilities` matrix)
-- [ ] Payload: send `program`, MIH option, and MIH residential SF (`MIH!J21`)
+- [x] Ribbon: add separate buttons `Run UAP` and `Run MIH`
+- [x] Utilities: detect + read selections from workbook matrices (UAP: `Calculations!P3:AA3`; MIH: `Rents & Utilities` matrix)
+- [x] Payload: send `program`, MIH option, and MIH residential SF (`MIH!J21`)
 - [ ] `AMI Scenarios` formatting updates (remove gross line + total allowance line; add individual breakdown lines)
 - [ ] Include unit size columns: Bedrooms + Net SF + Floor + Balcony
 - [ ] Scenario apply flow: prompt for scenario # and apply to UAP AMI column
-- [ ] Manual Scenario sync (UAP ↔ AMI Scenarios), “most recent edit wins”, invalid edits revert with error
+- [x] Manual Scenario sync (UAP ↔ AMI Scenarios), “most recent edit wins”, invalid edits revert with error
 - [ ] Add “Final Selection” dropdown + “Reason/Notes” box and append to a history table
 
 ### Testing
 - [ ] Add unit tests for MIH constraints + program separation
 - [ ] Add tests for Max Revenue scenario selection behavior
-- [ ] Run `pytest` locally and confirm green
+- [x] Run `pytest` locally and confirm green
 - [ ] Manual QA on provided workbooks in `C:\Users\MLFLL\Downloads\files`
 
 ## Notes / Decisions (locked)
@@ -46,4 +46,3 @@ Rule: do **not** push to `main` until approved.
 - “Max Revenue” (58.9% floor) is an **extra option** only (never auto-applied).
 - “Most recent edit wins” for Manual Scenario sync.
 - Manual edits must validate; invalid edits show an error (do not silently accept).
-
