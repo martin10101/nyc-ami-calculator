@@ -3,7 +3,7 @@
 Branch: `feature/ai-learning`  
 Rule: do **not** merge to `main` until approved.
 
-## What “Learning” Means (so we don’t break the solver)
+## What "Learning" Means (so we don't break the solver)
 
 **Hard rules stay hard.** Learning must NOT change:
 - UAP vs MIH program rules (never mixed)
@@ -14,14 +14,14 @@ Rule: do **not** merge to `main` until approved.
 - Max bands per scenario
 
 **Learning only adjusts soft preferences**, like:
-- What “premium” means (floor vs SF vs beds vs balcony weighting)
-- Scenario ranking/recommendation (never silently relax constraints)
+- What "premium" means (floor vs SF vs bedrooms vs balcony weighting)
+- Tie-break style when multiple compliant solutions exist
 
-## Goal (Client Value)
+## Goal (client value)
 
 Over time, the tool should:
-- Prefer placing higher AMI bands on the kinds of units your office consistently treats as “premium”
-- Keep results compliant, but closer to what your team actually chooses
+- Prefer placing higher AMI bands on the kinds of units your office consistently treats as "premium"
+- Keep results compliant (constraints enforced server-side)
 - Log exactly what changed (baseline vs learned) so behavior is auditable
 
 ## Modes (per profile: UAP / MIH Option 1 / MIH Option 4)
@@ -43,8 +43,8 @@ Current approach: **shared-folder event log** (one JSON file per event; no share
 - `scenario_applied`: which scenario was applied (AUTO or USER) + unit features + assigned AMI
 
 Planned next:
-- `final_selection`: “Final Selection” + “Reason/Notes”
-- `manual_edit`: “Validate/Update” custom changes (not on every keystroke)
+- `final_selection`: "Final Selection" + "Reason/Notes"
+- `manual_edit`: "Validate/Update" custom changes (not on every keystroke)
 
 ## Critique (risks + mitigations)
 
@@ -52,15 +52,15 @@ Planned next:
 Mitigation: learning only affects premium weights; constraints stay enforced server-side.
 
 2) **Noisy data causes drift**  
-Mitigation: bounded weights, minimum-data threshold, and logging + compare-baseline QA.
+Mitigation: bounded weights + minimum-data threshold + logging + optional compare-baseline QA.
 
 3) **Multi-user office write conflicts**  
-Mitigation: write one JSON file per event with GUID filenames (no file-lock contention).
+Mitigation: write one JSON file per event with GUID filenames (no shared file-lock contention).
 
 4) **Black box behavior**  
-Mitigation: solver_run logs baseline vs learned WAAMI + count of changed units.
+Mitigation: `solver_run` logs baseline vs learned WAAMI + count of changed units.
 
-## Implementation Checklist
+## Implementation checklist
 
 ### Backend (Render)
 - [x] Accept `project_overrides` on `/api/optimize` and pass into solver
@@ -68,14 +68,14 @@ Mitigation: solver_run logs baseline vs learned WAAMI + count of changed units.
 - [x] Ensure Max Revenue scenario respects overrides
 - [x] Tests for overrides + compare (`tests/test_api_optimize_learning.py`)
 
-### Excel Add-in (VBA)
+### Excel add-in (VBA)
 - [x] Compute learned premium weights from `scenario_applied` events (USER)
 - [x] Send `project_overrides` + `compare_baseline` in optimize payload (when enabled)
 - [x] Log `solver_run` and `scenario_applied`
 - [x] Implement SHADOW semantics (apply baseline to sheet; show learned scenarios)
-- [x] Ribbon “Learning” settings + “Open Logs” buttons (no UserForms)
+- [x] Ribbon "Learning" settings + "Open Logs" buttons (no UserForms)
 
-### QA
+### QA (manual)
 - [ ] Verify OFF matches current behavior
 - [ ] Verify SHADOW applies baseline + logs diff
-- [ ] Verify ON affects only soft ranking, not constraints
+- [ ] Verify ON affects only soft preference ranking, not constraints

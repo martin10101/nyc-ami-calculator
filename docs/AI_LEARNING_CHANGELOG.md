@@ -5,7 +5,7 @@ For the machine-readable event log that drives learning, we will use a separate 
 
 ## 2026-01-21
 - Created `docs/BUILD_TRACKER_ai_learning.md` to track scope, risks, and implementation checklist.
-- Confirmed current working branch: `feature/ai-learning` (commit `66f5e04` on `origin/feature/ai-learning`).
+- Confirmed current working branch: `feature/ai-learning` (commit `ac17889`).
 - Confirmed solver already supports **soft** premium-weight overrides via `project_overrides` (not yet exposed through `/api/optimize`).
 - Backend: `/api/optimize` now accepts `project_overrides` + optional `compare_baseline`, returning a `learning` diff (baseline vs learned).
 - Backend: Max Revenue scenario now respects overrides; baseline/learned snapshots include WAAMI + canonical assignments diff.
