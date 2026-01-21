@@ -441,10 +441,104 @@ def optimize_units():
                 "notes": [],
             }), 200
 
-        # Run solver
+        def _count_nonempty_scenarios(scenarios_dict: dict) -> int:
+            if not scenarios_dict:
+                return 0
+            return len([s for s in scenarios_dict.values() if s])
+
+        def _scenario_canon(s: dict) -> tuple | None:
+            if not s:
+                return None
+            canon = s.get('canonical_assignments')
+            if not canon:
+                return None
+            try:
+                return tuple(tuple(pair) for pair in canon)
+            except Exception:
+                return None
+
+        def _merge_unique_scenarios(existing: dict, incoming: dict, key_prefix: str) -> None:
+            if not incoming:
+                return
+            existing_canons = {_scenario_canon(s) for s in (existing or {}).values() if s}
+            existing_canons.discard(None)
+            extra_idx = 1
+            for in_key, in_scenario in incoming.items():
+                if not in_scenario:
+                    continue
+                canon = _scenario_canon(in_scenario)
+                if canon is None or canon in existing_canons:
+                    continue
+
+                out_key = in_key
+                if out_key in existing:
+                    while True:
+                        out_key = f"{key_prefix}_extra_{extra_idx}"
+                        extra_idx += 1
+                        if out_key not in existing:
+                            break
+
+                existing[out_key] = in_scenario
+                existing_canons.add(canon)
+
+        # Run solver (primary pass)
         solver_results = find_optimal_scenarios(df_units, config)
-        scenarios = solver_results.get('scenarios', {})
-        notes = solver_results.get('notes', [])
+        scenarios = solver_results.get('scenarios', {}) or {}
+        notes = solver_results.get('notes', []) or []
+
+        program_norm = str(program or 'UAP').strip().upper()
+
+        # Minimum scenarios to attempt to return (Excel wants at least 3).
+        min_scenarios_requested = 3
+        try:
+            if data.get('min_scenarios') is not None:
+                min_scenarios_requested = max(1, int(data.get('min_scenarios')))
+        except Exception:
+            min_scenarios_requested = 3
+
+        # --- Deep affordability cap widening (UAP) ---
+        # Mirror main.py behavior, but also allow widening to find *additional* scenarios.
+        max_share_cap = config.get('optimization_rules', {}).get('deep_affordability_max_share')
+        min_share_cap = config.get('optimization_rules', {}).get('deep_affordability_min_share')
+        widen_step = config.get('optimization_rules', {}).get('deep_affordability_widen_step', 0.005)
+        widen_cap_limit = config.get('optimization_rules', {}).get('deep_affordability_widen_cap', 0.4)
+        widened_any = False
+
+        if program_norm == 'UAP' and max_share_cap is not None and min_share_cap is not None and widen_step and widen_step > 0:
+            candidate_cap = float(max_share_cap)
+            while candidate_cap <= float(widen_cap_limit):
+                # Stop if we have enough scenarios and at least one absolute_best.
+                if scenarios.get('absolute_best') and _count_nonempty_scenarios(scenarios) >= min_scenarios_requested:
+                    break
+
+                # First loop iteration uses the current cap (no-op).
+                if candidate_cap > float(max_share_cap) + 1e-12:
+                    attempt_config = copy.deepcopy(config)
+                    attempt_config['optimization_rules']['deep_affordability_max_share'] = float(candidate_cap)
+                    notes.append(
+                        f"Retrying with 40% share cap widened to {candidate_cap*100:.2f}% to find additional distinct scenarios."
+                    )
+                    attempt_results = find_optimal_scenarios(df_units, attempt_config)
+                    _merge_unique_scenarios(scenarios, attempt_results.get('scenarios', {}) or {}, key_prefix="widened")
+                    notes.extend(attempt_results.get('notes', []) or [])
+                    widened_any = True
+
+                candidate_cap = round(candidate_cap + float(widen_step), 10)
+
+        if widened_any:
+            notes.append("Deep-affordability cap widening was used to expand the scenario set.")
+
+        # --- WAAMI relaxed-floor pass (UAP) ---
+        # If we still have fewer than requested scenarios, run a second pass with a 59% floor to surface near-60 alternatives.
+        if program_norm == 'UAP' and scenarios.get('absolute_best') and _count_nonempty_scenarios(scenarios) < min_scenarios_requested:
+            best_waami = float(scenarios['absolute_best'].get('waami') or 0.0)
+            relaxed_floor = 0.59 if best_waami >= 0.595 else max(0.58, best_waami - 0.01)
+            notes.append(
+                f"Attempting an expanded search for alternatives with a relaxed WAAMI floor of {relaxed_floor*100:.2f}%."
+            )
+            relaxed_results = find_optimal_scenarios(df_units, config, relaxed_floor=relaxed_floor)
+            _merge_unique_scenarios(scenarios, relaxed_results.get('scenarios', {}) or {}, key_prefix="relaxed")
+            notes.extend(relaxed_results.get('notes', []) or [])
 
         if not scenarios or not scenarios.get('absolute_best'):
             return jsonify({

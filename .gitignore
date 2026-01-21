@@ -18,3 +18,12 @@ dashboard_static/
 # Uploaded files
 uploads/
 rent_calculators/
+
+# Local git-permission recovery artifacts (safe to ignore)
+.git_permfix_src/
+.git_src_for_fix/
+.git_tmp_bad/
+.git_broken_backup/
+.git_dir_old_*/
+_git_internal_backup/
+_gitdir/
