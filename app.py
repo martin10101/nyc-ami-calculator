@@ -404,6 +404,8 @@ def optimize_units():
         mih_option = data.get('mih_option')
         mih_residential_sf = data.get('mih_residential_sf')
         mih_max_band_percent = data.get('mih_max_band_percent')
+        project_overrides = data.get('project_overrides') if isinstance(data.get('project_overrides'), dict) else None
+        compare_baseline = bool(data.get('compare_baseline')) if data.get('compare_baseline') is not None else False
 
         # Convert units to DataFrame (same format parser produces)
         df_units = pd.DataFrame(units)
@@ -481,11 +483,6 @@ def optimize_units():
                 existing[out_key] = in_scenario
                 existing_canons.add(canon)
 
-        # Run solver (primary pass)
-        solver_results = find_optimal_scenarios(df_units, config)
-        scenarios = solver_results.get('scenarios', {}) or {}
-        notes = solver_results.get('notes', []) or []
-
         program_norm = str(program or 'UAP').strip().upper()
 
         # Minimum scenarios to attempt to return (Excel wants at least 3).
@@ -496,49 +493,60 @@ def optimize_units():
         except Exception:
             min_scenarios_requested = 3
 
-        # --- Deep affordability cap widening (UAP) ---
-        # Mirror main.py behavior, but also allow widening to find *additional* scenarios.
-        max_share_cap = config.get('optimization_rules', {}).get('deep_affordability_max_share')
-        min_share_cap = config.get('optimization_rules', {}).get('deep_affordability_min_share')
-        widen_step = config.get('optimization_rules', {}).get('deep_affordability_widen_step', 0.005)
-        widen_cap_limit = config.get('optimization_rules', {}).get('deep_affordability_widen_cap', 0.4)
-        widened_any = False
+        def _run_solver_with_expansions(overrides: dict | None) -> tuple[dict, list]:
+            """Run solver + expansion passes, preserving distinct scenarios."""
+            solver_results = find_optimal_scenarios(df_units, config, project_overrides=overrides)
+            scenarios_out = solver_results.get('scenarios', {}) or {}
+            notes_out = solver_results.get('notes', []) or []
 
-        if program_norm == 'UAP' and max_share_cap is not None and min_share_cap is not None and widen_step and widen_step > 0:
-            candidate_cap = float(max_share_cap)
-            while candidate_cap <= float(widen_cap_limit):
-                # Stop if we have enough scenarios and at least one absolute_best.
-                if scenarios.get('absolute_best') and _count_nonempty_scenarios(scenarios) >= min_scenarios_requested:
-                    break
+            # --- Deep affordability cap widening (UAP) ---
+            max_share_cap = config.get('optimization_rules', {}).get('deep_affordability_max_share')
+            min_share_cap = config.get('optimization_rules', {}).get('deep_affordability_min_share')
+            widen_step = config.get('optimization_rules', {}).get('deep_affordability_widen_step', 0.005)
+            widen_cap_limit = config.get('optimization_rules', {}).get('deep_affordability_widen_cap', 0.4)
+            widened_any = False
 
-                # First loop iteration uses the current cap (no-op).
-                if candidate_cap > float(max_share_cap) + 1e-12:
-                    attempt_config = copy.deepcopy(config)
-                    attempt_config['optimization_rules']['deep_affordability_max_share'] = float(candidate_cap)
-                    notes.append(
-                        f"Retrying with 40% share cap widened to {candidate_cap*100:.2f}% to find additional distinct scenarios."
-                    )
-                    attempt_results = find_optimal_scenarios(df_units, attempt_config)
-                    _merge_unique_scenarios(scenarios, attempt_results.get('scenarios', {}) or {}, key_prefix="widened")
-                    notes.extend(attempt_results.get('notes', []) or [])
-                    widened_any = True
+            if program_norm == 'UAP' and max_share_cap is not None and min_share_cap is not None and widen_step and widen_step > 0:
+                candidate_cap = float(max_share_cap)
+                while candidate_cap <= float(widen_cap_limit):
+                    if scenarios_out.get('absolute_best') and _count_nonempty_scenarios(scenarios_out) >= min_scenarios_requested:
+                        break
 
-                candidate_cap = round(candidate_cap + float(widen_step), 10)
+                    if candidate_cap > float(max_share_cap) + 1e-12:
+                        attempt_config = copy.deepcopy(config)
+                        attempt_config['optimization_rules']['deep_affordability_max_share'] = float(candidate_cap)
+                        notes_out.append(
+                            f"Retrying with 40% share cap widened to {candidate_cap*100:.2f}% to find additional distinct scenarios."
+                        )
+                        attempt_results = find_optimal_scenarios(df_units, attempt_config, project_overrides=overrides)
+                        _merge_unique_scenarios(scenarios_out, attempt_results.get('scenarios', {}) or {}, key_prefix="widened")
+                        notes_out.extend(attempt_results.get('notes', []) or [])
+                        widened_any = True
 
-        if widened_any:
-            notes.append("Deep-affordability cap widening was used to expand the scenario set.")
+                    candidate_cap = round(candidate_cap + float(widen_step), 10)
 
-        # --- WAAMI relaxed-floor pass (UAP) ---
-        # If we still have fewer than requested scenarios, run a second pass with a 59% floor to surface near-60 alternatives.
-        if program_norm == 'UAP' and scenarios.get('absolute_best') and _count_nonempty_scenarios(scenarios) < min_scenarios_requested:
-            best_waami = float(scenarios['absolute_best'].get('waami') or 0.0)
-            relaxed_floor = 0.59 if best_waami >= 0.595 else max(0.58, best_waami - 0.01)
-            notes.append(
-                f"Attempting an expanded search for alternatives with a relaxed WAAMI floor of {relaxed_floor*100:.2f}%."
-            )
-            relaxed_results = find_optimal_scenarios(df_units, config, relaxed_floor=relaxed_floor)
-            _merge_unique_scenarios(scenarios, relaxed_results.get('scenarios', {}) or {}, key_prefix="relaxed")
-            notes.extend(relaxed_results.get('notes', []) or [])
+            if widened_any:
+                notes_out.append("Deep-affordability cap widening was used to expand the scenario set.")
+
+            # --- WAAMI relaxed-floor pass (UAP) ---
+            if program_norm == 'UAP' and scenarios_out.get('absolute_best') and _count_nonempty_scenarios(scenarios_out) < min_scenarios_requested:
+                best_waami = float(scenarios_out['absolute_best'].get('waami') or 0.0)
+                relaxed_floor = 0.59 if best_waami >= 0.595 else max(0.58, best_waami - 0.01)
+                notes_out.append(
+                    f"Attempting an expanded search for alternatives with a relaxed WAAMI floor of {relaxed_floor*100:.2f}%."
+                )
+                relaxed_results = find_optimal_scenarios(df_units, config, relaxed_floor=relaxed_floor, project_overrides=overrides)
+                _merge_unique_scenarios(scenarios_out, relaxed_results.get('scenarios', {}) or {}, key_prefix="relaxed")
+                notes_out.extend(relaxed_results.get('notes', []) or [])
+
+            return scenarios_out, notes_out
+
+        # Run solver (learned) and (optionally) baseline for audit/compare.
+        scenarios, notes = _run_solver_with_expansions(project_overrides)
+        baseline_scenarios = None
+        baseline_notes = None
+        if compare_baseline and project_overrides:
+            baseline_scenarios, baseline_notes = _run_solver_with_expansions(None)
 
         if not scenarios or not scenarios.get('absolute_best'):
             return jsonify({
@@ -556,9 +564,10 @@ def optimize_units():
             except Exception as e:
                 notes.append(f"Warning: Could not load rent calculator: {str(e)}")
 
-        # Apply rent calculations to each scenario
-        if rent_schedule:
-            for scenario_key, scenario in scenarios.items():
+        def _apply_rents_to_scenarios(scenarios_dict: dict) -> None:
+            if not rent_schedule:
+                return
+            for scenario_key, scenario in scenarios_dict.items():
                 if scenario and 'assignments' in scenario:
                     assignments, rent_totals = compute_rents_for_assignments(
                         rent_schedule,
@@ -568,8 +577,13 @@ def optimize_units():
                     scenario['assignments'] = assignments
                     scenario['rent_totals'] = rent_totals
 
+        # Apply rent calculations to each scenario
+        if rent_schedule:
+            _apply_rents_to_scenarios(scenarios)
+            if baseline_scenarios:
+                _apply_rents_to_scenarios(baseline_scenarios)
+
             # Optional: add an extra "Max Revenue" scenario (UAP only), allowing a slightly lower WAAMI floor.
-            program_norm = str(program or 'UAP').strip().upper()
             if program_norm == 'UAP':
                 try:
                     bands = sorted({int(b) for b in config.get('optimization_rules', {}).get('potential_bands', [])})
@@ -586,6 +600,7 @@ def optimize_units():
                         config,
                         rent_by_band_cents=rent_by_band_cents,
                         waami_floor=0.589,
+                        project_overrides=project_overrides,
                     )
                     if max_rev and max_rev.get('status') == 'OPTIMAL':
                         assignments, rent_totals = compute_rents_for_assignments(
@@ -602,6 +617,48 @@ def optimize_units():
                 except Exception as e:
                     notes.append(f"Warning: Could not compute Max Revenue scenario: {str(e)}")
 
+        learning_info = None
+        if compare_baseline and baseline_scenarios and scenarios:
+            def _scenario_snapshot(scenarios_dict: dict) -> dict:
+                abs_best = scenarios_dict.get('absolute_best') or {}
+                return {
+                    "scenario_keys": sorted(list(scenarios_dict.keys())),
+                    "absolute_best": {
+                        "waami": float(abs_best.get('waami') or 0.0),
+                        "waami_percent": float((abs_best.get('metrics') or {}).get('waami_percent') or 0.0),
+                        "revenue_score": float(abs_best.get('revenue_score') or 0.0),
+                        "rent_score": abs_best.get('rent_score'),
+                        "canonical_assignments": abs_best.get('canonical_assignments'),
+                    }
+                }
+
+            base_snap = _scenario_snapshot(baseline_scenarios)
+            learned_snap = _scenario_snapshot(scenarios)
+
+            base_canon = base_snap.get("absolute_best", {}).get("canonical_assignments") or []
+            learned_canon = learned_snap.get("absolute_best", {}).get("canonical_assignments") or []
+            base_map = {str(u): int(b) for u, b in base_canon if u is not None and b is not None}
+            learned_map = {str(u): int(b) for u, b in learned_canon if u is not None and b is not None}
+            changed_units = []
+            for unit_id in sorted(set(base_map.keys()) | set(learned_map.keys())):
+                if base_map.get(unit_id) != learned_map.get(unit_id):
+                    changed_units.append({
+                        "unit_id": unit_id,
+                        "baseline_band": base_map.get(unit_id),
+                        "learned_band": learned_map.get(unit_id),
+                    })
+
+            learning_info = {
+                "compare_baseline": True,
+                "project_overrides": project_overrides,
+                "baseline": base_snap,
+                "learned": learned_snap,
+                "diff": {
+                    "changed_unit_count": len(changed_units),
+                    "changed_units": changed_units[:200],
+                },
+            }
+
         # Build response
         response = {
             "success": True,
@@ -616,6 +673,9 @@ def optimize_units():
                 "mih_residential_sf": mih_residential_sf,
             }
         }
+
+        if learning_info:
+            response["learning"] = _sanitize_for_json(learning_info)
 
         return jsonify(response)
 

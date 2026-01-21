@@ -237,9 +237,36 @@ Public Sub RunOptimizationForProgram(program As String)
         End If
     End If
 
+    ' Step 3C: AI Learning (soft preferences only)
+    Dim profileKey As String
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+
+    Dim learningMode As String
+    learningMode = GetLearningMode(profileKey)
+
+    Dim compareBaseline As Boolean
+    compareBaseline = False
+
+    Dim premiumWeights As Object
+    Set premiumWeights = Nothing
+
+    Dim projectOverridesJson As String
+    projectOverridesJson = ""
+
+    If learningMode <> LEARNING_MODE_OFF Then
+        If learningMode = LEARNING_MODE_SHADOW Then
+            ' Shadow mode must compare baseline so we can apply baseline results while still logging diffs.
+            compareBaseline = True
+        Else
+            compareBaseline = GetLearningCompareBaseline(profileKey)
+        End If
+        Set premiumWeights = ComputeLearnedPremiumWeights(profileKey)
+        projectOverridesJson = BuildProjectOverridesJson(premiumWeights, "excel_learning_v1")
+    End If
+
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."
-    payload = BuildAPIPayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
+    payload = BuildAPIPayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, projectOverridesJson, compareBaseline)
 
     ' DEBUG: Print payload being sent
     Debug.Print "=== UNITS READ FROM WORKBOOK ==="
@@ -288,6 +315,11 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Store for later viewing
     Set g_LastScenarios = result
+
+    ' Best-effort learning audit log
+    On Error Resume Next
+    Call LogSolverRun(profileKey, programNorm, mihOption, learningMode, compareBaseline, premiumWeights, result)
+    On Error GoTo ErrorHandler
 
     ' Step 7: Check for success and scenarios
     ' First check if API returned an error
@@ -338,18 +370,68 @@ Public Sub RunOptimizationForProgram(program As String)
     ' Step 8: Write results
     Application.StatusBar = "AMI Optix: Writing results..."
 
-    ' Apply best scenario to source sheet
-    ApplyBestScenario result
+    Dim appliedScenarioLabel As String
+    appliedScenarioLabel = "best scenario"
+
+    ' Apply to source sheet
+    If learningMode = LEARNING_MODE_SHADOW And compareBaseline Then
+        Dim appliedBaseline As Boolean
+        appliedBaseline = False
+
+        On Error Resume Next
+        If result.Exists("learning") Then
+            Dim learningObj As Object
+            Set learningObj = result("learning")
+            If Not learningObj Is Nothing Then
+                If learningObj.Exists("baseline") Then
+                    Dim baseObj As Object
+                    Set baseObj = learningObj("baseline")
+                    If Not baseObj Is Nothing Then
+                        If baseObj.Exists("absolute_best") Then
+                            Dim baseBest As Object
+                            Set baseBest = baseObj("absolute_best")
+                            If Not baseBest Is Nothing Then
+                                If baseBest.Exists("canonical_assignments") Then
+                                    Dim canon As Object
+                                    Set canon = baseBest("canonical_assignments")
+                                    If Not canon Is Nothing Then
+                                        ApplyCanonicalAssignmentsToDataSheet canon, RGB(200, 220, 255)
+                                        appliedBaseline = True
+                                        appliedScenarioLabel = "baseline scenario (shadow mode)"
+                                    End If
+                                End If
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        On Error GoTo ErrorHandler
+
+        If Not appliedBaseline Then
+            ApplyBestScenario result
+        End If
+    Else
+        ApplyBestScenario result
+    End If
 
     ' Create scenarios comparison sheet
     CreateScenariosSheet result
+
+    ' In Shadow mode, the scenarios sheet was built from the learned result, but the sheet data
+    ' reflects baseline (by design). Refresh the Scenario Manual block to match current sheet values.
+    If learningMode = LEARNING_MODE_SHADOW Then
+        On Error Resume Next
+        Call UpdateManualScenario(False, programNorm)
+        On Error GoTo ErrorHandler
+    End If
 
     ' Done
     Application.StatusBar = False
     Application.ScreenUpdating = True
 
     MsgBox "Optimization complete!" & vbCrLf & vbCrLf & _
-           "- Best scenario applied to your data" & vbCrLf & _
+           "- " & appliedScenarioLabel & " applied to your data" & vbCrLf & _
            "- All scenarios available on 'AMI Scenarios' sheet", _
            vbInformation, "AMI Optix"
 

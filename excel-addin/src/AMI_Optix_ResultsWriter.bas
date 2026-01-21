@@ -117,6 +117,27 @@ Public Sub ApplyBestScenario(result As Object)
     Next i
 
     Debug.Print "Applied best scenario: " & bestKey & " - Updated " & updatedCount & " units"
+
+    ' Best-effort learning audit: record what got auto-applied.
+    On Error Resume Next
+    Dim programNorm As String
+    Dim mihOption As String
+    Dim profileKey As String
+    programNorm = "UAP"
+    mihOption = ""
+    If Not result Is Nothing Then
+        If result.Exists("project_summary") Then
+            Dim ps As Object
+            Set ps = result("project_summary")
+            If Not ps Is Nothing Then
+                If ps.Exists("program") Then programNorm = UCase$(CStr(ps("program")))
+                If ps.Exists("mih_option") Then mihOption = CStr(ps("mih_option"))
+            End If
+        End If
+    End If
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+    Call LogScenarioApplied(profileKey, programNorm, mihOption, bestKey, "AUTO", bestScenario)
+    On Error GoTo 0
     GoTo Cleanup
 
 ErrorHandler:
@@ -382,6 +403,106 @@ Cleanup:
     Application.EnableEvents = prevEnableEvents
     g_AMIOptixSuppressEvents = prevSuppress
 End Sub
+
+Public Sub ApplyCanonicalAssignmentsToDataSheet(canonicalAssignments As Object, Optional highlightColor As Long = -1)
+    ' Applies canonical assignments (array of [unit_id, band_percent]) to the source data sheet.
+    ' Used for Learning "Shadow" mode to apply baseline results without needing full assignment objects.
+
+    Dim ws As Worksheet
+    Dim amiCol As Long
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
+
+    On Error GoTo ErrorHandler
+
+    If canonicalAssignments Is Nothing Then GoTo Cleanup
+
+    ' Get data sheet and AMI column
+    Set ws = GetDataSheet()
+    amiCol = GetAMIColumn()
+
+    If ws Is Nothing Or amiCol = 0 Then
+        MsgBox "Cannot write results: data sheet or AMI column not found.", vbExclamation, "AMI Optix"
+        GoTo Cleanup
+    End If
+
+    ' Build lookup of unit_id to row number
+    Dim unitRows As Object
+    Set unitRows = BuildUnitRowLookup(ws)
+
+    Dim i As Long
+    Dim updatedCount As Long
+    updatedCount = 0
+
+    For i = 1 To canonicalAssignments.Count
+        Dim unitId As String
+        Dim band As Double
+        If Not TryGetCanonicalPair(canonicalAssignments(i), unitId, band) Then GoTo NextPair
+
+        Dim amiValue As Double
+        If band > 1 Then
+            amiValue = band / 100#
+        Else
+            amiValue = band
+        End If
+
+        If unitRows.Exists(unitId) Then
+            Dim row As Long
+            row = unitRows(unitId)
+            ws.Cells(row, amiCol).Value = amiValue
+            ws.Cells(row, amiCol).NumberFormat = "0%"
+            If highlightColor <> -1 Then
+                ws.Cells(row, amiCol).Interior.Color = highlightColor
+            End If
+            updatedCount = updatedCount + 1
+        End If
+
+NextPair:
+    Next i
+
+    Debug.Print "Applied canonical assignments - Updated " & updatedCount & " units"
+    GoTo Cleanup
+
+ErrorHandler:
+    Debug.Print "ApplyCanonicalAssignmentsToDataSheet Error: " & Err.Description
+Cleanup:
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
+End Sub
+
+Private Function TryGetCanonicalPair(pair As Variant, ByRef unitId As String, ByRef band As Double) As Boolean
+    On Error GoTo Fail
+
+    unitId = ""
+    band = 0#
+
+    If IsObject(pair) Then
+        ' VBA-JSON parses nested arrays as Collections.
+        Dim c As Object
+        Set c = pair
+        If c Is Nothing Then GoTo Fail
+        If c.Count < 2 Then GoTo Fail
+        unitId = CStr(c(1))
+        band = CDbl(c(2))
+        TryGetCanonicalPair = (Trim$(unitId) <> "")
+        Exit Function
+    End If
+
+    If IsArray(pair) Then
+        unitId = CStr(pair(0))
+        band = CDbl(pair(1))
+        TryGetCanonicalPair = (Trim$(unitId) <> "")
+        Exit Function
+    End If
+
+Fail:
+    TryGetCanonicalPair = False
+End Function
 
 Public Function UpdateManualScenario(Optional undoOnInvalid As Boolean = False, Optional programOverride As String = "") As Boolean
     ' Rebuilds the top "Scenario Manual" block from the current UAP/MUH AMI values.
@@ -1027,6 +1148,33 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
     Dim unitRows As Object
     Set unitRows = BuildUnitRowLookup(ws)
 
+    Dim programNorm As String
+    Dim mihOption As String
+    programNorm = "UAP"
+    mihOption = ""
+
+    On Error Resume Next
+    If Not g_LastScenarios Is Nothing Then
+        If g_LastScenarios.Exists("project_summary") Then
+            Dim ps As Object
+            Set ps = g_LastScenarios("project_summary")
+            If Not ps Is Nothing Then
+                If ps.Exists("program") Then programNorm = UCase$(CStr(ps("program")))
+                If ps.Exists("mih_option") Then mihOption = CStr(ps("mih_option"))
+            End If
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
+
+    On Error GoTo ApplyFail
+
     ' Apply
     Dim i As Long
     Dim assignment As Object
@@ -1060,6 +1208,26 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
             updatedCount = updatedCount + 1
         End If
     Next i
+
+    ' Refresh Scenario Manual (live sync) to match what is now applied.
+    On Error Resume Next
+    Call UpdateManualScenario(False, programNorm)
+    On Error GoTo 0
+
+    ' Best-effort learning audit: record the user's chosen scenario.
+    On Error Resume Next
+    Dim profileKey As String
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+    Call LogScenarioApplied(profileKey, programNorm, mihOption, scenarioKey, "USER", scenario)
+    On Error GoTo 0
+
+    GoTo ApplyCleanup
+
+ApplyFail:
+    Debug.Print "ApplyScenarioByKey Error: " & Err.Description
+ApplyCleanup:
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
 
     MsgBox "Applied scenario '" & FormatScenarioName(scenarioKey) & "'" & vbCrLf & _
            "Updated " & updatedCount & " units.", vbInformation, "AMI Optix"

@@ -239,6 +239,146 @@ Public Sub Ribbon_OpenAPISettings(control As IRibbonControl)
 End Sub
 
 '-------------------------------------------------------------------------------
+' RIBBON CALLBACKS - LEARNING GROUP
+'-------------------------------------------------------------------------------
+
+Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
+    ' Configure AI learning (soft preferences only) for the current program profile.
+    ' Uses InputBox/MsgBox (no UserForms) to avoid type-mismatch issues.
+
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then
+        MsgBox "Open a workbook first.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim programNorm As String
+    programNorm = "UAP"
+
+    On Error Resume Next
+    Dim wsMIH As Worksheet
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    On Error GoTo Fail
+    If Not wsMIH Is Nothing Then programNorm = "MIH"
+
+    Dim mihOption As String
+    mihOption = ""
+
+    If programNorm = "MIH" Then
+        Dim residentialSF As Double
+        Dim maxBandPercent As Long
+        On Error Resume Next
+        Call TryReadMIHInputs(mihOption, residentialSF, maxBandPercent)
+        On Error GoTo Fail
+    End If
+
+    Dim profileKey As String
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+
+    Dim currentMode As String
+    currentMode = GetLearningMode(profileKey)
+
+    Dim currentCompare As Boolean
+    currentCompare = GetLearningCompareBaseline(profileKey)
+
+    Dim currentRoot As String
+    currentRoot = GetLearningLogRootPath()
+
+    Dim summary As String
+    summary = "Profile: " & profileKey & vbCrLf & _
+              "Program: " & programNorm & vbCrLf & _
+              IIf(programNorm = "MIH", "MIH Option: " & mihOption & vbCrLf, "") & _
+              vbCrLf & _
+              "Learning Mode: " & currentMode & vbCrLf & _
+              "Compare Baseline: " & IIf(currentCompare, "YES", "NO") & vbCrLf & _
+              "Log Root: " & currentRoot
+
+    MsgBox summary, vbInformation, "AMI Optix - Learning Settings"
+
+    Dim newMode As String
+    newMode = InputBox("Enter learning mode for " & profileKey & " (OFF / SHADOW / ON):", "AMI Optix - Learning Mode", currentMode)
+    If Trim$(newMode) <> "" Then
+        newMode = UCase$(Trim$(newMode))
+        If newMode <> LEARNING_MODE_OFF And newMode <> LEARNING_MODE_SHADOW And newMode <> LEARNING_MODE_ON Then
+            MsgBox "Invalid mode. Use OFF, SHADOW, or ON.", vbExclamation, "AMI Optix"
+            Exit Sub
+        End If
+        Call SetLearningMode(profileKey, newMode)
+        currentMode = newMode
+    End If
+
+    Dim cmpResp As VbMsgBoxResult
+    cmpResp = MsgBox("Compare baseline each run for " & profileKey & "?" & vbCrLf & vbCrLf & _
+                     "YES = run baseline+learned and log diff" & vbCrLf & _
+                     "NO = only run the selected mode", _
+                     vbYesNoCancel + vbQuestion, "AMI Optix - Compare Baseline")
+    If cmpResp <> vbCancel Then
+        Call SetLearningCompareBaseline(profileKey, (cmpResp = vbYes))
+    End If
+
+    Dim pathResp As VbMsgBoxResult
+    pathResp = MsgBox("Change learning log folder root?" & vbCrLf & vbCrLf & currentRoot, vbYesNo + vbQuestion, "AMI Optix - Learning Logs")
+    If pathResp = vbYes Then
+        Dim newRoot As String
+        newRoot = InputBox("Enter log root folder path (e.g. Z:\AMI_Optix_Learning or \\server\share\AMI_Optix_Learning):", _
+                           "AMI Optix - Learning Log Folder", currentRoot)
+        If Trim$(newRoot) <> "" Then
+            Call SetLearningLogRootPath(newRoot)
+        End If
+    End If
+
+    MsgBox "Saved." & vbCrLf & vbCrLf & _
+           "Mode: " & GetLearningMode(profileKey) & vbCrLf & _
+           "Compare Baseline: " & IIf(GetLearningCompareBaseline(profileKey), "YES", "NO") & vbCrLf & _
+           "Log Root: " & GetLearningLogRootPath(), _
+           vbInformation, "AMI Optix"
+    Exit Sub
+
+Fail:
+    MsgBox "Learning settings failed: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
+Public Sub Ribbon_OpenLearningLogs(control As IRibbonControl)
+    ' Opens the log folder for the current program profile in Explorer.
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Sub
+
+    Dim programNorm As String
+    programNorm = "UAP"
+
+    On Error Resume Next
+    Dim wsMIH As Worksheet
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    On Error GoTo Fail
+    If Not wsMIH Is Nothing Then programNorm = "MIH"
+
+    Dim mihOption As String
+    mihOption = ""
+    If programNorm = "MIH" Then
+        Dim residentialSF As Double
+        Dim maxBandPercent As Long
+        On Error Resume Next
+        Call TryReadMIHInputs(mihOption, residentialSF, maxBandPercent)
+        On Error GoTo Fail
+    End If
+
+    Dim profileKey As String
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+
+    Dim folderPath As String
+    folderPath = GetLearningProfileFolder(profileKey)
+    Call EnsureFolderExists(GetLearningLogRootPath())
+    Call EnsureFolderExists(folderPath)
+
+    Shell "explorer.exe """ & folderPath & """", vbNormalFocus
+    Exit Sub
+
+Fail:
+End Sub
+
+'-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - HELP GROUP
 '-------------------------------------------------------------------------------
 

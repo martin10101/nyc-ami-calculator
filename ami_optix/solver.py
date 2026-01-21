@@ -389,6 +389,15 @@ def find_max_revenue_scenario(
             share_denominators = {}
 
     dev_preferences = copy.deepcopy(config['developer_preferences'])
+    if solver_overrides.get('premium_weights'):
+        weights = dev_preferences.get('premium_score_weights', {}).copy()
+        for key, value in solver_overrides['premium_weights'].items():
+            if key in weights:
+                weights[key] = float(value)
+        weight_sum = sum(weights.values())
+        if weight_sum > 0:
+            weights = {k: v / weight_sum for k, v in weights.items()}
+        dev_preferences['premium_score_weights'] = weights
     df_with_scores = calculate_premium_scores(df_affordable, dev_preferences)
     total_affordable_sf = df_with_scores['net_sf'].sum()
 

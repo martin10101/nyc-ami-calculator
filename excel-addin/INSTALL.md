@@ -30,19 +30,24 @@ Before installing the add-in, ensure Excel allows macros:
 
 1. Open Excel with a new blank workbook
 2. Press **Alt + F11** to open VBA Editor
-3. In VBA Editor, go to **File** > **Import File**
-4. Import each `.bas` file from the `src/` folder:
+3. (Recommended) Remove any old `AMI_Optix_*` modules/classes first:
+   - In the Project pane, right‑click each old `AMI_Optix_*` item → **Remove** → choose **No** when asked to export.
+4. In VBA Editor, go to **File** > **Import File**
+5. Import each file from `excel-addin/src/`:
    - `AMI_Optix_Main.bas`
    - `AMI_Optix_API.bas`
    - `AMI_Optix_DataReader.bas`
    - `AMI_Optix_ResultsWriter.bas`
+   - `AMI_Optix_Ribbon.bas`
    - `AMI_Optix_EventHooks.bas`
+   - `AMI_Optix_Setup.bas`
+   - `AMI_Optix_Learning.bas` (AI learning + logging)
    - `AMI_Optix_Diagnostic.bas` (optional)
-5. Import the `.cls` class module from the `src/` folder:
-   - `AMI_Optix_AppEvents.cls`
-5. Create the UserForm:
-   - Not required. Utilities are configured via prompts and/or read automatically from the workbook.
-6. Save as Add-in:
+6. Import the class module from `excel-addin/src/`:
+   - `AMI_Optix_AppEvents.cls` (must appear under **Class Modules**)
+7. Compile:
+   - VBA Editor → **Debug** → **Compile VBAProject**
+8. Save as Add-in:
    - Go to **File** > **Save As**
    - Change "Save as type" to **Excel Add-in (.xlam)**
    - Name it `AMI_Optix.xlam`
@@ -57,7 +62,8 @@ For the custom ribbon tab, you need to:
 3. Close Excel
 4. Use a tool like [Office RibbonX Editor](https://github.com/fernandreu/office-ribbonx-editor):
    - Open `AMI_Optix.xlam` in the editor
-   - Insert contents of `customUI/customUI.xml` and `customUI/customUI14.xml` (recommended)
+   - Insert contents of `excel-addin/customUI/customUI14.xml` (recommended)
+   - (Optional) Also insert `excel-addin/customUI/customUI.xml` for older Office versions
    - Save and close
 
 ---
@@ -127,6 +133,20 @@ Settings are remembered for future sessions.
 5. Results:
    - Best scenario AMI values written to your data
    - All scenarios shown on new "AMI Scenarios" sheet
+
+---
+
+## AI Learning (Optional)
+
+The add-in supports an optional “learning” feature that adjusts only **soft preferences** (premium scoring weights). It does **not** relax compliance constraints.
+
+- Use the **Learning** button on the AMI Optix ribbon to set mode:
+  - `OFF` (default): no learning
+  - `SHADOW`: compares learned vs baseline but applies baseline to the sheet
+  - `ON`: applies learned preferences (can still log baseline diffs)
+- Use **Open Logs** to open the per-profile log folder.
+
+Logs default to `%USERPROFILE%\Documents\AMI_Optix_Learning`, but you can set a shared folder path (e.g. `Z:\AMI_Optix_Learning`) in Learning Settings.
 
 ---
 

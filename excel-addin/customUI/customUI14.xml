@@ -53,6 +53,20 @@
                   onAction="Ribbon_OpenAPISettings"
                   supertip="Configure API connection settings and authentication."/>
         </group>
+        <group id="grpLearning" label="Learning">
+          <button id="btnLearningSettings"
+                  label="Learning"
+                  size="normal"
+                  imageMso="DataValidation"
+                  onAction="Ribbon_OpenLearningSettings"
+                  supertip="Configure AI learning (soft preferences only): OFF / SHADOW / ON, compare-baseline, and log folder."/>
+          <button id="btnLearningLogs"
+                  label="Open Logs"
+                  size="normal"
+                  imageMso="Folder"
+                  onAction="Ribbon_OpenLearningLogs"
+                  supertip="Open the learning log folder for this program profile (UAP / MIH Option 1 / MIH Option 4)."/>
+        </group>
         <group id="grpHelp" label="Help">
           <button id="btnAbout"
                   label="About"

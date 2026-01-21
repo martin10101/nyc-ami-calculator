@@ -163,7 +163,9 @@ Public Function BuildAPIPayloadV2( _
     program As String, _
     mihOption As String, _
     mihResidentialSF As Double, _
-    mihMaxBandPercent As Long _
+    mihMaxBandPercent As Long, _
+    Optional projectOverridesJson As String = "", _
+    Optional compareBaseline As Boolean = False _
 ) As String
     ' Builds JSON payload for API request (supports UAP/MIH).
     Dim json As String
@@ -222,6 +224,14 @@ Public Function BuildAPIPayloadV2( _
     json = json & """heat"": """ & utilities("heat") & """, "
     json = json & """hot_water"": """ & utilities("hot_water") & """"
     json = json & "}"
+
+    If Trim$(projectOverridesJson) <> "" Then
+        json = json & ", ""project_overrides"": " & projectOverridesJson
+    End If
+
+    If compareBaseline Then
+        json = json & ", ""compare_baseline"": true"
+    End If
 
     json = json & "}"
 
