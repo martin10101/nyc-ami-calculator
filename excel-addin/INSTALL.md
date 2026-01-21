@@ -1,39 +1,39 @@
 # AMI Optix Excel Add-in Installation Guide
 
-This guide explains how to install the AMI Optix add-in so it's available in **every** Excel workbook.
+This guide explains how to build and install the AMI Optix add-in so it's available in **every** Excel workbook.
 
 ## Prerequisites
 
-- Microsoft Excel 2016 or later (Windows)
-- Internet connection (to reach the API)
-- Trust Center settings configured (see Step 1)
+- Microsoft Excel 2016+ (Windows)
+- Internet access to reach the API (Render)
+- Excel Trust Center settings configured (Step 1)
 
 ---
 
-## Step 1: Enable Macros in Excel
-
-Before installing the add-in, ensure Excel allows macros:
+## Step 1: Enable macros in Excel
 
 1. Open Excel
 2. Go to **File** > **Options** > **Trust Center**
 3. Click **Trust Center Settings**
 4. Select **Macro Settings**
-5. Choose **"Enable all macros"** or **"Disable all macros with notification"**
-6. Check **"Trust access to the VBA project object model"**
+5. Choose **Enable all macros** (or **Disable all macros with notification**)
+6. Check **Trust access to the VBA project object model**
 7. Click **OK** twice
 
 ---
 
-## Step 2: Create the Add-in File
+## Step 2: Build the add-in file (`AMI_Optix.xlam`)
 
-### Option A: Quick Setup (Import Modules)
+### Option A: Import VBA modules (recommended)
 
-1. Open Excel with a new blank workbook
-2. Press **Alt + F11** to open VBA Editor
-3. (Recommended) Remove any old `AMI_Optix_*` modules/classes first:
-   - In the Project pane, right‑click each old `AMI_Optix_*` item → **Remove** → choose **No** when asked to export.
-4. In VBA Editor, go to **File** > **Import File**
-5. Import each file from `excel-addin/src/`:
+1. Open Excel (new blank workbook is fine)
+2. Press **Alt + F11** to open the VBA editor
+3. In the Project pane, find the project you are building into (ideally a new blank workbook)
+4. (Strongly recommended) Remove any old `AMI_Optix_*` modules/classes first:
+   - Right-click each old `AMI_Optix_*` item > **Remove**
+   - Choose **No** when asked to export
+5. In the VBA editor, go to **File** > **Import File...**
+6. Import every file from `excel-addin/src/`:
    - `AMI_Optix_Main.bas`
    - `AMI_Optix_API.bas`
    - `AMI_Optix_DataReader.bas`
@@ -43,158 +43,100 @@ Before installing the add-in, ensure Excel allows macros:
    - `AMI_Optix_Setup.bas`
    - `AMI_Optix_Learning.bas` (AI learning + logging)
    - `AMI_Optix_Diagnostic.bas` (optional)
-6. Import the class module from `excel-addin/src/`:
+7. Import the class module from `excel-addin/src/`:
    - `AMI_Optix_AppEvents.cls` (must appear under **Class Modules**)
-7. Compile:
-   - VBA Editor → **Debug** → **Compile VBAProject**
-8. Save as Add-in:
-   - Go to **File** > **Save As**
-   - Change "Save as type" to **Excel Add-in (.xlam)**
-   - Name it `AMI_Optix.xlam`
-   - Save to default Add-ins folder (usually auto-suggested)
+8. Compile:
+   - VBA editor > **Debug** > **Compile VBAProject**
+9. Save as add-in:
+   - Excel > **File** > **Save As**
+   - Save as type: **Excel Add-in (*.xlam)**
+   - File name: `AMI_Optix.xlam`
 
-### Option B: With Custom Ribbon (Advanced)
+### Option B: Add the custom ribbon (OfficeRibbonXEditor)
 
-For the custom ribbon tab, you need to:
+Excel stores Ribbon XML *inside* the `.xlam`. To add/update it:
 
-1. Complete Option A steps above
-2. Save as `.xlam`
-3. Close Excel
-4. Use a tool like [Office RibbonX Editor](https://github.com/fernandreu/office-ribbonx-editor):
-   - Open `AMI_Optix.xlam` in the editor
-   - Insert contents of `excel-addin/customUI/customUI14.xml` (recommended)
-   - (Optional) Also insert `excel-addin/customUI/customUI.xml` for older Office versions
-   - Save and close
+1. Finish Option A and save `AMI_Optix.xlam`
+2. Close Excel completely
+3. Open **OfficeRibbonXEditor**
+4. **File** > **Open** > select `AMI_Optix.xlam`
+5. In the left tree:
+   - If you see `customUI14.xml`: select it and replace its contents
+   - If you do **not** see it: right-click > **Insert** > **Office 2010+ Custom UI Part**
+6. Copy/paste the contents of `excel-addin/customUI/customUI14.xml` into the editor
+7. Click **Save**
+8. Close OfficeRibbonXEditor
 
 ---
 
-## Step 3: Install the Add-in
+## Step 3: Install the add-in in Excel
 
 1. Open Excel
 2. Go to **File** > **Options** > **Add-ins**
-3. At the bottom, select **Excel Add-ins** from the dropdown
-4. Click **Go...**
-5. Click **Browse...**
-6. Navigate to your `AMI_Optix.xlam` file and select it
-7. Check the box next to **AMI_Optix** in the list
-8. Click **OK**
-
-The add-in is now installed and will load automatically every time Excel starts.
+3. At the bottom, in **Manage**, select **Excel Add-ins** > click **Go...**
+4. Click **Browse...**
+5. Select your `AMI_Optix.xlam`
+6. Check **AMI_Optix** in the list
+7. Click **OK**
 
 ---
 
-## Step 4: Verify Installation
+## Step 4: Verify it works
 
-1. Open any Excel workbook
-2. Look for the **AMI Optix** tab in the ribbon (if custom ribbon was added)
-   - OR access via **Developer** tab > **Macros** > `RunOptimization`
-3. Click **Optimize** to test
-
-If you don't see the ribbon tab, you can run macros directly:
-- Press **Alt + F8**
-- Select `RunOptimization` and click **Run**
-
----
-
-## Using the Add-in
-
-### Configure API Key (Required - One-time setup)
-
-Before using the add-in, you must configure your API key:
-
-1. Click **API Key** button in the AMI Optix ribbon
-2. Enter your API key (provided by your administrator)
-3. Click **OK**
-
-The key is stored securely in Windows Registry and persists across sessions.
-
-**See [API_KEY_SETUP.md](API_KEY_SETUP.md) for detailed instructions.**
-
-### Configure Utilities (One-time setup)
-
-1. Click **Utilities** button (or run `frmUtilities.Show` macro)
-2. Select payment responsibility for each utility:
-   - **Tenant Pays**: Tenant is responsible
-   - **N/A or owner pays**: Landlord covers it
-3. Click **Save**
-
-Settings are remembered for future sessions.
-
-### Run Optimization
-
-1. Open your workbook with unit data
-2. Make sure it has columns for:
-   - Unit ID (APT, UNIT, etc.)
-   - Bedrooms (BED, BEDS, etc.)
-   - Net SF (NET SF, SQFT, etc.)
-   - AMI (for writing results)
-3. Click **Optimize** button
-4. Wait for results (may take 30-60 seconds on first run)
-5. Results:
-   - Best scenario AMI values written to your data
-   - All scenarios shown on new "AMI Scenarios" sheet
+1. Restart Excel
+2. Open a UAP workbook
+3. Confirm you see the **AMI Optix** ribbon tab
+4. Click **AMI Optix** > **API Settings** and confirm your API key is set
+5. Click **Run UAP**
+6. Confirm:
+   - UAP AMI column updates
+   - `AMI Scenarios` sheet is created/updated
 
 ---
 
-## AI Learning (Optional)
+## AI Learning (optional)
 
-The add-in supports an optional “learning” feature that adjusts only **soft preferences** (premium scoring weights). It does **not** relax compliance constraints.
+Learning changes only **soft preferences** (premium scoring weights). It does **not** relax compliance constraints.
 
-- Use the **Learning** button on the AMI Optix ribbon to set mode:
-  - `OFF` (default): no learning
-  - `SHADOW`: compares learned vs baseline but applies baseline to the sheet
-  - `ON`: applies learned preferences (can still log baseline diffs)
-- Use **Open Logs** to open the per-profile log folder.
+Open: **AMI Optix** > **Learning**
 
-Logs default to `%USERPROFILE%\Documents\AMI_Optix_Learning`, but you can set a shared folder path (e.g. `Z:\AMI_Optix_Learning`) in Learning Settings.
+- **OFF**: baseline behavior (no learning)
+- **SHADOW**: runs learned + baseline compare, but **applies baseline** to the sheet (safe testing)
+- **ON**: applies learned preferences (can still compare baseline and log diffs)
+
+Logs:
+- Default: `%USERPROFILE%\\Documents\\AMI_Optix_Learning`
+- You can set a shared folder (e.g. `Z:\\AMI_Optix_Learning`) in Learning Settings
+- Use **Open Logs** to open the current profile folder
 
 ---
 
 ## Troubleshooting
 
-### "Macros are disabled"
-- Enable macros in Trust Center (Step 1)
+### "Wrong number of arguments" / random VBA errors
+You have mixed module versions.
+
+Fix:
+1. Remove **all** `AMI_Optix_*` modules/classes from the VBA project
+2. Re-import **all** files from `excel-addin/src/` (Step 2A)
+3. Compile again (Debug > Compile)
+
+### Ribbon buttons do nothing
+Most common cause: Ribbon XML not saved into the `.xlam`.
+
+Fix:
+- Repeat Step 2B and save the `.xlam`, then restart Excel.
 
 ### "Cannot connect to server"
-- Check internet connection
-- Server may be starting up (cold start) - wait 30 seconds and retry
-- Use web dashboard as backup: https://nyc-ami-calculator.onrender.com
-
-### "No unit data found"
-- Ensure your workbook has recognizable column headers
-- Headers must include: Unit ID, Bedrooms, Net SF
-
-### Add-in doesn't load on startup
-- Re-check the add-in is enabled in **File** > **Options** > **Add-ins**
+- The Render service may be cold-starting (wait 30–60s and retry)
+- Confirm the API URL in code is correct:
+  - `excel-addin/src/AMI_Optix_Main.bas` > `API_BASE_URL`
 
 ---
 
-## Updating the Add-in
-
-To update to a new version:
+## Updating the add-in
 
 1. Close all Excel windows
-2. Navigate to your Add-ins folder
-3. Replace `AMI_Optix.xlam` with the new version
-4. Reopen Excel
+2. Replace `AMI_Optix.xlam` with the new version
+3. Reopen Excel
 
----
-
-## Uninstalling
-
-1. Go to **File** > **Options** > **Add-ins**
-2. Select **Excel Add-ins** and click **Go...**
-3. Uncheck **AMI_Optix**
-4. Click **OK**
-5. (Optional) Delete the `.xlam` file from the Add-ins folder
-
----
-
-## Support
-
-- **Web Dashboard Backup**: https://nyc-ami-calculator.onrender.com
-- **Issues**: Contact your administrator
-
----
-
-*AMI Optix v1.0 - NYC Affordable Housing Optimizer*
