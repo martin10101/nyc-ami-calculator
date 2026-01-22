@@ -201,9 +201,10 @@ Public Sub CreateScenariosSheet(result As Object)
     Dim scenarioKey As Variant
     Dim scenario As Object
     Dim row As Long
-    Dim col As Long
     Dim prevEnableEvents As Boolean
     Dim prevSuppress As Boolean
+    Dim hadError As Boolean
+    Dim errMsg As String
 
     prevEnableEvents = Application.EnableEvents
     prevSuppress = g_AMIOptixSuppressEvents
@@ -224,14 +225,16 @@ Public Sub CreateScenariosSheet(result As Object)
         ws.Cells.Clear
     End If
 
+    If result Is Nothing Then GoTo ErrorHandler
+    If Not result.Exists("scenarios") Then GoTo ErrorHandler
     Set scenarios = result("scenarios")
 
+    ' Start solver output below the manual block
     row = 1
 
     ' Manual block (reserved region at top)
     WriteManualScenarioBlockFromResult ws, result
 
-    ' Start solver output below the manual block
     row = SCENARIOS_START_ROW
 
     ' Notes from solver
@@ -254,154 +257,49 @@ Public Sub CreateScenariosSheet(result As Object)
     Dim scenarioNum As Long
     scenarioNum = 1
 
-    For Each scenarioKey In scenarios.keys
+    For Each scenarioKey In scenarios.Keys
         Set scenario = scenarios(scenarioKey)
 
         ' Scenario header
         ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
         ws.Cells(row, 1).Font.Bold = True
         ws.Cells(row, 1).Font.Size = 14
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(200, 220, 255)
+        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(200, 220, 255)
         row = row + 1
 
-        ' WAAMI
-        ws.Cells(row, 1).Value = "WAAMI:"
-        ws.Cells(row, 2).Value = Format(scenario("waami"), "0.00%")
-        ws.Cells(row, 2).Font.Bold = True
+        row = WriteScenarioSummaryAndTable(ws, row, scenario)
         row = row + 1
 
-        ' Bands used (Fixed: was "band_combination", now "bands")
-        If scenario.Exists("bands") Then
-            ws.Cells(row, 1).Value = "Bands Used:"
-            Dim bands As Object
-            Set bands = scenario("bands")
-            Dim bandStr As String
-            bandStr = ""
-            Dim b As Long
-            For b = 1 To bands.Count
-                If bandStr <> "" Then bandStr = bandStr & ", "
-                bandStr = bandStr & Format(bands(b), "0") & "%"
-            Next b
-            ws.Cells(row, 2).Value = bandStr
-        End If
+        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(240, 240, 240)
         row = row + 1
-
-        ' Rent totals (if available)
-        If scenario.Exists("rent_totals") Then
-            Dim rentTotals As Object
-            Set rentTotals = scenario("rent_totals")
-
-            If rentTotals.Exists("net_monthly") Then
-                ws.Cells(row, 1).Value = "Total Monthly Rent:"
-                ws.Cells(row, 2).Value = Format(rentTotals("net_monthly"), "$#,##0.00")
-            End If
-            row = row + 1
-
-            If rentTotals.Exists("net_annual") Then
-                ws.Cells(row, 1).Value = "Total Annual Rent:"
-                ws.Cells(row, 2).Value = Format(rentTotals("net_annual"), "$#,##0.00")
-            End If
-            row = row + 1
-
-            If rentTotals.Exists("gross_monthly") Then
-                ws.Cells(row, 1).Value = "Gross Monthly Rent:"
-                ws.Cells(row, 2).Value = Format(rentTotals("gross_monthly"), "$#,##0.00")
-            End If
-            row = row + 1
-
-            If rentTotals.Exists("allowances_monthly") Then
-                ws.Cells(row, 1).Value = "Total Utility Allowances:"
-                ws.Cells(row, 2).Value = Format(rentTotals("allowances_monthly"), "$#,##0.00")
-            End If
-            row = row + 1
-        End If
-
-        row = row + 1
-
-        ' Unit assignments table header - expanded for utility breakdown
-        ws.Cells(row, 1).Value = "Unit"
-        ws.Cells(row, 2).Value = "Bedrooms"
-        ws.Cells(row, 3).Value = "AMI"
-        ws.Cells(row, 4).Value = "Gross Rent"
-        ws.Cells(row, 5).Value = "Allowances"
-        ws.Cells(row, 6).Value = "Net Rent"
-        ws.Cells(row, 7).Value = "Annual Rent"
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Font.Bold = True
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Interior.Color = RGB(230, 230, 230)
-        row = row + 1
-
-        ' Unit assignments
-        If scenario.Exists("assignments") Then
-            Dim assignments As Object
-            Set assignments = scenario("assignments")
-
-            Dim a As Long
-            For a = 1 To assignments.Count
-                Dim assignment As Object
-                Set assignment = assignments(a)
-
-                ws.Cells(row, 1).Value = assignment("unit_id")
-                ws.Cells(row, 2).Value = assignment("bedrooms")
-                ws.Cells(row, 3).Value = Format(assignment("assigned_ami"), "0%")
-
-                If assignment.Exists("gross_rent") Then
-                    ws.Cells(row, 4).Value = assignment("gross_rent")
-                    ws.Cells(row, 4).NumberFormat = "$#,##0.00"
-                End If
-                
-                ' Show allowance breakdown if available
-                If assignment.Exists("allowances") Then
-                    Dim allowanceStr As String
-                    allowanceStr = BuildAllowanceBreakdown(assignment("allowances"))
-                    
-                    If allowanceStr <> "" Then
-                        ws.Cells(row, 5).Value = allowanceStr
-                    ElseIf assignment.Exists("allowance_total") Then
-                        ws.Cells(row, 5).Value = assignment("allowance_total")
-                        ws.Cells(row, 5).NumberFormat = "$#,##0.00"
-                    End If
-                ElseIf assignment.Exists("allowance_total") Then
-                    ws.Cells(row, 5).Value = assignment("allowance_total")
-                    ws.Cells(row, 5).NumberFormat = "$#,##0.00"
-                End If
-
-                If assignment.Exists("monthly_rent") Then
-                    ws.Cells(row, 6).Value = assignment("monthly_rent")
-                    ws.Cells(row, 6).NumberFormat = "$#,##0.00"
-                End If
-
-                If assignment.Exists("annual_rent") Then
-                    ws.Cells(row, 7).Value = assignment("annual_rent")
-                    ws.Cells(row, 7).NumberFormat = "$#,##0.00"
-                End If
-
-                row = row + 1
-            Next a
-        End If
-
-        row = row + 2
         scenarioNum = scenarioNum + 1
     Next scenarioKey
 
     ' Auto-fit columns
-    ws.Columns("A:H").AutoFit
+    ws.Columns("A:K").AutoFit
 
-    ' Freeze top row
+    ' Freeze the top row and jump to the solver output so users immediately see scenarios.
     On Error Resume Next
     ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
-    ws.Cells(1, 1).Select
+    ws.Cells(SCENARIOS_START_ROW, 1).Select
+    ActiveWindow.ScrollRow = SCENARIOS_START_ROW
     On Error GoTo ErrorHandler
 
     Debug.Print "Created scenarios sheet with " & (scenarioNum - 1) & " scenarios"
     GoTo Cleanup
 
 ErrorHandler:
-    Debug.Print "CreateScenariosSheet Error: " & Err.Description
+    hadError = True
+    errMsg = Err.Description
+    Debug.Print "CreateScenariosSheet Error: " & errMsg
 Cleanup:
     Application.EnableEvents = prevEnableEvents
     g_AMIOptixSuppressEvents = prevSuppress
+    If hadError Then
+        MsgBox "Failed to build 'AMI Scenarios' sheet: " & errMsg, vbExclamation, "AMI Optix"
+    End If
 End Sub
 
 Public Sub ApplyCanonicalAssignmentsToDataSheet(canonicalAssignments As Object, Optional highlightColor As Long = -1)
@@ -799,41 +697,101 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
         row = row + 1
     End If
 
-    If scenario.Exists("rent_totals") Then
-        Dim rentTotals As Object
-        Set rentTotals = scenario("rent_totals")
+    ' Band mix breakdown (per client request)
+    Dim metrics As Object
+    Set metrics = Nothing
+    On Error Resume Next
+    Set metrics = scenario("metrics")
+    On Error GoTo 0
 
-        ' Show net totals only (gross/total allowances removed per client request)
-        If rentTotals.Exists("net_monthly") Then
-            ws.Cells(row, 1).Value = "Total Monthly Rent:"
-            ws.Cells(row, 2).Value = Format(rentTotals("net_monthly"), "$#,##0.00")
-            row = row + 1
-        End If
-        If rentTotals.Exists("net_annual") Then
-            ws.Cells(row, 1).Value = "Total Annual Rent:"
-            ws.Cells(row, 2).Value = Format(rentTotals("net_annual"), "$#,##0.00")
-            row = row + 1
-        End If
+    If Not metrics Is Nothing Then
+        Dim bandMix As Object
+        Set bandMix = Nothing
+        On Error Resume Next
+        Set bandMix = metrics("band_mix")
+        On Error GoTo 0
 
-        ' Allowance breakdown (per utility)
-        If rentTotals.Exists("allowances_breakdown") Then
-            Dim ab As Object
-            Set ab = rentTotals("allowances_breakdown")
+        If Not bandMix Is Nothing Then
             row = row + 1
-            ws.Cells(row, 1).Value = "Utility Allowances (Monthly):"
+            ws.Cells(row, 1).Value = "Band Mix (by Net SF):"
             ws.Cells(row, 1).Font.Bold = True
             row = row + 1
 
-            Dim key As Variant
-            For Each key In ab.keys
-                Dim entry As Object
-                Set entry = ab(key)
-                ws.Cells(row, 1).Value = UCase(CStr(key))
-                If entry.Exists("monthly") Then
-                    ws.Cells(row, 2).Value = Format(entry("monthly"), "$#,##0.00")
+            ws.Cells(row, 1).Value = "Band"
+            ws.Cells(row, 2).Value = "Units"
+            ws.Cells(row, 3).Value = "Net SF"
+            ws.Cells(row, 4).Value = "Share of SF"
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Font.Bold = True
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 230, 230)
+            row = row + 1
+
+            Dim bmIdx As Long
+            For bmIdx = 1 To bandMix.Count
+                Dim bm As Object
+                Set bm = bandMix(bmIdx)
+                If Not bm Is Nothing Then
+                    If bm.Exists("band") Then ws.Cells(row, 1).Value = CStr(bm("band")) & "%"
+                    If bm.Exists("units") Then ws.Cells(row, 2).Value = bm("units")
+                    If bm.Exists("net_sf") Then
+                        ws.Cells(row, 3).Value = bm("net_sf")
+                        ws.Cells(row, 3).NumberFormat = "0.00"
+                    End If
+                    If bm.Exists("share_of_sf") Then
+                        ws.Cells(row, 4).Value = bm("share_of_sf")
+                        ws.Cells(row, 4).NumberFormat = "0.00%"
+                    End If
+                    row = row + 1
                 End If
+            Next bmIdx
+        End If
+    End If
+
+    If scenario.Exists("rent_totals") Then
+        Dim rentTotals As Object
+        Set rentTotals = Nothing
+        On Error Resume Next
+        Set rentTotals = scenario("rent_totals")
+        On Error GoTo 0
+
+        If Not rentTotals Is Nothing Then
+            ' Show net totals only (gross/total allowances removed per client request)
+            If rentTotals.Exists("net_monthly") Then
+                ws.Cells(row, 1).Value = "Total Monthly Rent:"
+                ws.Cells(row, 2).Value = Format(rentTotals("net_monthly"), "$#,##0.00")
                 row = row + 1
-            Next key
+            End If
+            If rentTotals.Exists("net_annual") Then
+                ws.Cells(row, 1).Value = "Total Annual Rent:"
+                ws.Cells(row, 2).Value = Format(rentTotals("net_annual"), "$#,##0.00")
+                row = row + 1
+            End If
+
+            ' Allowance breakdown (per utility)
+            Dim ab As Object
+            Set ab = Nothing
+            On Error Resume Next
+            Set ab = rentTotals("allowances_breakdown")
+            On Error GoTo 0
+
+            If Not ab Is Nothing Then
+                row = row + 1
+                ws.Cells(row, 1).Value = "Utility Allowances (Monthly):"
+                ws.Cells(row, 1).Font.Bold = True
+                row = row + 1
+
+                Dim key As Variant
+                For Each key In ab.Keys
+                    Dim entry As Object
+                    Set entry = ab(key)
+                    ws.Cells(row, 1).Value = UCase(CStr(key))
+                    If Not entry Is Nothing Then
+                        If entry.Exists("monthly") Then
+                            ws.Cells(row, 2).Value = Format(entry("monthly"), "$#,##0.00")
+                        End If
+                    End If
+                    row = row + 1
+                Next key
+            End If
         End If
     End If
 
