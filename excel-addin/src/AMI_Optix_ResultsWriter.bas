@@ -675,22 +675,42 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
         ws.Cells(row, 1).Value = "Bands Used:"
         Dim bandStr As String
         bandStr = ""
-        Dim bands As Variant
-        bands = scenario("bands")
 
+        ' IMPORTANT: scenario("bands") is usually a Collection. Never assign it to a Variant without Set,
+        ' or VBA will try to call the default property (Item) and raise "Wrong number of arguments...".
+        Dim bandsObj As Object
+        Set bandsObj = Nothing
         On Error Resume Next
-        Dim bCount As Long
-        bCount = bands.Count
+        Set bandsObj = scenario("bands")
         On Error GoTo 0
 
-        If bCount > 0 Then
+        If Not bandsObj Is Nothing Then
             Dim b As Long
-            For b = 1 To bCount
-                If bandStr <> "" Then bandStr = bandStr & ", "
-                bandStr = bandStr & Format(bands(b), "0") & "%"
-            Next b
+            If TypeName(bandsObj) = "Collection" Then
+                For b = 1 To bandsObj.Count
+                    If bandStr <> "" Then bandStr = bandStr & ", "
+                    bandStr = bandStr & Format(bandsObj(b), "0") & "%"
+                Next b
+            ElseIf TypeName(bandsObj) = "Dictionary" Then
+                Dim bandKey As Variant
+                For Each bandKey In bandsObj.Keys
+                    If bandStr <> "" Then bandStr = bandStr & ", "
+                    bandStr = bandStr & Format(bandsObj(bandKey), "0") & "%"
+                Next bandKey
+            End If
         Else
-            ' bands might already be a VBA array
+            ' Fallback: array or scalar
+            Dim bandsVal As Variant
+            bandsVal = scenario("bands")
+            If IsArray(bandsVal) Then
+                Dim i As Long
+                For i = LBound(bandsVal) To UBound(bandsVal)
+                    If bandStr <> "" Then bandStr = bandStr & ", "
+                    bandStr = bandStr & Format(bandsVal(i), "0") & "%"
+                Next i
+            ElseIf Len(Trim(CStr(bandsVal))) > 0 Then
+                bandStr = CStr(bandsVal)
+            End If
         End If
 
         ws.Cells(row, 2).Value = bandStr
