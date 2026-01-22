@@ -11,6 +11,8 @@ Private Const SCENARIOS_START_ROW As Long = 125
 
 ' True only when the most recent /api/evaluate call returned success=false.
 Public g_AMIOptixLastManualScenarioInvalid As Boolean
+' Last error encountered while building the "AMI Scenarios" sheet (blank if OK).
+Public g_AMIOptixLastScenariosSheetBuildError As String
 
 '-------------------------------------------------------------------------------
 ' APPLY BEST SCENARIO
@@ -210,6 +212,7 @@ Public Sub CreateScenariosSheet(result As Object)
     prevSuppress = g_AMIOptixSuppressEvents
     Application.EnableEvents = False
     g_AMIOptixSuppressEvents = True
+    g_AMIOptixLastScenariosSheetBuildError = ""
 
     On Error GoTo ErrorHandler
 
@@ -293,6 +296,7 @@ Public Sub CreateScenariosSheet(result As Object)
 ErrorHandler:
     hadError = True
     errMsg = Err.Description
+    g_AMIOptixLastScenariosSheetBuildError = errMsg
     Debug.Print "CreateScenariosSheet Error: " & errMsg
 Cleanup:
     Application.EnableEvents = prevEnableEvents

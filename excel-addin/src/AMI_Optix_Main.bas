@@ -417,6 +417,8 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Create scenarios comparison sheet
     CreateScenariosSheet result
+    Dim scenariosSheetOk As Boolean
+    scenariosSheetOk = (Len(Trim$(g_AMIOptixLastScenariosSheetBuildError)) = 0)
 
     ' In Shadow mode, the scenarios sheet was built from the learned result, but the sheet data
     ' reflects baseline (by design). Refresh the Scenario Manual block to match current sheet values.
@@ -432,7 +434,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     MsgBox "Optimization complete!" & vbCrLf & vbCrLf & _
            "- " & appliedScenarioLabel & " applied to your data" & vbCrLf & _
-           "- All scenarios available on 'AMI Scenarios' sheet", _
+           IIf(scenariosSheetOk, "- All scenarios available on 'AMI Scenarios' sheet", "- Scenarios sheet failed to build (see error popup)"), _
            vbInformation, "AMI Optix"
 
     ' Navigate to scenarios sheet
