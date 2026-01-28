@@ -23,12 +23,18 @@ Private Sub App_SheetSelectionChange(ByVal Sh As Object, ByVal Target As Range)
 
     If g_AMIOptixSuppressEvents Then Exit Sub
     If Target Is Nothing Then Exit Sub
-    If Target.CountLarge <> 1 Then Exit Sub
     If TypeName(Sh) <> "Worksheet" Then Exit Sub
 
     m_LastSelectionSheet = CStr(Sh.Name)
     m_LastSelectionAddress = Target.Address(False, False)
-    m_LastSelectionValue = Target.Value
+
+    ' Store old values for revert support (best effort).
+    ' Avoid huge selections (can be slow / memory-heavy).
+    If Target.CountLarge <= 5000 Then
+        m_LastSelectionValue = Target.Value
+    Else
+        m_LastSelectionValue = Empty
+    End If
 
 SafeExit:
 End Sub
@@ -38,7 +44,6 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
 
     If g_AMIOptixSuppressEvents Then Exit Sub
     If Target Is Nothing Then Exit Sub
-    If Target.CountLarge <> 1 Then Exit Sub
     If TypeName(Sh) <> "Worksheet" Then Exit Sub
 
     Dim ws As Worksheet
@@ -46,6 +51,13 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
 
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
+
+    If UCase(ws.Name) = UCase("AMI Scenarios") Then
+        If ChangeIsManualScenarioAMI(ws, Target) Then
+            HandleManualScenarioEdit ws, Target
+        End If
+        Exit Sub
+    End If
 
     If programNorm = "UAP" Then
         If UCase(ws.Name) = "UAP" Then
@@ -55,20 +67,11 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
             Exit Sub
         End If
     ElseIf programNorm = "MIH" Then
-        ' MIH workbooks can store the editable unit table on "RentRoll" (preferred) or sometimes on "MIH".
-        If UCase(ws.Name) = "RENTROLL" Or UCase(ws.Name) = "MIH" Then
-            If ChangeIsInAMIColumn(ws, Target) Then
-                HandleDataSheetAmiChange ws, Target, "MIH"
-            End If
+        ' MIH: the editable unit table is typically on "RentRoll" (or another sheet with Unit/Bed/SF/AMI).
+        If ChangeIsInAMIColumn(ws, Target) Then
+            HandleDataSheetAmiChange ws, Target, "MIH"
             Exit Sub
         End If
-    End If
-
-    If UCase(ws.Name) = UCase("AMI Scenarios") Then
-        If ChangeIsManualScenarioAMI(ws, Target) Then
-            HandleManualScenarioEdit ws, Target
-        End If
-        Exit Sub
     End If
 
 SafeExit:
@@ -116,7 +119,20 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
         If hasOldValue Then
             Application.EnableEvents = False
             target.Value = oldValue
-            If IsNumeric(oldValue) Then target.NumberFormat = "0%"
+
+            ' Best-effort: keep AMI column formatted as percent.
+            Dim headerRow As Long
+            Dim amiCol As Long
+            headerRow = FindHeaderRow(ws)
+            amiCol = 0
+            If headerRow > 0 Then amiCol = FindAMIColumn(ws, headerRow)
+            If amiCol > 0 Then
+                Dim amiCells As Range
+                Set amiCells = Intersect(target, ws.Columns(amiCol))
+                If Not amiCells Is Nothing Then
+                    amiCells.NumberFormat = "0%"
+                End If
+            End If
             Application.EnableEvents = True
 
             ' Refresh the manual block to match the reverted values.
@@ -144,32 +160,52 @@ Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolea
     amiCol = FindAMIColumn(ws, headerRow)
     If amiCol = 0 Then Exit Function
 
-    If target.Column = amiCol And target.row > headerRow Then
+    Dim amiData As Range
+    Set amiData = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(ws.Rows.Count, amiCol))
+    If Not Intersect(target, amiData) Is Nothing Then
         ChangeIsInAMIColumn = True
     End If
 End Function
 
 Private Function ChangeIsManualScenarioAMI(ws As Worksheet, target As Range) As Boolean
-    If target.Column <> 6 Then Exit Function
+    Dim amiCells As Range
+    Set amiCells = Intersect(target, ws.Columns(6))
+    If amiCells Is Nothing Then Exit Function
 
     Dim headerRow As Long
     headerRow = FindManualTableHeaderRow(ws)
     If headerRow = 0 Then Exit Function
 
-    If target.row <= headerRow Then Exit Function
-
     Dim lastRow As Long
     lastRow = FindManualTableLastRow(ws, headerRow)
-    If lastRow > 0 Then
-        If target.row > lastRow Then Exit Function
-    End If
-    If Trim(CStr(ws.Cells(target.row, 1).Value)) = "" Then Exit Function
+    If lastRow = 0 Then Exit Function
 
-    ChangeIsManualScenarioAMI = True
+    Dim tableAmi As Range
+    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, 6), ws.Cells(lastRow, 6))
+
+    Dim inTable As Range
+    Set inTable = Intersect(amiCells, tableAmi)
+    If inTable Is Nothing Then Exit Function
+
+    ' At least one changed cell must correspond to a real unit row.
+    Dim c As Range
+    For Each c In inTable.Cells
+        If Trim(CStr(ws.Cells(c.row, 1).Value)) <> "" Then
+            ChangeIsManualScenarioAMI = True
+            Exit Function
+        End If
+    Next c
+
 End Function
 
 Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     On Error GoTo Fail
+
+    ' Support paste/fill-down by handling all changed AMI cells in the manual table at once.
+    If target.CountLarge > 1 Then
+        HandleManualScenarioEditRange ws, target
+        Exit Sub
+    End If
 
     Dim unitId As String
     unitId = Trim(CStr(ws.Cells(target.row, 1).Value))
@@ -292,6 +328,181 @@ Fail:
     g_AMIOptixSuppressEvents = False
 End Sub
 
+Private Sub HandleManualScenarioEditRange(ws As Worksheet, target As Range)
+    ' Handles multi-cell changes in the manual scenario AMI column (e.g., paste/fill-down).
+    On Error GoTo Fail
+
+    Dim headerRow As Long
+    headerRow = FindManualTableHeaderRow(ws)
+    If headerRow = 0 Then Exit Sub
+
+    Dim lastRow As Long
+    lastRow = FindManualTableLastRow(ws, headerRow)
+    If lastRow = 0 Then Exit Sub
+
+    Dim amiCells As Range
+    Set amiCells = Intersect(target, ws.Columns(6))
+    If amiCells Is Nothing Then Exit Sub
+
+    Dim tableAmi As Range
+    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, 6), ws.Cells(lastRow, 6))
+
+    Dim inTable As Range
+    Set inTable = Intersect(amiCells, tableAmi)
+    If inTable Is Nothing Then Exit Sub
+
+    Dim changes As Object
+    Set changes = CreateObject("Scripting.Dictionary") ' unit_id -> newAmi
+
+    Dim changeRows As Object
+    Set changeRows = CreateObject("Scripting.Dictionary") ' unit_id -> row
+
+    Dim c As Range
+    For Each c In inTable.Cells
+        Dim unitId As String
+        unitId = Trim(CStr(ws.Cells(c.row, 1).Value))
+        If unitId = "" Then GoTo NextCell
+
+        Dim newAmi As Double
+        newAmi = ParseAmiValue(c.Value)
+        If newAmi <= 0 Then GoTo NextCell
+
+        changes(unitId) = newAmi
+        changeRows(unitId) = CLng(c.row)
+
+NextCell:
+    Next c
+
+    If changes.Count = 0 Then Exit Sub
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    Dim programNorm As String
+    programNorm = DetectProgramFromWorkbook()
+
+    Dim mihOption As String
+    Dim mihResidentialSF As Double
+    Dim mihMaxBandPercent As Long
+    mihOption = ""
+    mihResidentialSF = 0
+    mihMaxBandPercent = 0
+    If programNorm = "MIH" Then
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Sub
+    End If
+
+    ' Activate a likely data sheet so ReadUnitData doesn't accidentally read from AMI Scenarios.
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("UAP")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo Fail
+    If Not dataWs Is Nothing Then dataWs.Activate
+
+    Dim units As Collection
+    Set units = ReadUnitData()
+
+    ' Capture which sheet actually contained the unit table.
+    On Error Resume Next
+    Set dataWs = GetDataSheet()
+    On Error GoTo Fail
+
+    prevSheet.Activate
+
+    If units Is Nothing Or units.Count = 0 Then Exit Sub
+
+    Dim i As Long
+    Dim u As Object
+    For i = 1 To units.Count
+        Set u = units(i)
+        Dim uid As String
+        uid = CStr(u("unit_id"))
+        If changes.Exists(uid) Then
+            u("client_ami") = CDbl(changes(uid))
+        End If
+    Next i
+
+    Dim utilities As Object
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
+
+    Dim payload As String
+    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
+
+    Dim response As String
+    response = CallEvaluateAPI(payload)
+    If response = "" Then Exit Sub
+
+    Dim evalResult As Object
+    Set evalResult = ParseJSON(response)
+    If evalResult Is Nothing Then Exit Sub
+
+    If evalResult.Exists("success") Then
+        If evalResult("success") = False Then
+            ' Revert all changed cells to the current data sheet value (best-effort).
+            g_AMIOptixSuppressEvents = True
+            Application.EnableEvents = False
+
+            Dim key As Variant
+            For Each key In changes.Keys
+                Dim fallbackValue As Variant
+                Dim hasFallback As Boolean
+                hasFallback = False
+                If Not dataWs Is Nothing Then
+                    hasFallback = TryGetAmiValueFromWorksheet(dataWs, CStr(key), fallbackValue)
+                End If
+                If hasFallback Then
+                    ws.Cells(CLng(changeRows(key)), 6).Value = fallbackValue
+                    ws.Cells(CLng(changeRows(key)), 6).NumberFormat = "0%"
+                End If
+            Next key
+
+            Application.EnableEvents = True
+            g_AMIOptixSuppressEvents = False
+
+            Dim msg As String
+            msg = "Invalid manual change. Reverted." & vbCrLf & vbCrLf
+            If evalResult.Exists("errors") Then
+                Dim errs As Object
+                Set errs = evalResult("errors")
+                For i = 1 To errs.Count
+                    msg = msg & "- " & errs(i) & vbCrLf
+                Next i
+            End If
+            MsgBox msg, vbExclamation, "AMI Optix"
+            Exit Sub
+        End If
+    End If
+
+    ' Apply all changes to the data sheet and refresh the manual scenario.
+    g_AMIOptixSuppressEvents = True
+    Application.EnableEvents = False
+
+    If Not dataWs Is Nothing Then
+        Dim k2 As Variant
+        For Each k2 In changes.Keys
+            ApplyAmiToWorksheet dataWs, CStr(k2), CDbl(changes(k2))
+        Next k2
+    End If
+
+    Application.EnableEvents = True
+    g_AMIOptixSuppressEvents = False
+
+    Call UpdateManualScenario(False, programNorm)
+    Exit Sub
+
+Fail:
+    g_AMIOptixSuppressEvents = False
+    On Error Resume Next
+    Application.EnableEvents = True
+End Sub
+
 Private Function TryGetDataSheetAmiValue(programNorm As String, unitId As String, ByRef amiValue As Variant) As Boolean
     On Error GoTo Fail
 
@@ -361,6 +572,71 @@ Private Sub ApplyAmiToDataSheet(programNorm As String, unitId As String, newAmi 
 Fail:
 End Sub
 
+Private Function TryGetAmiValueFromWorksheet(ws As Worksheet, unitId As String, ByRef amiValue As Variant) As Boolean
+    On Error GoTo Fail
+
+    If ws Is Nothing Then Exit Function
+
+    Dim headerRow As Long
+    headerRow = FindHeaderRow(ws)
+    If headerRow = 0 Then Exit Function
+
+    Dim unitCol As Long
+    unitCol = FindUnitIdColumn(ws, headerRow)
+    If unitCol = 0 Then unitCol = 2
+
+    Dim amiCol As Long
+    amiCol = FindAMIColumn(ws, headerRow)
+    If amiCol = 0 Then Exit Function
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).Row
+
+    Dim r As Long
+    For r = headerRow + 1 To lastRow
+        If Trim(CStr(ws.Cells(r, unitCol).Value)) = unitId Then
+            amiValue = ws.Cells(r, amiCol).Value
+            TryGetAmiValueFromWorksheet = True
+            Exit Function
+        End If
+    Next r
+
+Fail:
+    TryGetAmiValueFromWorksheet = False
+End Function
+
+Private Sub ApplyAmiToWorksheet(ws As Worksheet, unitId As String, newAmi As Double)
+    On Error GoTo Fail
+
+    If ws Is Nothing Then Exit Sub
+
+    Dim headerRow As Long
+    headerRow = FindHeaderRow(ws)
+    If headerRow = 0 Then Exit Sub
+
+    Dim unitCol As Long
+    unitCol = FindUnitIdColumn(ws, headerRow)
+    If unitCol = 0 Then unitCol = 2
+
+    Dim amiCol As Long
+    amiCol = FindAMIColumn(ws, headerRow)
+    If amiCol = 0 Then Exit Sub
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).Row
+
+    Dim r As Long
+    For r = headerRow + 1 To lastRow
+        If Trim(CStr(ws.Cells(r, unitCol).Value)) = unitId Then
+            ws.Cells(r, amiCol).Value = newAmi
+            ws.Cells(r, amiCol).NumberFormat = "0%"
+            Exit Sub
+        End If
+    Next r
+
+Fail:
+End Sub
+
 Private Function GetProgramDataSheet(programNorm As String) As Worksheet
     On Error GoTo Fail
 
@@ -372,6 +648,8 @@ Private Function GetProgramDataSheet(programNorm As String) As Worksheet
     On Error Resume Next
     If UCase$(Trim$(programNorm)) = "MIH" Then
         Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
         If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
     Else
         Set ws = ActiveWorkbook.Worksheets("UAP")
