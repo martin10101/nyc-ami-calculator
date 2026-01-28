@@ -44,39 +44,24 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     Dim ws As Worksheet
     Set ws = Sh
 
-    If UCase(ws.Name) = "UAP" Then
-        If ChangeIsInAMIColumn(ws, Target) Then
-            g_AMIOptixSuppressEvents = True
-            Dim oldValue As Variant
-            Dim hasOldValue As Boolean
-            hasOldValue = (UCase(m_LastSelectionSheet) = UCase(ws.Name) And m_LastSelectionAddress = Target.Address(False, False))
-            If hasOldValue Then oldValue = m_LastSelectionValue
+    Dim programNorm As String
+    programNorm = DetectProgramFromWorkbook()
 
-            Dim ok As Boolean
-            ok = UpdateManualScenario(False, "UAP")
-            If (Not ok) And g_AMIOptixLastManualScenarioInvalid Then
-                ' Revert the invalid edit without relying on Application.Undo (unreliable in event handlers).
-                If hasOldValue Then
-                    Application.EnableEvents = False
-                    Target.Value = oldValue
-                    If IsNumeric(oldValue) Then Target.NumberFormat = "0%"
-                    Application.EnableEvents = True
-
-                    ' Refresh the manual block to match the reverted UAP values.
-                    Call UpdateManualScenario(False, "UAP")
-
-                    ' Keep last selection cache consistent for subsequent edits.
-                    m_LastSelectionValue = oldValue
-                End If
-            ElseIf ok Then
-                ' Keep last selection cache consistent for subsequent edits.
-                m_LastSelectionSheet = CStr(ws.Name)
-                m_LastSelectionAddress = Target.Address(False, False)
-                m_LastSelectionValue = Target.Value
+    If programNorm = "UAP" Then
+        If UCase(ws.Name) = "UAP" Then
+            If ChangeIsInAMIColumn(ws, Target) Then
+                HandleDataSheetAmiChange ws, Target, "UAP"
             End If
-            g_AMIOptixSuppressEvents = False
+            Exit Sub
         End If
-        Exit Sub
+    ElseIf programNorm = "MIH" Then
+        ' MIH workbooks can store the editable unit table on "RentRoll" (preferred) or sometimes on "MIH".
+        If UCase(ws.Name) = "RENTROLL" Or UCase(ws.Name) = "MIH" Then
+            If ChangeIsInAMIColumn(ws, Target) Then
+                HandleDataSheetAmiChange ws, Target, "MIH"
+            End If
+            Exit Sub
+        End If
     End If
 
     If UCase(ws.Name) = UCase("AMI Scenarios") Then
@@ -87,6 +72,68 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     End If
 
 SafeExit:
+End Sub
+
+Private Function DetectProgramFromWorkbook() As String
+    ' Best-effort program detection:
+    ' - If a sheet named "MIH" exists, treat workbook as MIH.
+    ' - Otherwise, treat as UAP.
+    On Error GoTo Fail
+
+    DetectProgramFromWorkbook = "UAP"
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim wsMIH As Worksheet
+    Set wsMIH = Nothing
+    On Error Resume Next
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    On Error GoTo Fail
+    If Not wsMIH Is Nothing Then DetectProgramFromWorkbook = "MIH"
+
+    Exit Function
+
+Fail:
+    DetectProgramFromWorkbook = "UAP"
+End Function
+
+Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNorm As String)
+    ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
+    On Error GoTo SafeExit
+
+    g_AMIOptixSuppressEvents = True
+
+    Dim oldValue As Variant
+    Dim hasOldValue As Boolean
+    hasOldValue = (UCase(m_LastSelectionSheet) = UCase(ws.Name) And m_LastSelectionAddress = target.Address(False, False))
+    If hasOldValue Then oldValue = m_LastSelectionValue
+
+    Dim ok As Boolean
+    ok = UpdateManualScenario(False, programNorm)
+
+    If (Not ok) And g_AMIOptixLastManualScenarioInvalid Then
+        ' Revert the invalid edit without relying on Application.Undo (unreliable in event handlers).
+        If hasOldValue Then
+            Application.EnableEvents = False
+            target.Value = oldValue
+            If IsNumeric(oldValue) Then target.NumberFormat = "0%"
+            Application.EnableEvents = True
+
+            ' Refresh the manual block to match the reverted values.
+            Call UpdateManualScenario(False, programNorm)
+
+            ' Keep last selection cache consistent for subsequent edits.
+            m_LastSelectionValue = oldValue
+        End If
+    ElseIf ok Then
+        ' Keep last selection cache consistent for subsequent edits.
+        m_LastSelectionSheet = CStr(ws.Name)
+        m_LastSelectionAddress = target.Address(False, False)
+        m_LastSelectionValue = target.Value
+    End If
+
+SafeExit:
+    g_AMIOptixSuppressEvents = False
 End Sub
 
 Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolean
@@ -132,18 +179,36 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     newAmi = ParseAmiValue(target.Value)
     If newAmi <= 0 Then Exit Sub
 
-    ' Validate via /api/evaluate before applying to UAP.
+    ' Validate via /api/evaluate before applying to the data sheet.
     Dim prevSheet As Worksheet
     Set prevSheet = ActiveSheet
 
-    Dim uapWs As Worksheet
-    Set uapWs = Nothing
-    On Error Resume Next
-    Set uapWs = ActiveWorkbook.Worksheets("UAP")
-    On Error GoTo Fail
-    If uapWs Is Nothing Then Exit Sub
+    Dim programNorm As String
+    programNorm = DetectProgramFromWorkbook()
 
-    uapWs.Activate
+    Dim mihOption As String
+    Dim mihResidentialSF As Double
+    Dim mihMaxBandPercent As Long
+    mihOption = ""
+    mihResidentialSF = 0
+    mihMaxBandPercent = 0
+    If programNorm = "MIH" Then
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Sub
+    End If
+
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo Fail
+    If dataWs Is Nothing Then Exit Sub
+
+    dataWs.Activate
     Dim units As Collection
     Set units = ReadUnitData()
     prevSheet.Activate
@@ -161,10 +226,10 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     Next i
 
     Dim utilities As Object
-    Set utilities = GetUtilitySelectionsForProgram("UAP")
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
 
     Dim payload As String
-    payload = BuildEvaluatePayloadV2(units, utilities, "UAP", "", 0, 0)
+    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
 
     Dim response As String
     response = CallEvaluateAPI(payload)
@@ -185,7 +250,7 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
             Dim hasFallback As Boolean
             hasFallback = False
             If Not hasOldValue Then
-                hasFallback = TryGetUapAmiValue(unitId, fallbackValue)
+                hasFallback = TryGetDataSheetAmiValue(programNorm, unitId, fallbackValue)
             End If
 
             g_AMIOptixSuppressEvents = True
@@ -216,10 +281,10 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
         End If
     End If
 
-    ' Apply to UAP (last-edit wins) and refresh manual scenario block.
+    ' Apply to the data sheet (last-edit wins) and refresh manual scenario block.
     g_AMIOptixSuppressEvents = True
-    ApplyAmiToUap unitId, newAmi
-    Call UpdateManualScenario(False, "UAP")
+    ApplyAmiToDataSheet programNorm, unitId, newAmi
+    Call UpdateManualScenario(False, programNorm)
     g_AMIOptixSuppressEvents = False
     Exit Sub
 
@@ -227,11 +292,12 @@ Fail:
     g_AMIOptixSuppressEvents = False
 End Sub
 
-Private Function TryGetUapAmiValue(unitId As String, ByRef amiValue As Variant) As Boolean
+Private Function TryGetDataSheetAmiValue(programNorm As String, unitId As String, ByRef amiValue As Variant) As Boolean
     On Error GoTo Fail
 
     Dim ws As Worksheet
-    Set ws = ActiveWorkbook.Worksheets("UAP")
+    Set ws = GetProgramDataSheet(programNorm)
+    If ws Is Nothing Then Exit Function
 
     Dim headerRow As Long
     headerRow = FindHeaderRow(ws)
@@ -246,26 +312,27 @@ Private Function TryGetUapAmiValue(unitId As String, ByRef amiValue As Variant) 
     If amiCol = 0 Then Exit Function
 
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).Row
 
     Dim r As Long
     For r = headerRow + 1 To lastRow
         If Trim(CStr(ws.Cells(r, unitCol).Value)) = unitId Then
             amiValue = ws.Cells(r, amiCol).Value
-            TryGetUapAmiValue = True
+            TryGetDataSheetAmiValue = True
             Exit Function
         End If
     Next r
 
 Fail:
-    TryGetUapAmiValue = False
+    TryGetDataSheetAmiValue = False
 End Function
 
-Private Sub ApplyAmiToUap(unitId As String, newAmi As Double)
+Private Sub ApplyAmiToDataSheet(programNorm As String, unitId As String, newAmi As Double)
     On Error GoTo Fail
 
     Dim ws As Worksheet
-    Set ws = ActiveWorkbook.Worksheets("UAP")
+    Set ws = GetProgramDataSheet(programNorm)
+    If ws Is Nothing Then Exit Sub
 
     Dim headerRow As Long
     headerRow = FindHeaderRow(ws)
@@ -280,7 +347,7 @@ Private Sub ApplyAmiToUap(unitId As String, newAmi As Double)
     If amiCol = 0 Then Exit Sub
 
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.Count, unitCol).End(xlUp).Row
 
     Dim r As Long
     For r = headerRow + 1 To lastRow
@@ -293,6 +360,30 @@ Private Sub ApplyAmiToUap(unitId As String, newAmi As Double)
 
 Fail:
 End Sub
+
+Private Function GetProgramDataSheet(programNorm As String) As Worksheet
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+
+    On Error Resume Next
+    If UCase$(Trim$(programNorm)) = "MIH" Then
+        Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set ws = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo Fail
+
+    Set GetProgramDataSheet = ws
+    Exit Function
+
+Fail:
+    Set GetProgramDataSheet = Nothing
+End Function
 
 Private Function ParseAmiValue(value As Variant) As Double
     On Error GoTo Fail
