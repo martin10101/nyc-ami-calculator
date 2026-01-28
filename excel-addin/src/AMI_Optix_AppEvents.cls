@@ -103,8 +103,6 @@ Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolea
 End Function
 
 Private Function ChangeIsManualScenarioAMI(ws As Worksheet, target As Range) As Boolean
-    ' Manual block is in the top region (rows 1-120). AMI column is col 6.
-    If target.row > 120 Then Exit Function
     If target.Column <> 6 Then Exit Function
 
     Dim headerRow As Long
@@ -112,6 +110,12 @@ Private Function ChangeIsManualScenarioAMI(ws As Worksheet, target As Range) As 
     If headerRow = 0 Then Exit Function
 
     If target.row <= headerRow Then Exit Function
+
+    Dim lastRow As Long
+    lastRow = FindManualTableLastRow(ws, headerRow)
+    If lastRow > 0 Then
+        If target.row > lastRow Then Exit Function
+    End If
     If Trim(CStr(ws.Cells(target.row, 1).Value)) = "" Then Exit Function
 
     ChangeIsManualScenarioAMI = True
@@ -311,14 +315,63 @@ Fail:
 End Function
 
 Private Function FindManualTableHeaderRow(ws As Worksheet) As Long
+    ' Finds the header row for the "Scenario Manual (Live Sync)" unit table.
+    ' We intentionally anchor on the "SCENARIO MANUAL (LIVE SYNC)" label to avoid
+    ' accidentally matching the scenario tables lower on the sheet.
     Dim r As Long
-    For r = 1 To 120
-        If UCase(Trim(CStr(ws.Cells(r, 1).Value))) = "UNIT" And UCase(Trim(CStr(ws.Cells(r, 6).Value))) = "AMI" Then
+    Dim labelRow As Long
+    labelRow = 0
+
+    For r = 1 To 300
+        If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "SCENARIO MANUAL (LIVE SYNC)" Then
+            labelRow = r
+            Exit For
+        End If
+    Next r
+
+    If labelRow > 0 Then
+        For r = labelRow + 1 To labelRow + 80
+            If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" And UCase$(Trim$(CStr(ws.Cells(r, 6).Value))) = "AMI" Then
+                FindManualTableHeaderRow = r
+                Exit Function
+            End If
+        Next r
+    End If
+
+    ' Fallback: search near the top of the sheet.
+    For r = 1 To 200
+        If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" And UCase$(Trim$(CStr(ws.Cells(r, 6).Value))) = "AMI" Then
             FindManualTableHeaderRow = r
             Exit Function
         End If
     Next r
+
     FindManualTableHeaderRow = 0
+End Function
+
+Private Function FindManualTableLastRow(ws As Worksheet, headerRow As Long) As Long
+    On Error GoTo Fail
+
+    Dim r As Long
+    For r = headerRow + 1 To headerRow + 20000
+        Dim unitId As String
+        unitId = Trim$(CStr(ws.Cells(r, 1).Value))
+
+        If unitId = "" Then
+            FindManualTableLastRow = r - 1
+            Exit Function
+        End If
+
+        Dim v As String
+        v = UCase$(unitId)
+        If v Like "SCENARIO #*" Then
+            FindManualTableLastRow = r - 1
+            Exit Function
+        End If
+    Next r
+
+Fail:
+    FindManualTableLastRow = 0
 End Function
 
 Private Function FindHeaderRow(ws As Worksheet) As Long

@@ -79,6 +79,35 @@
 
         </group>
 
+        <!-- Learning / Logs Group -->
+        <group id="grpLearning" label="Learning">
+
+          <button id="btnRecordChoice"
+                  label="Record Choice"
+                  size="large"
+                  imageMso="AcceptInvitation"
+                  onAction="Ribbon_RecordScenarioChoice"
+                  screentip="Record Chosen Scenario"
+                  supertip="Record which scenario the client chose (no API call). Appends to the shared run log file in the log folder."/>
+
+          <button id="btnLogSettings"
+                  label="Log Settings"
+                  size="normal"
+                  imageMso="DataValidation"
+                  onAction="Ribbon_OpenLearningSettings"
+                  screentip="Log Settings"
+                  supertip="Configure the log folder location (e.g. Z:\\AMI_Optix_Learning)."/>
+
+          <button id="btnOpenLogs"
+                  label="Open Logs"
+                  size="normal"
+                  imageMso="Folder"
+                  onAction="Ribbon_OpenLearningLogs"
+                  screentip="Open Logs"
+                  supertip="Open the log folder."/>
+
+        </group>
+
       </tab>
     </tabs>
   </ribbon>

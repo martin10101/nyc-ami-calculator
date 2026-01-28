@@ -443,110 +443,20 @@ def optimize_units():
                 "notes": [],
             }), 200
 
-        def _count_nonempty_scenarios(scenarios_dict: dict) -> int:
-            if not scenarios_dict:
-                return 0
-            return len([s for s in scenarios_dict.values() if s])
-
-        def _scenario_canon(s: dict) -> tuple | None:
-            if not s:
-                return None
-            canon = s.get('canonical_assignments')
-            if not canon:
-                return None
-            try:
-                return tuple(tuple(pair) for pair in canon)
-            except Exception:
-                return None
-
-        def _merge_unique_scenarios(existing: dict, incoming: dict, key_prefix: str) -> None:
-            if not incoming:
-                return
-            existing_canons = {_scenario_canon(s) for s in (existing or {}).values() if s}
-            existing_canons.discard(None)
-            extra_idx = 1
-            for in_key, in_scenario in incoming.items():
-                if not in_scenario:
-                    continue
-                canon = _scenario_canon(in_scenario)
-                if canon is None or canon in existing_canons:
-                    continue
-
-                out_key = in_key
-                if out_key in existing:
-                    while True:
-                        out_key = f"{key_prefix}_extra_{extra_idx}"
-                        extra_idx += 1
-                        if out_key not in existing:
-                            break
-
-                existing[out_key] = in_scenario
-                existing_canons.add(canon)
-
         program_norm = str(program or 'UAP').strip().upper()
 
-        # Minimum scenarios to attempt to return (Excel wants at least 3).
-        min_scenarios_requested = 3
-        try:
-            if data.get('min_scenarios') is not None:
-                min_scenarios_requested = max(1, int(data.get('min_scenarios')))
-        except Exception:
-            min_scenarios_requested = 3
+        # Run the strict solver (optionally with project overrides for premium weights / unit rules).
+        solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
+        scenarios = solver_results.get('scenarios', {}) or {}
+        notes = solver_results.get('notes', []) or []
 
-        def _run_solver_with_expansions(overrides: dict | None) -> tuple[dict, list]:
-            """Run solver + expansion passes, preserving distinct scenarios."""
-            solver_results = find_optimal_scenarios(df_units, config, project_overrides=overrides)
-            scenarios_out = solver_results.get('scenarios', {}) or {}
-            notes_out = solver_results.get('notes', []) or []
-
-            # --- Deep affordability cap widening (UAP) ---
-            max_share_cap = config.get('optimization_rules', {}).get('deep_affordability_max_share')
-            min_share_cap = config.get('optimization_rules', {}).get('deep_affordability_min_share')
-            widen_step = config.get('optimization_rules', {}).get('deep_affordability_widen_step', 0.005)
-            widen_cap_limit = config.get('optimization_rules', {}).get('deep_affordability_widen_cap', 0.4)
-            widened_any = False
-
-            if program_norm == 'UAP' and max_share_cap is not None and min_share_cap is not None and widen_step and widen_step > 0:
-                candidate_cap = float(max_share_cap)
-                while candidate_cap <= float(widen_cap_limit):
-                    if scenarios_out.get('absolute_best') and _count_nonempty_scenarios(scenarios_out) >= min_scenarios_requested:
-                        break
-
-                    if candidate_cap > float(max_share_cap) + 1e-12:
-                        attempt_config = copy.deepcopy(config)
-                        attempt_config['optimization_rules']['deep_affordability_max_share'] = float(candidate_cap)
-                        notes_out.append(
-                            f"Retrying with 40% share cap widened to {candidate_cap*100:.2f}% to find additional distinct scenarios."
-                        )
-                        attempt_results = find_optimal_scenarios(df_units, attempt_config, project_overrides=overrides)
-                        _merge_unique_scenarios(scenarios_out, attempt_results.get('scenarios', {}) or {}, key_prefix="widened")
-                        notes_out.extend(attempt_results.get('notes', []) or [])
-                        widened_any = True
-
-                    candidate_cap = round(candidate_cap + float(widen_step), 10)
-
-            if widened_any:
-                notes_out.append("Deep-affordability cap widening was used to expand the scenario set.")
-
-            # --- WAAMI relaxed-floor pass (UAP) ---
-            if program_norm == 'UAP' and scenarios_out.get('absolute_best') and _count_nonempty_scenarios(scenarios_out) < min_scenarios_requested:
-                best_waami = float(scenarios_out['absolute_best'].get('waami') or 0.0)
-                relaxed_floor = 0.59 if best_waami >= 0.595 else max(0.58, best_waami - 0.01)
-                notes_out.append(
-                    f"Attempting an expanded search for alternatives with a relaxed WAAMI floor of {relaxed_floor*100:.2f}%."
-                )
-                relaxed_results = find_optimal_scenarios(df_units, config, relaxed_floor=relaxed_floor, project_overrides=overrides)
-                _merge_unique_scenarios(scenarios_out, relaxed_results.get('scenarios', {}) or {}, key_prefix="relaxed")
-                notes_out.extend(relaxed_results.get('notes', []) or [])
-
-            return scenarios_out, notes_out
-
-        # Run solver (learned) and (optionally) baseline for audit/compare.
-        scenarios, notes = _run_solver_with_expansions(project_overrides)
+        # Optional: baseline run for learning compare (runs strict rules without overrides).
         baseline_scenarios = None
         baseline_notes = None
         if compare_baseline and project_overrides:
-            baseline_scenarios, baseline_notes = _run_solver_with_expansions(None)
+            baseline_results = find_optimal_scenarios(df_units, config, project_overrides=None)
+            baseline_scenarios = baseline_results.get('scenarios', {}) or {}
+            baseline_notes = baseline_results.get('notes', []) or []
 
         if not scenarios or not scenarios.get('absolute_best'):
             return jsonify({
@@ -554,6 +464,41 @@ def optimize_units():
                 "error": "No optimal solution found",
                 "notes": notes
             }), 200
+
+        # Keep strict output client-friendly: cap strict scenarios to 3 (best + 2 variants).
+        # This prevents Excel from being overwhelmed while still showing meaningful alternatives.
+        try:
+            preferred_strict_keys = ["absolute_best", "best_3_band", "best_2_band", "alternative"]
+            filtered = {}
+            seen_canons = set()
+
+            for k in preferred_strict_keys:
+                s = scenarios.get(k)
+                if not s:
+                    continue
+
+                canon = s.get("canonical_assignments")
+                ck = None
+                if canon:
+                    try:
+                        ck = tuple(tuple(pair) for pair in canon)
+                    except Exception:
+                        ck = None
+
+                if ck and ck in seen_canons:
+                    continue
+
+                filtered[k] = s
+                if ck:
+                    seen_canons.add(ck)
+
+                if len(filtered) >= 3:
+                    break
+
+            if filtered:
+                scenarios = filtered
+        except Exception:
+            pass
 
         # Load rent schedule and apply rent calculations
         rent_schedule = None
@@ -583,9 +528,30 @@ def optimize_units():
             if baseline_scenarios:
                 _apply_rents_to_scenarios(baseline_scenarios)
 
-            # Optional: add an extra "Max Revenue" scenario (UAP only), allowing a slightly lower WAAMI floor.
+            # --- Edge scenarios (UAP only) ---
+            # Generate up to 3 "edge" scenarios by relaxing ONE constraint at a time to improve rent,
+            # while never exceeding the WAAMI cap (60%) and never using the 50% AMI band.
             if program_norm == 'UAP':
                 try:
+                    strict_config = copy.deepcopy(config)
+                    strict_rules = strict_config.get('optimization_rules', {}) or {}
+
+                    edge_min_waami = 0.575  # never go below 57.50% in edge scenarios
+
+                    def _canon_key(canon) -> tuple | None:
+                        if not canon:
+                            return None
+                        try:
+                            return tuple(tuple(pair) for pair in canon)
+                        except Exception:
+                            return None
+
+                    existing_canons = set()
+                    for s in (scenarios or {}).values():
+                        ck = _canon_key((s or {}).get('canonical_assignments'))
+                        if ck:
+                            existing_canons.add(ck)
+
                     bands = sorted({int(b) for b in config.get('optimization_rules', {}).get('potential_bands', [])})
                     rent_by_band_cents = {}
                     for band in bands:
@@ -595,27 +561,120 @@ def optimize_units():
                             rents.append(int(round(float(components['gross']) * 100)))
                         rent_by_band_cents[int(band)] = rents
 
-                    max_rev = find_max_revenue_scenario(
-                        df_units,
-                        config,
-                        rent_by_band_cents=rent_by_band_cents,
-                        waami_floor=0.589,
-                        project_overrides=project_overrides,
-                    )
-                    if max_rev and max_rev.get('status') == 'OPTIMAL':
+                    target_edge_count = 3
+                    edge_keys_added: list[str] = []
+
+                    def _maybe_add_edge(key: str, edge_config: dict, waami_floor: float, edge_settings: dict) -> bool:
+                        nonlocal scenarios, notes, existing_canons
+                        if len(edge_keys_added) >= target_edge_count:
+                            return False
+
+                        # Ensure the rent search has enough time to explore (default is capped to 1s).
+                        edge_config = copy.deepcopy(edge_config)
+                        edge_cfg_rules = edge_config.get('optimization_rules', {}) or {}
+                        if edge_cfg_rules.get('max_revenue_time_limit_seconds') is None:
+                            edge_cfg_rules['max_revenue_time_limit_seconds'] = max(float(edge_cfg_rules.get('scenario_time_limit_seconds', 3) or 3.0), 3.0)
+                        if edge_cfg_rules.get('max_revenue_combo_checks') is None:
+                            edge_cfg_rules['max_revenue_combo_checks'] = max(int(edge_cfg_rules.get('max_band_combo_checks', 50) or 50), 80)
+                        edge_config['optimization_rules'] = edge_cfg_rules
+
+                        candidate = find_max_revenue_scenario(
+                            df_units,
+                            edge_config,
+                            rent_by_band_cents=rent_by_band_cents,
+                            waami_floor=float(waami_floor),
+                            project_overrides=project_overrides,
+                        )
+                        if not candidate or candidate.get('status') != 'OPTIMAL':
+                            return False
+
+                        waami_val = float(candidate.get('waami') or 0.0)
+                        if waami_val + 1e-12 < edge_min_waami:
+                            return False
+
+                        ck = _canon_key(candidate.get('canonical_assignments'))
+                        if ck and ck in existing_canons:
+                            return False
+
                         assignments, rent_totals = compute_rents_for_assignments(
                             rent_schedule,
-                            max_rev['assignments'],
-                            utilities_clean
+                            candidate['assignments'],
+                            utilities_clean,
                         )
-                        max_rev['assignments'] = assignments
-                        max_rev['rent_totals'] = rent_totals
-                        scenarios['max_revenue'] = max_rev
-                        notes.append("Added 'Max Revenue' scenario (WAAMI floor 58.9%).")
-                    else:
-                        notes.append("Max Revenue scenario unavailable under the 58.9% WAAMI floor and project constraints.")
+                        candidate['assignments'] = assignments
+                        candidate['rent_totals'] = rent_totals
+
+                        # Tradeoffs: validate edge scenario under STRICT rules and keep only the failures.
+                        is_valid, errors, _summary = _validate_assignment_payload(assignments, strict_config)
+                        candidate['tradeoffs'] = [] if is_valid else errors[:8]
+                        candidate['edge_settings'] = edge_settings
+                        candidate['tier'] = 'edge'
+
+                        scenarios[key] = candidate
+                        if ck:
+                            existing_canons.add(ck)
+                        edge_keys_added.append(key)
+                        return True
+
+                    # Strict "Max Revenue" (no relaxation): rent-maximizing scenario under strict rules.
+                    strict_floor = float(strict_rules.get('waami_floor') or 0.591)
+                    _maybe_add_edge(
+                        "max_revenue",
+                        config,
+                        waami_floor=strict_floor,
+                        edge_settings={"mode": "rent_max", "relaxed": False},
+                    )
+
+                    # Edge 1: relax max share at <=40% (try 22% -> 24%).
+                    strict_min_share = strict_rules.get('deep_affordability_min_share')
+                    strict_max_share = strict_rules.get('deep_affordability_max_share')
+                    if len(edge_keys_added) < target_edge_count:
+                        for max_share in (0.22, 0.23, 0.24):
+                            if strict_max_share is not None and float(max_share) <= float(strict_max_share) + 1e-12:
+                                continue
+                            edge_cfg = copy.deepcopy(config)
+                            edge_cfg['optimization_rules']['deep_affordability_min_share'] = strict_min_share
+                            edge_cfg['optimization_rules']['deep_affordability_max_share'] = float(max_share)
+                            if _maybe_add_edge(
+                                f"edge_max_share_{int(round(max_share*100))}",
+                                edge_cfg,
+                                waami_floor=strict_floor,
+                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_max_share": float(max_share)},
+                            ):
+                                break
+
+                    # Edge 2: relax min share at <=40% (try 19.9% -> 19.8%).
+                    if len(edge_keys_added) < target_edge_count:
+                        for min_share in (0.199, 0.198):
+                            if strict_min_share is not None and float(min_share) >= float(strict_min_share) - 1e-12:
+                                continue
+                            edge_cfg = copy.deepcopy(config)
+                            edge_cfg['optimization_rules']['deep_affordability_min_share'] = float(min_share)
+                            edge_cfg['optimization_rules']['deep_affordability_max_share'] = strict_max_share
+                            if _maybe_add_edge(
+                                f"edge_min_share_{int(round(min_share*1000))}",
+                                edge_cfg,
+                                waami_floor=strict_floor,
+                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_min_share": float(min_share)},
+                            ):
+                                break
+
+                    # Edge 3: relax WAAMI floor only if we still don't have enough edge scenarios.
+                    if len(edge_keys_added) < target_edge_count:
+                        for floor in (0.589, 0.585, 0.58, 0.575):
+                            if float(floor) + 1e-12 < edge_min_waami:
+                                continue
+                            if float(floor) >= strict_floor - 1e-12:
+                                continue
+                            if _maybe_add_edge(
+                                f"edge_waami_floor_{int(round(floor*1000))}",
+                                config,
+                                waami_floor=float(floor),
+                                edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
+                            ):
+                                break
                 except Exception as e:
-                    notes.append(f"Warning: Could not compute Max Revenue scenario: {str(e)}")
+                    notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
 
         learning_info = None
         if compare_baseline and baseline_scenarios and scenarios:

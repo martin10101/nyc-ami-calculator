@@ -32,8 +32,8 @@ Public Function CallOptimizeAPI(payload As String) As String
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
 
     ' Configure timeouts (ms): Resolve, Connect, Send, Receive
-    ' 5 sec resolve, 30 sec connect, 30 sec send, 120 sec receive (for cold start)
-    http.setTimeouts 5000, 30000, 30000, 120000
+    ' 5 sec resolve, 30 sec connect, 30 sec send, 240 sec receive (solver can take longer for edge cases)
+    http.setTimeouts 5000, 30000, 30000, 240000
 
     ' Configure request
     http.Open "POST", url, False

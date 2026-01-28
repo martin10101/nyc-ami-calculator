@@ -203,11 +203,26 @@ def _solve_single_scenario(
     max_waami_scaled = waami_cap_basis_points * total_sf_int
     total_ami_sf_var = model.NewIntVar(0, max_waami_scaled, 'total_ami_sf_var')
     model.Add(total_ami_sf_var == total_ami_sf_expr)
-    waami_floor_percent = optimization_rules.get('waami_floor')
-    if waami_floor_percent:
-        waami_floor_basis_points = int(waami_floor_percent * 100)
-        min_waami_scaled = waami_floor_basis_points * total_sf_int
-        model.Add(total_ami_sf_var >= min_waami_scaled)
+    waami_floor_raw = optimization_rules.get('waami_floor')
+    if waami_floor_raw:
+        # total_ami_sf_var is in "basis points * sf" units where:
+        #   60% == 6000 basis points (percent * 100).
+        # Support both:
+        # - fractional floor (0.591 == 59.1%)
+        # - percent floor (59.1 == 59.1%)
+        try:
+            waami_floor_f = float(waami_floor_raw)
+        except (TypeError, ValueError):
+            waami_floor_f = 0.0
+
+        if waami_floor_f > 1.5:
+            waami_floor_basis_points = int(round(waami_floor_f * 100))
+        else:
+            waami_floor_basis_points = int(round(waami_floor_f * 10000))
+
+        if waami_floor_basis_points > 0:
+            min_waami_scaled = waami_floor_basis_points * total_sf_int
+            model.Add(total_ami_sf_var >= min_waami_scaled)
 
     denominators: Dict[str, int] = {'affordable': total_sf_int}
     if share_denominators:

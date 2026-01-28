@@ -237,12 +237,14 @@ Public Sub RunOptimizationForProgram(program As String)
         End If
     End If
 
-    ' Step 3C: AI Learning (soft preferences only)
+    ' Step 3C: Learning (disabled)
+    ' The prior "AI learning" workflow was unstable (extra API work / memory pressure).
+    ' For now, we only keep local logging (Record Choice) and do NOT send any learning data to the API.
     Dim profileKey As String
     profileKey = GetLearningProfileKey(programNorm, mihOption)
 
     Dim learningMode As String
-    learningMode = GetLearningMode(profileKey)
+    learningMode = LEARNING_MODE_OFF
 
     Dim compareBaseline As Boolean
     compareBaseline = False
@@ -252,17 +254,6 @@ Public Sub RunOptimizationForProgram(program As String)
 
     Dim projectOverridesJson As String
     projectOverridesJson = ""
-
-    If learningMode <> LEARNING_MODE_OFF Then
-        If learningMode = LEARNING_MODE_SHADOW Then
-            ' Shadow mode must compare baseline so we can apply baseline results while still logging diffs.
-            compareBaseline = True
-        Else
-            compareBaseline = GetLearningCompareBaseline(profileKey)
-        End If
-        Set premiumWeights = ComputeLearnedPremiumWeights(profileKey)
-        projectOverridesJson = BuildProjectOverridesJson(premiumWeights, "excel_learning_v1")
-    End If
 
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."
@@ -284,7 +275,7 @@ Public Sub RunOptimizationForProgram(program As String)
     Debug.Print "=== END PAYLOAD ==="
 
     ' Step 5: Call API
-    Application.StatusBar = "AMI Optix: Calling optimization API (this may take up to 60 seconds)..."
+    Application.StatusBar = "AMI Optix: Calling optimization API (this may take a few minutes)..."
     response = CallOptimizeAPI(payload)
 
     If response = "" Then
@@ -374,59 +365,12 @@ Public Sub RunOptimizationForProgram(program As String)
     appliedScenarioLabel = "best scenario"
 
     ' Apply to source sheet
-    If learningMode = LEARNING_MODE_SHADOW And compareBaseline Then
-        Dim appliedBaseline As Boolean
-        appliedBaseline = False
-
-        On Error Resume Next
-        If result.Exists("learning") Then
-            Dim learningObj As Object
-            Set learningObj = result("learning")
-            If Not learningObj Is Nothing Then
-                If learningObj.Exists("baseline") Then
-                    Dim baseObj As Object
-                    Set baseObj = learningObj("baseline")
-                    If Not baseObj Is Nothing Then
-                        If baseObj.Exists("absolute_best") Then
-                            Dim baseBest As Object
-                            Set baseBest = baseObj("absolute_best")
-                            If Not baseBest Is Nothing Then
-                                If baseBest.Exists("canonical_assignments") Then
-                                    Dim canon As Object
-                                    Set canon = baseBest("canonical_assignments")
-                                    If Not canon Is Nothing Then
-                                        ApplyCanonicalAssignmentsToDataSheet canon, RGB(200, 220, 255)
-                                        appliedBaseline = True
-                                        appliedScenarioLabel = "baseline scenario (shadow mode)"
-                                    End If
-                                End If
-                            End If
-                        End If
-                    End If
-                End If
-            End If
-        End If
-        On Error GoTo ErrorHandler
-
-        If Not appliedBaseline Then
-            ApplyBestScenario result
-        End If
-    Else
-        ApplyBestScenario result
-    End If
+    ApplyBestScenario result
 
     ' Create scenarios comparison sheet
     CreateScenariosSheet result
     Dim scenariosSheetOk As Boolean
     scenariosSheetOk = (Len(Trim$(g_AMIOptixLastScenariosSheetBuildError)) = 0)
-
-    ' In Shadow mode, the scenarios sheet was built from the learned result, but the sheet data
-    ' reflects baseline (by design). Refresh the Scenario Manual block to match current sheet values.
-    If learningMode = LEARNING_MODE_SHADOW Then
-        On Error Resume Next
-        Call UpdateManualScenario(False, programNorm)
-        On Error GoTo ErrorHandler
-    End If
 
     ' Done
     Application.StatusBar = False

@@ -33,6 +33,144 @@ Public Sub Ribbon_ViewScenarios(control As IRibbonControl)
 End Sub
 
 '-------------------------------------------------------------------------------
+' RIBBON CALLBACKS - LEARNING / LOGS GROUP
+'-------------------------------------------------------------------------------
+
+Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
+    ' Records which scenario the client chose (no API calls).
+    ' Appends a single entry to the shared JSONL run log.
+
+    On Error GoTo Fail
+
+    If g_LastScenarios Is Nothing Then
+        MsgBox "No scenarios available." & vbCrLf & vbCrLf & _
+               "Run the solver first to generate scenarios.", _
+               vbInformation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim scenarios As Object
+    On Error Resume Next
+    If g_LastScenarios.Exists("scenarios") Then Set scenarios = g_LastScenarios("scenarios")
+    On Error GoTo Fail
+
+    If scenarios Is Nothing Then
+        MsgBox "No scenarios available." & vbCrLf & vbCrLf & _
+               "Run the solver first to generate scenarios.", _
+               vbInformation, "AMI Optix"
+        Exit Sub
+    End If
+
+    If scenarios.Count = 0 Then
+        MsgBox "No scenarios available.", vbInformation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim programNorm As String
+    Dim mihOption As String
+    programNorm = "UAP"
+    mihOption = ""
+
+    On Error Resume Next
+    If g_LastScenarios.Exists("project_summary") Then
+        Dim ps As Object
+        Set ps = g_LastScenarios("project_summary")
+        If Not ps Is Nothing Then
+            If ps.Exists("program") Then programNorm = CStr(ps("program"))
+            If ps.Exists("mih_option") Then mihOption = CStr(ps("mih_option"))
+        End If
+    End If
+    On Error GoTo Fail
+
+    Dim profileKey As String
+    profileKey = GetLearningProfileKey(programNorm, mihOption)
+
+    ' Build an ordered list: strict first, then edge.
+    Dim strictKeys As Collection
+    Dim edgeKeys As Collection
+    Set strictKeys = New Collection
+    Set edgeKeys = New Collection
+
+    Dim scenarioKey As Variant
+    For Each scenarioKey In scenarios.keys
+        Dim tier As String
+        tier = ""
+
+        On Error Resume Next
+        Dim s As Object
+        Set s = scenarios(scenarioKey)
+        If Not s Is Nothing Then
+            If s.Exists("tier") Then tier = CStr(s("tier"))
+        End If
+        On Error GoTo Fail
+
+        If LCase$(Trim$(tier)) = "edge" Then
+            edgeKeys.Add CStr(scenarioKey)
+        Else
+            strictKeys.Add CStr(scenarioKey)
+        End If
+    Next scenarioKey
+
+    Dim total As Long
+    total = strictKeys.Count + edgeKeys.Count
+
+    Dim keys() As String
+    ReDim keys(1 To total)
+
+    Dim msg As String
+    msg = "Available Scenarios:" & vbCrLf & vbCrLf
+
+    Dim i As Long
+    i = 1
+
+    Dim k As Variant
+    For Each k In strictKeys
+        keys(i) = CStr(k)
+        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
+        i = i + 1
+    Next k
+
+    For Each k In edgeKeys
+        keys(i) = CStr(k)
+        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
+        i = i + 1
+    Next k
+
+    msg = msg & vbCrLf & "Enter chosen scenario number (1-" & total & "):"
+
+    Dim choice As String
+    choice = InputBox(msg, "Record Chosen Scenario", "1")
+    If choice = "" Then Exit Sub
+
+    Dim choiceNum As Long
+    On Error Resume Next
+    choiceNum = CLng(choice)
+    On Error GoTo Fail
+
+    If choiceNum < 1 Or choiceNum > total Then
+        MsgBox "Invalid selection.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim chosenKey As String
+    chosenKey = keys(choiceNum)
+
+    Dim chosenScenario As Object
+    Set chosenScenario = scenarios(chosenKey)
+
+    Call LogScenarioChoiceToRunLog(profileKey, programNorm, mihOption, choiceNum, chosenKey, chosenScenario)
+
+    MsgBox "Recorded choice:" & vbCrLf & _
+           "Scenario: " & FormatScenarioNameForPicker(chosenKey) & vbCrLf & _
+           "Log file: " & GetRunLogFilePath(), _
+           vbInformation, "AMI Optix"
+    Exit Sub
+
+Fail:
+    MsgBox "Could not record choice: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
+'-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - RENT ROLL GROUP
 '-------------------------------------------------------------------------------
 
@@ -243,8 +381,8 @@ End Sub
 '-------------------------------------------------------------------------------
 
 Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
-    ' Configure AI learning (soft preferences only) for the current program profile.
-    ' Uses InputBox/MsgBox (no UserForms) to avoid type-mismatch issues.
+    ' Configure local logging (no API learning).
+    ' Uses InputBox/MsgBox (no UserForms).
 
     On Error GoTo Fail
 
@@ -253,123 +391,43 @@ Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
         Exit Sub
     End If
 
-    Dim programNorm As String
-    programNorm = "UAP"
-
-    On Error Resume Next
-    Dim wsMIH As Worksheet
-    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
-    On Error GoTo Fail
-    If Not wsMIH Is Nothing Then programNorm = "MIH"
-
-    Dim mihOption As String
-    mihOption = ""
-
-    If programNorm = "MIH" Then
-        Dim residentialSF As Double
-        Dim maxBandPercent As Long
-        On Error Resume Next
-        Call TryReadMIHInputs(mihOption, residentialSF, maxBandPercent)
-        On Error GoTo Fail
-    End If
-
-    Dim profileKey As String
-    profileKey = GetLearningProfileKey(programNorm, mihOption)
-
-    Dim currentMode As String
-    currentMode = GetLearningMode(profileKey)
-
-    Dim currentCompare As Boolean
-    currentCompare = GetLearningCompareBaseline(profileKey)
-
     Dim currentRoot As String
     currentRoot = GetLearningLogRootPath()
 
     Dim summary As String
-    summary = "Profile: " & profileKey & vbCrLf & _
-              "Program: " & programNorm & vbCrLf & _
-              IIf(programNorm = "MIH", "MIH Option: " & mihOption & vbCrLf, "") & _
-              vbCrLf & _
-              "Learning Mode: " & currentMode & vbCrLf & _
-              "Compare Baseline: " & IIf(currentCompare, "YES", "NO") & vbCrLf & _
-              "Log Root: " & currentRoot
-
-    MsgBox summary, vbInformation, "AMI Optix - Learning Settings"
-
-    Dim newMode As String
-    newMode = InputBox("Enter learning mode for " & profileKey & " (OFF / SHADOW / ON):", "AMI Optix - Learning Mode", currentMode)
-    If Trim$(newMode) <> "" Then
-        newMode = UCase$(Trim$(newMode))
-        If newMode <> LEARNING_MODE_OFF And newMode <> LEARNING_MODE_SHADOW And newMode <> LEARNING_MODE_ON Then
-            MsgBox "Invalid mode. Use OFF, SHADOW, or ON.", vbExclamation, "AMI Optix"
-            Exit Sub
-        End If
-        Call SetLearningMode(profileKey, newMode)
-        currentMode = newMode
-    End If
-
-    Dim cmpResp As VbMsgBoxResult
-    cmpResp = MsgBox("Compare baseline each run for " & profileKey & "?" & vbCrLf & vbCrLf & _
-                     "YES = run baseline+learned and log diff" & vbCrLf & _
-                     "NO = only run the selected mode", _
-                     vbYesNoCancel + vbQuestion, "AMI Optix - Compare Baseline")
-    If cmpResp <> vbCancel Then
-        Call SetLearningCompareBaseline(profileKey, (cmpResp = vbYes))
-    End If
+    summary = "Logging is local-only (no API learning)." & vbCrLf & vbCrLf & _
+              "Log Root: " & currentRoot & vbCrLf & _
+              "Run Log File: " & GetRunLogFilePath()
 
     Dim pathResp As VbMsgBoxResult
-    pathResp = MsgBox("Change learning log folder root?" & vbCrLf & vbCrLf & currentRoot, vbYesNo + vbQuestion, "AMI Optix - Learning Logs")
+    pathResp = MsgBox(summary & vbCrLf & vbCrLf & "Change log folder root?", vbYesNo + vbQuestion, "AMI Optix - Log Settings")
     If pathResp = vbYes Then
         Dim newRoot As String
         newRoot = InputBox("Enter log root folder path (e.g. Z:\AMI_Optix_Learning or \\server\share\AMI_Optix_Learning):", _
-                           "AMI Optix - Learning Log Folder", currentRoot)
+                           "AMI Optix - Log Folder", currentRoot)
         If Trim$(newRoot) <> "" Then
             Call SetLearningLogRootPath(newRoot)
         End If
     End If
 
     MsgBox "Saved." & vbCrLf & vbCrLf & _
-           "Mode: " & GetLearningMode(profileKey) & vbCrLf & _
-           "Compare Baseline: " & IIf(GetLearningCompareBaseline(profileKey), "YES", "NO") & vbCrLf & _
-           "Log Root: " & GetLearningLogRootPath(), _
+           "Log Root: " & GetLearningLogRootPath() & vbCrLf & _
+           "Run Log File: " & GetRunLogFilePath(), _
            vbInformation, "AMI Optix"
     Exit Sub
 
 Fail:
-    MsgBox "Learning settings failed: " & Err.Description, vbExclamation, "AMI Optix"
+    MsgBox "Log settings failed: " & Err.Description, vbExclamation, "AMI Optix"
 End Sub
 
 Public Sub Ribbon_OpenLearningLogs(control As IRibbonControl)
-    ' Opens the log folder for the current program profile in Explorer.
+    ' Opens the log folder in Explorer.
     On Error GoTo Fail
 
     If ActiveWorkbook Is Nothing Then Exit Sub
 
-    Dim programNorm As String
-    programNorm = "UAP"
-
-    On Error Resume Next
-    Dim wsMIH As Worksheet
-    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
-    On Error GoTo Fail
-    If Not wsMIH Is Nothing Then programNorm = "MIH"
-
-    Dim mihOption As String
-    mihOption = ""
-    If programNorm = "MIH" Then
-        Dim residentialSF As Double
-        Dim maxBandPercent As Long
-        On Error Resume Next
-        Call TryReadMIHInputs(mihOption, residentialSF, maxBandPercent)
-        On Error GoTo Fail
-    End If
-
-    Dim profileKey As String
-    profileKey = GetLearningProfileKey(programNorm, mihOption)
-
     Dim folderPath As String
-    folderPath = GetLearningProfileFolder(profileKey)
-    Call EnsureFolderExists(GetLearningLogRootPath())
+    folderPath = GetLearningLogRootPath()
     Call EnsureFolderExists(folderPath)
 
     Shell "explorer.exe """ & folderPath & """", vbNormalFocus
@@ -558,23 +616,46 @@ Private Sub ShowScenarioList()
         Exit Sub
     End If
 
-    ' Build list of scenarios
+    ' Build list of scenarios (strict first, then edge)
+    Dim strictKeys As Collection
+    Dim edgeKeys As Collection
+    Set strictKeys = New Collection
+    Set edgeKeys = New Collection
+
+    For Each scenarioKey In scenarios.keys
+        Dim tier As String
+        tier = ""
+        On Error Resume Next
+        Dim s As Object
+        Set s = scenarios(scenarioKey)
+        If Not s Is Nothing Then
+            If s.Exists("tier") Then tier = CStr(s("tier"))
+        End If
+        On Error GoTo 0
+
+        If LCase$(Trim$(tier)) = "edge" Then
+            edgeKeys.Add CStr(scenarioKey)
+        Else
+            strictKeys.Add CStr(scenarioKey)
+        End If
+    Next scenarioKey
+
     ReDim keys(1 To scenarios.Count)
     msg = "Available Scenarios:" & vbCrLf & vbCrLf
     i = 1
 
-    For Each scenarioKey In scenarios.keys
-        keys(i) = CStr(scenarioKey)
-        Dim scenario As Object
-        Set scenario = scenarios(scenarioKey)
-
-        Dim waami As String
-        waami = Format(scenario("waami"), "0.00%")
-
-        msg = msg & i & ". " & FormatScenarioNameForPicker(CStr(scenarioKey)) & _
-              " (WAAMI: " & waami & ")" & vbCrLf
+    Dim k As Variant
+    For Each k In strictKeys
+        keys(i) = CStr(k)
+        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
         i = i + 1
-    Next scenarioKey
+    Next k
+
+    For Each k In edgeKeys
+        keys(i) = CStr(k)
+        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
+        i = i + 1
+    Next k
 
     msg = msg & vbCrLf & "Enter scenario number (1-" & scenarios.Count & "):"
 
@@ -600,6 +681,8 @@ Private Function FormatScenarioNameForPicker(key As String) As String
     Select Case key
         Case "absolute_best"
             FormatScenarioNameForPicker = "Absolute Best"
+        Case "max_revenue"
+            FormatScenarioNameForPicker = "Max Revenue (Rent-Max)"
         Case "best_3_band"
             FormatScenarioNameForPicker = "Best 3-Band"
         Case "best_2_band"
@@ -609,6 +692,54 @@ Private Function FormatScenarioNameForPicker(key As String) As String
         Case "client_oriented"
             FormatScenarioNameForPicker = "Client Oriented (Max Revenue)"
         Case Else
-            FormatScenarioNameForPicker = Replace(key, "_", " ")
+            If Left$(key, 15) = "edge_max_share_" Then
+                FormatScenarioNameForPicker = "Edge: 40% Max Share " & Mid$(key, 16) & "%"
+            ElseIf Left$(key, 15) = "edge_min_share_" Then
+                Dim v As Long
+                On Error Resume Next
+                v = CLng(Mid$(key, 16))
+                On Error GoTo 0
+                If v > 0 Then
+                    FormatScenarioNameForPicker = "Edge: 40% Min Share " & Format$(v / 10#, "0.0") & "%"
+                Else
+                    FormatScenarioNameForPicker = Replace(key, "_", " ")
+                End If
+            ElseIf Left$(key, 17) = "edge_waami_floor_" Then
+                Dim w As Long
+                On Error Resume Next
+                w = CLng(Mid$(key, 18))
+                On Error GoTo 0
+                If w > 0 Then
+                    FormatScenarioNameForPicker = "Edge: WAAMI Floor " & Format$(w / 10#, "0.0") & "%"
+                Else
+                    FormatScenarioNameForPicker = Replace(key, "_", " ")
+                End If
+            Else
+                FormatScenarioNameForPicker = Replace(key, "_", " ")
+            End If
     End Select
+End Function
+
+Private Function ScenarioPickerLine(index As Long, scenarioKey As String, scenario As Object) As String
+    Dim waami As String
+    waami = "n/a"
+
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("waami") Then waami = Format(CDbl(scenario("waami")), "0.00%")
+    End If
+    On Error GoTo 0
+
+    Dim tierLabel As String
+    tierLabel = "STRICT"
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("tier") Then
+            If LCase$(Trim$(CStr(scenario("tier")))) = "edge" Then tierLabel = "EDGE"
+        End If
+    End If
+    On Error GoTo 0
+
+    ScenarioPickerLine = index & ". " & FormatScenarioNameForPicker(CStr(scenarioKey)) & _
+                         " [" & tierLabel & "] (WAAMI: " & waami & ")"
 End Function

@@ -15,6 +15,9 @@ Private Const DEFAULT_BASE_SF_WEIGHT As Double = 0.3
 Private Const DEFAULT_BASE_BEDROOM_WEIGHT As Double = 0.15
 Private Const DEFAULT_BASE_BALCONY_WEIGHT As Double = 0.1
 
+' Append-only run log (single file; one JSON object per line).
+Private Const RUN_LOG_FILE_NAME As String = "ami_optix_runs.jsonl"
+
 ' Learning modes (stored as strings in registry)
 Public Const LEARNING_MODE_OFF As String = "OFF"
 Public Const LEARNING_MODE_SHADOW As String = "SHADOW"
@@ -153,30 +156,15 @@ Public Function BuildProjectOverridesJson(premiumWeights As Object, notes As Str
 End Function
 
 Public Sub LogLearningEvent(profileKey As String, eventName As String, jsonBody As String)
+    ' Backward-compatible wrapper. We no longer create per-run JSON files (file spam).
+    ' Instead, append one JSON object per line to the shared JSONL log file.
     On Error GoTo Fail
 
-    Dim folderPath As String
-    folderPath = GetLearningProfileFolder(profileKey)
-
-    EnsureFolderExists GetLearningLogRootPath()
-    EnsureFolderExists folderPath
-
-    Dim fileName As String
-    fileName = Format$(Now, "yyyymmdd_hhnnss") & "_" & NewGuidString() & "_" & LCase$(eventName) & ".json"
-
-    Dim fullPath As String
-    fullPath = folderPath & "\" & fileName
-
-    Dim ff As Integer
-    ff = FreeFile
-    Open fullPath For Output As #ff
-    Print #ff, jsonBody
-    Close #ff
+    If Trim$(jsonBody) = "" Then jsonBody = "{}"
+    Call AppendRunLog(eventName, jsonBody)
     Exit Sub
 
 Fail:
-    On Error Resume Next
-    If ff <> 0 Then Close #ff
 End Sub
 
 Public Sub LogSolverRun(profileKey As String, programNorm As String, mihOption As String, learningMode As String, _
@@ -184,9 +172,12 @@ Public Sub LogSolverRun(profileKey As String, programNorm As String, mihOption A
     On Error GoTo Fail
 
     Dim wbName As String
+    Dim wbPath As String
     wbName = ""
+    wbPath = ""
     If Not ActiveWorkbook Is Nothing Then
         wbName = ActiveWorkbook.Name
+        wbPath = ActiveWorkbook.FullName
     End If
 
     Dim weightsJson As String
@@ -266,29 +257,366 @@ Public Sub LogSolverRun(profileKey As String, programNorm As String, mihOption A
         End If
     End If
 
-    Dim json As String
-    json = "{"
-    json = json & """schema_version"": 1,"
-    json = json & """event"": ""solver_run"","
-    json = json & """created_local"": """ & EscapeJSONString(Format$(Now, "yyyy-mm-dd hh:nn:ss")) & ""","
-    json = json & """profile"": """ & EscapeJSONString(profileKey) & ""","
-    json = json & """program"": """ & EscapeJSONString(programNorm) & ""","
-    json = json & """mih_option"": """ & EscapeJSONString(mihOption) & ""","
-    json = json & """workbook"": """ & EscapeJSONString(wbName) & ""","
-    json = json & """learning_mode"": """ & EscapeJSONString(learningMode) & ""","
-    json = json & """compare_baseline"": " & IIf(compareBaseline, "true", "false") & ","
-    json = json & """premium_weights_sent"": " & weightsJson & ","
-    json = json & """scenario_count"": " & scenarioCount & ","
-    json = json & """has_learning_compare"": " & IIf(hasLearningCompare, "true", "false") & ","
-    json = json & """baseline_waami_percent"": " & InvariantNumber(baselineWaamiPercent) & ","
-    json = json & """learned_waami_percent"": " & InvariantNumber(learnedWaamiPercent) & ","
-    json = json & """changed_unit_count"": " & changedUnitCount
-    json = json & "}"
+    ' Scenario keys + solver notes (kept out of client-facing sheets).
+    Dim keysJson As String
+    keysJson = "[]"
+    On Error Resume Next
+    If Not apiResult Is Nothing Then
+        If apiResult.Exists("scenarios") Then
+            Dim scenarios As Object
+            Set scenarios = apiResult("scenarios")
+            If Not scenarios Is Nothing Then
+                Dim scenarioKey As Variant
+                Dim buf As String
+                buf = "["
+                Dim first As Boolean
+                first = True
+                For Each scenarioKey In scenarios.Keys
+                    If Not first Then buf = buf & ","
+                    buf = buf & """" & EscapeJSONString(CStr(scenarioKey)) & """"
+                    first = False
+                Next scenarioKey
+                buf = buf & "]"
+                keysJson = buf
+            End If
+        End If
+    End If
+    On Error GoTo Fail
 
-    LogLearningEvent profileKey, "solver_run", json
+    Dim notesJson As String
+    notesJson = "[]"
+    On Error Resume Next
+    If Not apiResult Is Nothing Then
+        If apiResult.Exists("notes") Then
+            Dim notes As Object
+            Set notes = apiResult("notes")
+            If Not notes Is Nothing Then
+                Dim n As Long
+                Dim nbuf As String
+                nbuf = "["
+                For n = 1 To notes.Count
+                    If n > 1 Then nbuf = nbuf & ","
+                    nbuf = nbuf & """" & EscapeJSONString(CStr(notes(n))) & """"
+                Next n
+                nbuf = nbuf & "]"
+                notesJson = nbuf
+            End If
+        End If
+    End If
+    On Error GoTo Fail
+
+    Dim payload As String
+    payload = "{"
+    payload = payload & """schema_version"":1,"
+    payload = payload & """created_local"":""" & EscapeJSONString(Format$(Now, "yyyy-mm-dd hh:nn:ss")) & ""","
+    payload = payload & """profile_key"":""" & EscapeJSONString(profileKey) & ""","
+    payload = payload & """program"":""" & EscapeJSONString(programNorm) & ""","
+    payload = payload & """mih_option"":""" & EscapeJSONString(mihOption) & ""","
+    payload = payload & """workbook_name"":""" & EscapeJSONString(wbName) & ""","
+    payload = payload & """workbook_path"":""" & EscapeJSONString(wbPath) & ""","
+    payload = payload & """learning_mode"":""" & EscapeJSONString(learningMode) & ""","
+    payload = payload & """compare_baseline"":" & IIf(compareBaseline, "true", "false") & ","
+    payload = payload & """premium_weights_sent"":" & weightsJson & ","
+    payload = payload & """scenario_count"":" & scenarioCount & ","
+    payload = payload & """scenario_keys"":" & keysJson & ","
+    payload = payload & """notes"":" & notesJson & ","
+    payload = payload & """has_learning_compare"":" & IIf(hasLearningCompare, "true", "false") & ","
+    payload = payload & """baseline_waami_percent"":" & InvariantNumber(baselineWaamiPercent) & ","
+    payload = payload & """learned_waami_percent"":" & InvariantNumber(learnedWaamiPercent) & ","
+    payload = payload & """changed_unit_count"":" & changedUnitCount
+    payload = payload & "}"
+
+    Call AppendRunLog("solver_run", payload)
     Exit Sub
 
 Fail:
+End Sub
+
+'-------------------------------------------------------------------------------
+' RUN LOG (APPEND-ONLY JSONL)
+'-------------------------------------------------------------------------------
+
+Public Function GetRunLogFilePath() As String
+    Dim rootPath As String
+    rootPath = GetLearningLogRootPath()
+    GetRunLogFilePath = rootPath & "\" & RUN_LOG_FILE_NAME
+End Function
+
+Public Sub AppendRunLog(eventName As String, payloadJson As String)
+    ' Appends one JSON line to the shared run log file.
+    ' The file is reused across runs (no file spam).
+    On Error GoTo Fail
+
+    Dim rootPath As String
+    rootPath = GetLearningLogRootPath()
+    Call EnsureFolderExists(rootPath)
+
+    Dim filePath As String
+    filePath = GetRunLogFilePath()
+
+    Dim ts As String
+    ts = Format$(Now, "yyyy-mm-ddThh:nn:ss")
+
+    If Trim$(payloadJson) = "" Then payloadJson = "{}"
+
+    Dim line As String
+    line = "{""timestamp"":""" & ts & """,""event"":""" & EscapeJSONString(CStr(eventName)) & """,""payload"":" & payloadJson & "}"
+
+    Dim ff As Integer
+    ff = FreeFile
+    Open filePath For Append As #ff
+    Print #ff, line
+    Close #ff
+    Exit Sub
+
+Fail:
+    On Error Resume Next
+    If ff <> 0 Then Close #ff
+End Sub
+
+Public Sub AppendSolverNotesToRunLog(apiResult As Object)
+    ' Writes solver notes + scenario keys to the shared run log file.
+    ' This replaces dumping verbose "Solver Notes" onto client-facing sheets.
+    On Error GoTo Fail
+
+    If apiResult Is Nothing Then Exit Sub
+
+    Dim wbName As String
+    Dim wbPath As String
+    wbName = ""
+    wbPath = ""
+    On Error Resume Next
+    If Not ActiveWorkbook Is Nothing Then
+        wbName = ActiveWorkbook.Name
+        wbPath = ActiveWorkbook.FullName
+    End If
+    On Error GoTo 0
+
+    Dim programNorm As String
+    Dim mihOption As String
+    programNorm = ""
+    mihOption = ""
+    On Error Resume Next
+    If apiResult.Exists("project_summary") Then
+        Dim ps As Object
+        Set ps = apiResult("project_summary")
+        If Not ps Is Nothing Then
+            If ps.Exists("program") Then programNorm = CStr(ps("program"))
+            If ps.Exists("mih_option") Then mihOption = CStr(ps("mih_option"))
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim keysJson As String
+    keysJson = "[]"
+    On Error Resume Next
+    If apiResult.Exists("scenarios") Then
+        Dim scenarios As Object
+        Set scenarios = apiResult("scenarios")
+        If Not scenarios Is Nothing Then
+            Dim scenarioKey As Variant
+            Dim buf As String
+            buf = "["
+            Dim first As Boolean
+            first = True
+            For Each scenarioKey In scenarios.Keys
+                If Not first Then buf = buf & ","
+                buf = buf & """" & EscapeJSONString(CStr(scenarioKey)) & """"
+                first = False
+            Next scenarioKey
+            buf = buf & "]"
+            keysJson = buf
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim notesJson As String
+    notesJson = "[]"
+    On Error Resume Next
+    If apiResult.Exists("notes") Then
+        Dim notes As Object
+        Set notes = apiResult("notes")
+        If Not notes Is Nothing Then
+            Dim n As Long
+            Dim nbuf As String
+            nbuf = "["
+            For n = 1 To notes.Count
+                If n > 1 Then nbuf = nbuf & ","
+                nbuf = nbuf & """" & EscapeJSONString(CStr(notes(n))) & """"
+            Next n
+            nbuf = nbuf & "]"
+            notesJson = nbuf
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim payload As String
+    payload = "{"
+    payload = payload & """workbook_name"":""" & EscapeJSONString(wbName) & ""","
+    payload = payload & """workbook_path"":""" & EscapeJSONString(wbPath) & ""","
+    payload = payload & """program"":""" & EscapeJSONString(programNorm) & ""","
+    payload = payload & """mih_option"":""" & EscapeJSONString(mihOption) & ""","
+    payload = payload & """scenario_keys"":" & keysJson & ","
+    payload = payload & """notes"":" & notesJson
+    payload = payload & "}"
+
+    Call AppendRunLog("solver_run", payload)
+    Exit Sub
+
+Fail:
+    ' Swallow logging errors (network drives can be flaky).
+End Sub
+
+Public Sub LogScenarioChoiceToRunLog(profileKey As String, programNorm As String, mihOption As String, _
+                                     scenarioNumber As Long, scenarioKey As String, scenario As Object)
+    ' Logs which scenario the user/client chose, without making any API calls.
+    ' Appends a single JSONL entry to the shared run log file.
+    On Error GoTo Fail
+
+    Dim wbName As String
+    Dim wbPath As String
+    wbName = ""
+    wbPath = ""
+    On Error Resume Next
+    If Not ActiveWorkbook Is Nothing Then
+        wbName = ActiveWorkbook.Name
+        wbPath = ActiveWorkbook.FullName
+    End If
+    On Error GoTo 0
+
+    Dim scenarioWaami As Double
+    scenarioWaami = 0#
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("waami") Then scenarioWaami = CDbl(scenario("waami"))
+    End If
+    On Error GoTo 0
+
+    Dim bandsJson As String
+    bandsJson = "[]"
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("bands") Then
+            Dim bandsObj As Object
+            Set bandsObj = scenario("bands")
+            If Not bandsObj Is Nothing And TypeName(bandsObj) = "Collection" Then
+                Dim b As Long
+                Dim buf As String
+                buf = "["
+                For b = 1 To bandsObj.Count
+                    If b > 1 Then buf = buf & ","
+                    buf = buf & CStr(bandsObj(b))
+                Next b
+                buf = buf & "]"
+                bandsJson = buf
+            End If
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim tradeoffsJson As String
+    tradeoffsJson = "[]"
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("tradeoffs") Then
+            Dim tObj As Object
+            Set tObj = scenario("tradeoffs")
+            If Not tObj Is Nothing And TypeName(tObj) = "Collection" Then
+                Dim t As Long
+                Dim tbuf As String
+                tbuf = "["
+                For t = 1 To tObj.Count
+                    If t > 1 Then tbuf = tbuf & ","
+                    tbuf = tbuf & """" & EscapeJSONString(CStr(tObj(t))) & """"
+                Next t
+                tbuf = tbuf & "]"
+                tradeoffsJson = tbuf
+            End If
+        End If
+    End If
+    On Error GoTo 0
+
+    Dim rentTotalsJson As String
+    rentTotalsJson = "null"
+    On Error Resume Next
+    If Not scenario Is Nothing Then
+        If scenario.Exists("rent_totals") Then
+            Dim rt As Object
+            Set rt = scenario("rent_totals")
+            If Not rt Is Nothing Then
+                Dim netMonthly As String
+                Dim netAnnual As String
+                netMonthly = "null"
+                netAnnual = "null"
+                If rt.Exists("net_monthly") Then netMonthly = InvariantNumber(CDbl(rt("net_monthly")))
+                If rt.Exists("net_annual") Then netAnnual = InvariantNumber(CDbl(rt("net_annual")))
+                rentTotalsJson = "{""net_monthly"":" & netMonthly & ",""net_annual"":" & netAnnual & "}"
+            End If
+        End If
+    End If
+    On Error GoTo 0
+
+    ' Capture the current workbook unit assignments from the sheet (client_ami values).
+    Dim unitsJson As String
+    unitsJson = "null"
+    On Error Resume Next
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    If UCase$(Trim$(programNorm)) = "MIH" Then
+        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    If Not dataWs Is Nothing Then dataWs.Activate
+    Dim units As Collection
+    Set units = ReadUnitData()
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+    If Not units Is Nothing Then
+        Dim i As Long
+        Dim ubuf As String
+        ubuf = "["
+        For i = 1 To units.Count
+            Dim u As Object
+            Set u = units(i)
+            If i > 1 Then ubuf = ubuf & ","
+            ubuf = ubuf & "{"
+            ubuf = ubuf & """" & "unit_id" & """:""" & EscapeJSONString(CStr(u("unit_id"))) & """"
+            If u.Exists("bedrooms") Then ubuf = ubuf & ",""bedrooms"":" & CLng(u("bedrooms"))
+            If u.Exists("net_sf") Then ubuf = ubuf & ",""net_sf"":" & InvariantNumber(CDbl(u("net_sf")))
+            If u.Exists("floor") Then ubuf = ubuf & ",""floor"":" & CLng(u("floor"))
+            If u.Exists("balcony") Then ubuf = ubuf & ",""balcony"":" & IIf(CBool(u("balcony")), "true", "false")
+            If u.Exists("client_ami") Then ubuf = ubuf & ",""client_ami"":" & InvariantNumber(CDbl(u("client_ami")))
+            ubuf = ubuf & "}"
+        Next i
+        ubuf = ubuf & "]"
+        unitsJson = ubuf
+    End If
+    On Error GoTo 0
+
+    Dim payload As String
+    payload = "{"
+    payload = payload & """profile_key"":""" & EscapeJSONString(profileKey) & ""","
+    payload = payload & """workbook_name"":""" & EscapeJSONString(wbName) & ""","
+    payload = payload & """workbook_path"":""" & EscapeJSONString(wbPath) & ""","
+    payload = payload & """program"":""" & EscapeJSONString(programNorm) & ""","
+    payload = payload & """mih_option"":""" & EscapeJSONString(mihOption) & ""","
+    payload = payload & """scenario_number"":" & CLng(scenarioNumber) & ","
+    payload = payload & """scenario_key"":""" & EscapeJSONString(CStr(scenarioKey)) & ""","
+    payload = payload & """scenario_waami"":" & InvariantNumber(scenarioWaami) & ","
+    payload = payload & """scenario_bands"":" & bandsJson & ","
+    payload = payload & """scenario_tradeoffs"":" & tradeoffsJson & ","
+    payload = payload & """scenario_rent_totals"":" & rentTotalsJson & ","
+    payload = payload & """workbook_units"":" & unitsJson
+    payload = payload & "}"
+
+    Call AppendRunLog("scenario_choice", payload)
+    Exit Sub
+
+Fail:
+    ' Swallow logging errors.
 End Sub
 
 Public Sub LogScenarioApplied(profileKey As String, programNorm As String, mihOption As String, scenarioKey As String, _
@@ -296,9 +624,12 @@ Public Sub LogScenarioApplied(profileKey As String, programNorm As String, mihOp
     On Error GoTo Fail
 
     Dim wbName As String
+    Dim wbPath As String
     wbName = ""
+    wbPath = ""
     If Not ActiveWorkbook Is Nothing Then
         wbName = ActiveWorkbook.Name
+        wbPath = ActiveWorkbook.FullName
     End If
 
     Dim unitsJson As String
@@ -335,21 +666,21 @@ Public Sub LogScenarioApplied(profileKey As String, programNorm As String, mihOp
         End If
     End If
 
-    Dim json As String
-    json = "{"
-    json = json & """schema_version"": 1,"
-    json = json & """event"": ""scenario_applied"","
-    json = json & """created_local"": """ & EscapeJSONString(Format$(Now, "yyyy-mm-dd hh:nn:ss")) & ""","
-    json = json & """profile"": """ & EscapeJSONString(profileKey) & ""","
-    json = json & """program"": """ & EscapeJSONString(programNorm) & ""","
-    json = json & """mih_option"": """ & EscapeJSONString(mihOption) & ""","
-    json = json & """workbook"": """ & EscapeJSONString(wbName) & ""","
-    json = json & """scenario_key"": """ & EscapeJSONString(scenarioKey) & ""","
-    json = json & """source"": """ & EscapeJSONString(source) & ""","
-    json = json & """units"": " & unitsJson
-    json = json & "}"
+    Dim payload As String
+    payload = "{"
+    payload = payload & """schema_version"":1,"
+    payload = payload & """created_local"":""" & EscapeJSONString(Format$(Now, "yyyy-mm-dd hh:nn:ss")) & ""","
+    payload = payload & """profile_key"":""" & EscapeJSONString(profileKey) & ""","
+    payload = payload & """program"":""" & EscapeJSONString(programNorm) & ""","
+    payload = payload & """mih_option"":""" & EscapeJSONString(mihOption) & ""","
+    payload = payload & """workbook_name"":""" & EscapeJSONString(wbName) & ""","
+    payload = payload & """workbook_path"":""" & EscapeJSONString(wbPath) & ""","
+    payload = payload & """scenario_key"":""" & EscapeJSONString(scenarioKey) & ""","
+    payload = payload & """source"":""" & EscapeJSONString(source) & ""","
+    payload = payload & """units"":" & unitsJson
+    payload = payload & "}"
 
-    LogLearningEvent profileKey, "scenario_applied", json
+    Call AppendRunLog("scenario_applied", payload)
     Exit Sub
 
 Fail:

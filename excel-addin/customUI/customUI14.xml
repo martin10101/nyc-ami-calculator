@@ -55,17 +55,23 @@
         </group>
         <group id="grpLearning" label="Learning">
           <button id="btnLearningSettings"
-                  label="Learning"
+                  label="Record Choice"
+                  size="large"
+                  imageMso="AcceptInvitation"
+                  onAction="Ribbon_RecordScenarioChoice"
+                  supertip="Record which scenario the client chose (no API call). Appends to the shared run log file in the log folder."/>
+          <button id="btnLogSettings"
+                  label="Log Settings"
                   size="normal"
                   imageMso="DataValidation"
                   onAction="Ribbon_OpenLearningSettings"
-                  supertip="Configure AI learning (soft preferences only): OFF / SHADOW / ON, compare-baseline, and log folder."/>
+                  supertip="Configure the log folder location (e.g. Z:\\AMI_Optix_Learning)."/>
           <button id="btnLearningLogs"
                   label="Open Logs"
                   size="normal"
                   imageMso="Folder"
                   onAction="Ribbon_OpenLearningLogs"
-                  supertip="Open the learning log folder for this program profile (UAP / MIH Option 1 / MIH Option 4)."/>
+                  supertip="Open the log folder."/>
         </group>
         <group id="grpHelp" label="Help">
           <button id="btnAbout"

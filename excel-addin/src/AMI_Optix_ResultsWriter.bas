@@ -5,9 +5,8 @@ Attribute VB_Name = "AMI_Optix_ResultsWriter"
 '===============================================================================
 Option Explicit
 
-Private Const MANUAL_BLOCK_HEIGHT As Long = 120
 Private Const MANUAL_BLOCK_START_ROW As Long = 1
-Private Const SCENARIOS_START_ROW As Long = 125
+Private Const MANUAL_CLEAR_FALLBACK_HEIGHT As Long = 250
 
 ' True only when the most recent /api/evaluate call returned success=false.
 Public g_AMIOptixLastManualScenarioInvalid As Boolean
@@ -140,6 +139,11 @@ Public Sub ApplyBestScenario(result As Object)
     profileKey = GetLearningProfileKey(programNorm, mihOption)
     Call LogScenarioApplied(profileKey, programNorm, mihOption, bestKey, "AUTO", bestScenario)
     On Error GoTo 0
+
+    ' Ensure WAAMI/Avg AMI display shows sufficient precision (e.g., 59.96% vs 60.0%).
+    On Error Resume Next
+    EnsureProvidedAvgAmiPrecision
+    On Error GoTo 0
     GoTo Cleanup
 
 ErrorHandler:
@@ -232,42 +236,30 @@ Public Sub CreateScenariosSheet(result As Object)
     If Not result.Exists("scenarios") Then GoTo ErrorHandler
     Set scenarios = result("scenarios")
 
-    ' Start solver output below the manual block
-    row = 1
+    ' Manual block at top (live sync area)
+    Dim manualEndRow As Long
+    manualEndRow = WriteManualScenarioBlockFromResult(ws, result)
 
-    ' Manual block (reserved region at top)
-    WriteManualScenarioBlockFromResult ws, result
+    ' Start scenarios immediately after the manual block (no hard jump to row 125)
+    row = manualEndRow + 2
 
-    row = SCENARIOS_START_ROW
-
-    ' Notes from solver
-    If result.Exists("notes") Then
-        ws.Cells(row, 1).Value = "Solver Notes:"
-        ws.Cells(row, 1).Font.Bold = True
-        row = row + 1
-
-        Dim notes As Object
-        Set notes = result("notes")
-        Dim n As Long
-        For n = 1 To notes.Count
-            ws.Cells(row, 1).Value = "- " & notes(n)
-            row = row + 1
-        Next n
-        row = row + 1
-    End If
-
-    ' Process each scenario
+    ' Process each scenario (skip the best scenario since it's already shown in the manual block)
     Dim scenarioNum As Long
     scenarioNum = 1
+    Dim bestKey As String
+    bestKey = GetBestScenarioKey(result)
 
     For Each scenarioKey In scenarios.Keys
+        If bestKey <> "" Then
+            If UCase$(CStr(scenarioKey)) = UCase$(bestKey) Then GoTo NextScenario
+        End If
         Set scenario = scenarios(scenarioKey)
 
         ' Scenario header
         ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
         ws.Cells(row, 1).Font.Bold = True
         ws.Cells(row, 1).Font.Size = 14
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(200, 220, 255)
+        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = ScenarioHeaderColor(CStr(scenarioKey))
         row = row + 1
 
         row = WriteScenarioSummaryAndTable(ws, row, scenario)
@@ -276,18 +268,20 @@ Public Sub CreateScenariosSheet(result As Object)
         ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(240, 240, 240)
         row = row + 1
         scenarioNum = scenarioNum + 1
+
+NextScenario:
     Next scenarioKey
 
     ' Auto-fit columns
     ws.Columns("A:K").AutoFit
 
-    ' Freeze the top row and jump to the solver output so users immediately see scenarios.
+    ' Freeze the top row and jump to the scenarios so users immediately see the scenario list.
     On Error Resume Next
     ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
-    ws.Cells(SCENARIOS_START_ROW, 1).Select
-    ActiveWindow.ScrollRow = SCENARIOS_START_ROW
+    ws.Cells(manualEndRow + 2, 1).Select
+    ActiveWindow.ScrollRow = manualEndRow + 2
     On Error GoTo ErrorHandler
 
     Debug.Print "Created scenarios sheet with " & (scenarioNum - 1) & " scenarios"
@@ -305,6 +299,27 @@ Cleanup:
         MsgBox "Failed to build 'AMI Scenarios' sheet: " & errMsg, vbExclamation, "AMI Optix"
     End If
 End Sub
+
+Private Function ScenarioHeaderColor(scenarioKey As String) As Long
+    Dim key As String
+    key = LCase$(Trim$(scenarioKey))
+
+    ' Strict scenarios: blue
+    Select Case key
+        Case "absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented"
+            ScenarioHeaderColor = RGB(200, 220, 255)
+            Exit Function
+    End Select
+
+    ' Edge / relaxed scenarios: orange
+    If InStr(1, key, "edge", vbTextCompare) > 0 Or InStr(1, key, "relaxed", vbTextCompare) > 0 Or InStr(1, key, "max_revenue", vbTextCompare) > 0 Then
+        ScenarioHeaderColor = RGB(255, 225, 180)
+        Exit Function
+    End If
+
+    ' Default: neutral blue
+    ScenarioHeaderColor = RGB(200, 220, 255)
+End Function
 
 Public Sub ApplyCanonicalAssignmentsToDataSheet(canonicalAssignments As Object, Optional highlightColor As Long = -1)
     ' Applies canonical assignments (array of [unit_id, band_percent]) to the source data sheet.
@@ -550,10 +565,42 @@ Private Function GetOrCreateScenariosSheet() As Worksheet
 End Function
 
 Private Sub ClearManualBlock(ws As Worksheet)
-    ws.Range("A1:M" & MANUAL_BLOCK_HEIGHT).Clear
+    ' Clears only the top "Scenario Manual" region without wiping the scenarios below.
+    Dim firstScenarioRow As Long
+    firstScenarioRow = FindFirstScenarioHeaderRow(ws)
+
+    Dim clearToRow As Long
+    If firstScenarioRow > 0 Then
+        clearToRow = Application.Max(1, firstScenarioRow - 1)
+    Else
+        clearToRow = MANUAL_CLEAR_FALLBACK_HEIGHT
+    End If
+
+    ws.Range("A1:M" & clearToRow).Clear
 End Sub
 
-Private Sub WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object)
+Private Function FindFirstScenarioHeaderRow(ws As Worksheet) As Long
+    On Error GoTo Fail
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    If lastRow < 1 Then lastRow = 1
+
+    Dim r As Long
+    For r = 1 To Application.Min(lastRow, 5000)
+        Dim v As String
+        v = UCase$(Trim$(CStr(ws.Cells(r, 1).Value)))
+        If v Like "SCENARIO #*" Then
+            FindFirstScenarioHeaderRow = r
+            Exit Function
+        End If
+    Next r
+
+Fail:
+    FindFirstScenarioHeaderRow = 0
+End Function
+
+Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object) As Long
     ClearManualBlock ws
 
     Dim row As Long
@@ -585,9 +632,10 @@ Private Sub WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object
     Set scenario = scenarios(scenarioKey)
 
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
-End Sub
+    WriteManualScenarioBlockFromResult = row
+End Function
 
-Private Sub WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object)
+Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object) As Long
     ClearManualBlock ws
 
     Dim row As Long
@@ -639,7 +687,8 @@ Private Sub WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As 
     End If
 
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
-End Sub
+    WriteManualScenarioBlockFromEvaluate = row
+End Function
 
 Private Function GetBestScenarioKey(result As Object) As String
     Dim scenarios As Object
@@ -719,6 +768,46 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
 
         ws.Cells(row, 2).Value = bandStr
         row = row + 1
+    End If
+
+    ' Tradeoffs (edge scenarios): short, client-readable list of what was relaxed/violated.
+    If scenario.Exists("tradeoffs") Then
+        Dim tradeoffsObj As Object
+        Set tradeoffsObj = Nothing
+        On Error Resume Next
+        Set tradeoffsObj = scenario("tradeoffs")
+        On Error GoTo 0
+
+        If Not tradeoffsObj Is Nothing Then
+            If TypeName(tradeoffsObj) = "Collection" Then
+                If tradeoffsObj.Count > 0 Then
+                    ws.Cells(row, 1).Value = "Tradeoffs:"
+                    ws.Cells(row, 1).Font.Bold = True
+                    row = row + 1
+
+                    Dim t As Long
+                    For t = 1 To Application.Min(4, tradeoffsObj.Count)
+                        ws.Cells(row, 1).Value = "- " & CStr(tradeoffsObj(t))
+                        row = row + 1
+                    Next t
+                End If
+            ElseIf TypeName(tradeoffsObj) = "Dictionary" Then
+                Dim tradeKey As Variant
+                Dim wrote As Long
+                wrote = 0
+                For Each tradeKey In tradeoffsObj.Keys
+                    If wrote = 0 Then
+                        ws.Cells(row, 1).Value = "Tradeoffs:"
+                        ws.Cells(row, 1).Font.Bold = True
+                        row = row + 1
+                    End If
+                    ws.Cells(row, 1).Value = "- " & CStr(tradeoffsObj(tradeKey))
+                    row = row + 1
+                    wrote = wrote + 1
+                    If wrote >= 4 Then Exit For
+                Next tradeKey
+            End If
+        End If
     End If
 
     ' Band mix breakdown (per client request)
@@ -1203,6 +1292,11 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
     Call LogScenarioApplied(profileKey, programNorm, mihOption, scenarioKey, "USER", scenario)
     On Error GoTo 0
 
+    ' Ensure WAAMI/Avg AMI display shows sufficient precision (e.g., 59.96% vs 60.0%).
+    On Error Resume Next
+    EnsureProvidedAvgAmiPrecision
+    On Error GoTo 0
+
     GoTo ApplyCleanup
 
 ApplyFail:
@@ -1216,4 +1310,73 @@ ApplyCleanup:
 
     ' Switch to data sheet
     ws.Activate
+End Sub
+
+Private Sub EnsureProvidedAvgAmiPrecision()
+    ' Fixes the common workbook display issue where the provided Avg AMI shows as 60.0%
+    ' even when the computed value is e.g. 59.96% (formatting/rounding only).
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Sub
+
+    Dim wsCalc As Worksheet
+    On Error Resume Next
+    Set wsCalc = ActiveWorkbook.Worksheets("Calculations")
+    On Error GoTo Fail
+    If wsCalc Is Nothing Then Exit Sub
+
+    Dim c As Range
+    Set c = wsCalc.Range("C20")
+
+    Dim fmt As String
+    fmt = Replace(CStr(c.NumberFormat), " ", "")
+
+    ' Only adjust if the workbook is using coarse percent rounding.
+    If fmt = "0%" Or fmt = "0.0%" Then
+        c.NumberFormat = "0.00%"
+    End If
+
+    wsCalc.Calculate
+
+    ' Also adjust the displayed "Avg AMI" cells on the main sheet (e.g., AHFA chart).
+    Dim wsData As Worksheet
+    Set wsData = GetDataSheet()
+    If Not wsData Is Nothing Then
+        EnsureAvgAmiRowPrecision wsData
+        wsData.Calculate
+    End If
+    Exit Sub
+
+Fail:
+End Sub
+
+Private Sub EnsureAvgAmiRowPrecision(ws As Worksheet)
+    On Error GoTo Fail
+
+    If ws Is Nothing Then Exit Sub
+
+    Dim found As Range
+    Set found = ws.Cells.Find(What:="Avg AMI", After:=ws.Cells(1, 1), LookIn:=xlValues, LookAt:=xlPart, _
+                              SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    If found Is Nothing Then Exit Sub
+
+    Dim col As Long
+    For col = found.Column + 1 To Application.Min(found.Column + 10, ws.Columns.Count)
+        Dim c As Range
+        Set c = ws.Cells(found.Row, col)
+
+        If IsNumeric(c.Value) Then
+            Dim v As Double
+            v = CDbl(c.Value)
+            If v > 0# And v < 1# Then
+                Dim fmt As String
+                fmt = Replace(CStr(c.NumberFormat), " ", "")
+                If InStr(1, fmt, "%", vbTextCompare) > 0 Then
+                    c.NumberFormat = "0.00%"
+                End If
+            End If
+        End If
+    Next col
+
+Fail:
 End Sub
