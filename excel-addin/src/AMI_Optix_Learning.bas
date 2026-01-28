@@ -468,7 +468,8 @@ Fail:
 End Sub
 
 Public Sub LogScenarioChoiceToRunLog(profileKey As String, programNorm As String, mihOption As String, _
-                                     scenarioNumber As Long, scenarioKey As String, scenario As Object)
+                                     scenarioNumber As Long, scenarioKey As String, scenario As Object, _
+                                     Optional choiceReason As String = "")
     ' Logs which scenario the user/client chose, without making any API calls.
     ' Appends a single JSONL entry to the shared run log file.
     On Error GoTo Fail
@@ -609,6 +610,7 @@ Public Sub LogScenarioChoiceToRunLog(profileKey As String, programNorm As String
     payload = payload & """scenario_bands"":" & bandsJson & ","
     payload = payload & """scenario_tradeoffs"":" & tradeoffsJson & ","
     payload = payload & """scenario_rent_totals"":" & rentTotalsJson & ","
+    payload = payload & """choice_reason"":""" & EscapeJSONString(CStr(choiceReason)) & ""","
     payload = payload & """workbook_units"":" & unitsJson
     payload = payload & "}"
 

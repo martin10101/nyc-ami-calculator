@@ -158,7 +158,38 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
     Dim chosenScenario As Object
     Set chosenScenario = scenarios(chosenKey)
 
-    Call LogScenarioChoiceToRunLog(profileKey, programNorm, mihOption, choiceNum, chosenKey, chosenScenario)
+    ' Ask for a short explanation of why this scenario was chosen.
+    Dim wsScenarios As Worksheet
+    Set wsScenarios = Nothing
+    On Error Resume Next
+    Set wsScenarios = ActiveWorkbook.Worksheets("AMI Scenarios")
+    On Error GoTo Fail
+
+    Dim existingReason As String
+    existingReason = ""
+    If Not wsScenarios Is Nothing Then
+        existingReason = ReadFinalChoiceReason(wsScenarios)
+    End If
+
+    Dim reasonVar As Variant
+    reasonVar = Application.InputBox( _
+        "Why did you choose this scenario? (optional)" & vbCrLf & vbCrLf & _
+        "Example: best rent roll / closest to 60% / client preference / unit mix / compliance tradeoff.", _
+        "AMI Optix - Choice Reason", _
+        existingReason, _
+        Type:=2 _
+    )
+    If reasonVar = False Then Exit Sub ' Cancel
+
+    Dim choiceReason As String
+    choiceReason = CStr(reasonVar)
+
+    ' Write a visible "Final Selection" box to the scenarios sheet (so it can be shared with the client).
+    If Not wsScenarios Is Nothing Then
+        WriteFinalChoiceBox wsScenarios, chosenKey, FormatScenarioNameForPicker(chosenKey), choiceReason
+    End If
+
+    Call LogScenarioChoiceToRunLog(profileKey, programNorm, mihOption, choiceNum, chosenKey, chosenScenario, choiceReason)
 
     MsgBox "Recorded choice:" & vbCrLf & _
            "Scenario: " & FormatScenarioNameForPicker(chosenKey) & vbCrLf & _
@@ -168,6 +199,95 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
 
 Fail:
     MsgBox "Could not record choice: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
+Private Function ReadFinalChoiceReason(ws As Worksheet) As String
+    On Error GoTo Fail
+    If ws Is Nothing Then Exit Function
+
+    Dim c As Range
+    Set c = ws.Range("P5")
+    ReadFinalChoiceReason = CStr(c.Value)
+    Exit Function
+Fail:
+    ReadFinalChoiceReason = ""
+End Function
+
+Private Sub WriteFinalChoiceBox(ws As Worksheet, scenarioKey As String, scenarioLabel As String, choiceReason As String)
+    On Error GoTo Fail
+    If ws Is Nothing Then Exit Sub
+
+    ' Place the final choice box to the right of the main scenario tables so it doesn't get cleared.
+    ' (Manual/scenarios use columns A-M; this uses O-U.)
+    Dim header As Range
+    Set header = ws.Range("O1:U1")
+    On Error Resume Next
+    header.UnMerge
+    On Error GoTo Fail
+    header.Merge
+    header.Value = "FINAL SELECTION (CLIENT)"
+    header.Font.Bold = True
+    header.Font.Size = 12
+    header.Interior.Color = RGB(255, 242, 204) ' light yellow
+    header.HorizontalAlignment = xlCenter
+
+    ws.Range("O2").Value = "Selected Scenario:"
+    ws.Range("O3").Value = "Scenario Key:"
+    ws.Range("O4").Value = "Selected On:"
+    ws.Range("O5").Value = "Why Chosen (Notes):"
+    ws.Range("O10").Value = "Run Log File:"
+
+    ws.Range("O2:O10").Font.Bold = True
+
+    Dim v1 As Range
+    Set v1 = ws.Range("P2:U2")
+    On Error Resume Next
+    v1.UnMerge
+    On Error GoTo Fail
+    v1.Merge
+    v1.Value = scenarioLabel
+
+    Dim v2 As Range
+    Set v2 = ws.Range("P3:U3")
+    On Error Resume Next
+    v2.UnMerge
+    On Error GoTo Fail
+    v2.Merge
+    v2.Value = scenarioKey
+
+    Dim v3 As Range
+    Set v3 = ws.Range("P4:U4")
+    On Error Resume Next
+    v3.UnMerge
+    On Error GoTo Fail
+    v3.Merge
+    v3.Value = Format$(Now, "yyyy-mm-dd hh:nn:ss")
+
+    Dim notes As Range
+    Set notes = ws.Range("P5:U9")
+    On Error Resume Next
+    notes.UnMerge
+    On Error GoTo Fail
+    notes.Merge
+    notes.Value = choiceReason
+    notes.WrapText = True
+    notes.VerticalAlignment = xlTop
+    notes.RowHeight = 70
+
+    Dim logCell As Range
+    Set logCell = ws.Range("P10:U10")
+    On Error Resume Next
+    logCell.UnMerge
+    On Error GoTo Fail
+    logCell.Merge
+    logCell.Value = GetRunLogFilePath()
+    logCell.WrapText = True
+
+    ws.Range("O1:U10").Borders.LineStyle = xlContinuous
+    ws.Columns("O:U").ColumnWidth = 16
+    Exit Sub
+
+Fail:
 End Sub
 
 '-------------------------------------------------------------------------------
