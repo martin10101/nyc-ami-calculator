@@ -317,7 +317,19 @@ def _solve_single_scenario(
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
         return {"status": "NO_SOLUTION"}
 
+    def _extract_assignments_from_solver(solver_obj: cp_model.CpSolver):
+        extracted = []
+        for i in range(num_units):
+            for j in range(num_bands):
+                if solver_obj.Value(x[i][j]):
+                    unit_data = df_affordable.iloc[i].to_dict()
+                    unit_data['assigned_ami'] = bands_to_test[j] / 100.0
+                    extracted.append(unit_data)
+                    break
+        return extracted
+
     optimal_primary = solver.Value(primary_var)
+    pass1_assignments = _extract_assignments_from_solver(solver)
     model.Add(primary_var == optimal_primary)
     premium_scores_int = (df_affordable['premium_score'] * 1000).astype(int)
     premium_alignment_expr = sum(
@@ -330,20 +342,31 @@ def _solve_single_scenario(
     except (SystemExit, KeyboardInterrupt):
         return {"status": "INTERRUPTED"}
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
-        return {"status": "NO_SOLUTION_IN_PASS_2"}
+        # IMPORTANT: pass 1 already found a feasible (often optimal) solution. If the
+        # premium-alignment tie-breaker times out or returns UNKNOWN, fall back to
+        # the best pass-1 solution instead of discarding it entirely.
+        assignments = pass1_assignments
+        final_waami = _calculate_waami_from_assignments(assignments)
+        metrics = _build_metrics(assignments)
+        rent_score = None
+        if objective_mode_norm == "rent":
+            try:
+                rent_score = int(optimal_primary)
+            except Exception:
+                rent_score = None
+        return {
+            "status": "OPTIMAL",
+            "waami": final_waami,
+            "assignments": assignments,
+            "bands": _get_bands_from_assignments(assignments),
+            "metrics": metrics,
+            "revenue_score": metrics['revenue_score'],
+            "rent_score": rent_score,
+            "canonical_assignments": _assignments_to_canonical(assignments),
+            "pass_2_status": "FAILED",
+        }
 
-    def _extract_assignments():
-        extracted = []
-        for i in range(num_units):
-            for j in range(num_bands):
-                if solver.Value(x[i][j]):
-                    unit_data = df_affordable.iloc[i].to_dict()
-                    unit_data['assigned_ami'] = bands_to_test[j] / 100.0
-                    extracted.append(unit_data)
-                    break
-        return extracted
-
-    best_assignments = _extract_assignments()
+    best_assignments = _extract_assignments_from_solver(solver)
     premium_optimal = solver.Value(premium_alignment_expr)
     model.Add(premium_alignment_expr == premium_optimal)
 
@@ -356,7 +379,7 @@ def _solve_single_scenario(
             lex_failed = True
             break
         model.Add(assignment_index_expr == solver.Value(assignment_index_expr))
-    assignments = best_assignments if lex_failed else _extract_assignments()
+    assignments = best_assignments if lex_failed else _extract_assignments_from_solver(solver)
     final_waami = _calculate_waami_from_assignments(assignments)
     metrics = _build_metrics(assignments)
     rent_score = None
