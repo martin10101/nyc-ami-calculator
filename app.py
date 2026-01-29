@@ -528,6 +528,41 @@ def optimize_units():
             baseline_scenarios = baseline_results.get('scenarios', {}) or {}
             baseline_notes = baseline_results.get('notes', []) or []
 
+        # If strict UAP constraints yield no feasible solution, widen the deep affordability max-share
+        # in small increments until a solution exists. This prevents "no results" on workbooks where the
+        # 40%-band SF share cannot hit an extremely narrow target due to unit SF granularity.
+        if (not scenarios or not scenarios.get('absolute_best')) and program_norm == 'UAP':
+            try:
+                rules = config.get('optimization_rules', {}) or {}
+                min_share = rules.get('deep_affordability_min_share')
+                max_share = rules.get('deep_affordability_max_share')
+                widen_step = float(rules.get('deep_affordability_widen_step', 0.005) or 0.0)
+                widen_cap = float(rules.get('deep_affordability_widen_cap', 0.4) or 0.0)
+
+                if (min_share is not None) and (max_share is not None) and widen_step > 0 and widen_cap > 0:
+                    start = float(max_share)
+                    candidate = start + widen_step
+                    while candidate <= widen_cap + 1e-12:
+                        relaxed_config = copy.deepcopy(config)
+                        relaxed_rules = relaxed_config.get('optimization_rules', {}) or {}
+                        relaxed_rules['deep_affordability_max_share'] = float(candidate)
+                        relaxed_config['optimization_rules'] = relaxed_rules
+
+                        relaxed_results = find_optimal_scenarios(df_units, relaxed_config, project_overrides=project_overrides)
+                        relaxed_scenarios = relaxed_results.get('scenarios', {}) or {}
+                        if relaxed_scenarios.get('absolute_best'):
+                            notes.append(
+                                f"Strict deep affordability max share {start*100:.1f}% was infeasible; widened to {candidate*100:.1f}% to find a feasible solution."
+                            )
+                            notes.extend(relaxed_results.get('notes', []) or [])
+                            scenarios = relaxed_scenarios
+                            config = relaxed_config  # carry forward so edge validation uses the same strict baseline
+                            break
+
+                        candidate = candidate + widen_step
+            except Exception:
+                pass
+
         if not scenarios or not scenarios.get('absolute_best'):
             return jsonify({
                 "success": False,
@@ -759,19 +794,6 @@ def optimize_units():
                             edge_cfg,
                             waami_floor=strict_floor,
                             edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_share": None},
-                        )
-
-                    # Edge 5: allow up to 4 bands (can unlock distinct mixes on some projects).
-                    if len(edge_keys_added) < target_edge_count:
-                        edge_cfg = copy.deepcopy(config)
-                        edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
-                        edge_cfg_rules['max_bands_per_scenario'] = max(int(edge_cfg_rules.get('max_bands_per_scenario') or 3), 4)
-                        edge_cfg['optimization_rules'] = edge_cfg_rules
-                        _maybe_add_edge(
-                            "edge_allow_4_bands",
-                            edge_cfg,
-                            waami_floor=strict_floor,
-                            edge_settings={"mode": "rent_max", "relaxed": True, "max_bands_per_scenario": 4},
                         )
 
                     if target_edge_count > 0 and len(edge_keys_added) < target_edge_count:
