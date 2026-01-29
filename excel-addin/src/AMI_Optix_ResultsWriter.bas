@@ -622,11 +622,21 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
 
     Dim scenarioKey As String
     scenarioKey = GetBestScenarioKey(result)
-    If scenarioKey = "" Then Exit Sub
+    If scenarioKey = "" Then
+        WriteManualScenarioBlockFromResult = row
+        Exit Function
+    End If
 
     Dim scenarios As Object
     Set scenarios = result("scenarios")
-    If Not scenarios.Exists(scenarioKey) Then Exit Sub
+    If scenarios Is Nothing Then
+        WriteManualScenarioBlockFromResult = row
+        Exit Function
+    End If
+    If Not scenarios.Exists(scenarioKey) Then
+        WriteManualScenarioBlockFromResult = row
+        Exit Function
+    End If
 
     Dim scenario As Object
     Set scenario = scenarios(scenarioKey)
