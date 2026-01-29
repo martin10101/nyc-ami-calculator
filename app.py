@@ -599,7 +599,7 @@ def optimize_units():
                 _apply_rents_to_scenarios(baseline_scenarios)
 
             # --- Edge scenarios (UAP only) ---
-            # Generate up to 3 "edge" scenarios by relaxing ONE constraint at a time to improve rent,
+            # Generate up to N "edge" scenarios by relaxing ONE constraint at a time to improve rent,
             # while never exceeding the WAAMI cap (60%) and never using the 50% AMI band.
             if program_norm == 'UAP':
                 try:
@@ -631,7 +631,10 @@ def optimize_units():
                             rents.append(int(round(float(components['gross']) * 100)))
                         rent_by_band_cents[int(band)] = rents
 
-                    target_edge_count = 3
+                    # Target total scenarios (strict + edge) returned to Excel.
+                    # Excel can handle ~6 without becoming sluggish, and this matches the UI expectation.
+                    target_total_count = 6
+                    target_edge_count = max(0, min(5, int(target_total_count - len(scenarios or {}))))
                     edge_keys_added: list[str] = []
 
                     def _maybe_add_edge(key: str, edge_config: dict, waami_floor: float, edge_settings: dict) -> bool:
@@ -744,7 +747,34 @@ def optimize_units():
                             ):
                                 break
 
+                    # Edge 4: disable deep affordability share constraints entirely.
                     if len(edge_keys_added) < target_edge_count:
+                        edge_cfg = copy.deepcopy(config)
+                        edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
+                        edge_cfg_rules['deep_affordability_min_share'] = None
+                        edge_cfg_rules['deep_affordability_max_share'] = None
+                        edge_cfg['optimization_rules'] = edge_cfg_rules
+                        _maybe_add_edge(
+                            "edge_no_deep_aff_share",
+                            edge_cfg,
+                            waami_floor=strict_floor,
+                            edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_share": None},
+                        )
+
+                    # Edge 5: allow up to 4 bands (can unlock distinct mixes on some projects).
+                    if len(edge_keys_added) < target_edge_count:
+                        edge_cfg = copy.deepcopy(config)
+                        edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
+                        edge_cfg_rules['max_bands_per_scenario'] = max(int(edge_cfg_rules.get('max_bands_per_scenario') or 3), 4)
+                        edge_cfg['optimization_rules'] = edge_cfg_rules
+                        _maybe_add_edge(
+                            "edge_allow_4_bands",
+                            edge_cfg,
+                            waami_floor=strict_floor,
+                            edge_settings={"mode": "rent_max", "relaxed": True, "max_bands_per_scenario": 4},
+                        )
+
+                    if target_edge_count > 0 and len(edge_keys_added) < target_edge_count:
                         notes.append(
                             f"Edge scenarios: generated {len(edge_keys_added)} of {target_edge_count}; remaining relaxations were infeasible or produced no distinct unit mix."
                         )

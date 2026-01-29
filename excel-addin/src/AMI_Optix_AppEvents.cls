@@ -692,7 +692,10 @@ Private Function FindManualTableHeaderRow(ws As Worksheet) As Long
     labelRow = 0
 
     For r = 1 To 300
-        If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "SCENARIO MANUAL (LIVE SYNC)" Then
+        ' Allow suffixes like "- CURRENT: ABSOLUTE BEST".
+        Dim label As String
+        label = UCase$(Trim$(CStr(ws.Cells(r, 1).Value)))
+        If Left$(label, Len("SCENARIO MANUAL (LIVE SYNC)")) = "SCENARIO MANUAL (LIVE SYNC)" Then
             labelRow = r
             Exit For
         End If
@@ -733,7 +736,8 @@ Private Function FindManualTableLastRow(ws As Worksheet, headerRow As Long) As L
 
         Dim v As String
         v = UCase$(unitId)
-        If v Like "SCENARIO #*" Then
+        ' Stop when the scenario list begins below the manual block.
+        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Then
             FindManualTableLastRow = r - 1
             Exit Function
         End If
