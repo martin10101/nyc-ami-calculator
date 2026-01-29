@@ -1,0 +1,230 @@
+Attribute VB_Name = "AMI_Optix_Diagnostics"
+'===============================================================================
+' AMI OPTIX - Diagnostics
+' Produces copy/paste friendly troubleshooting info without requiring the VBE.
+'===============================================================================
+Option Explicit
+
+Private Const DIAG_SHEET_NAME As String = "AMI Optix Diagnostics"
+
+Public Sub ShowAMIOptixDiagnostics()
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then
+        MsgBox "No workbook is open.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim wb As Workbook
+    Set wb = ActiveWorkbook
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateDiagnosticsSheet(wb)
+
+    ws.Cells.Clear
+    ws.Range("A:A").ColumnWidth = 34
+    ws.Range("B:B").ColumnWidth = 110
+
+    Dim r As Long
+    r = 1
+
+    ws.Cells(r, 1).Value = "AMI Optix Diagnostics"
+    ws.Cells(r, 1).Font.Bold = True
+    ws.Cells(r, 1).Font.Size = 14
+    r = r + 2
+
+    WriteKV ws, r, "Generated", Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    WriteKV ws, r, "User", Environ$("USERNAME")
+    WriteKV ws, r, "Computer", Environ$("COMPUTERNAME")
+    WriteKV ws, r, "Excel", Application.Version & " (" & Application.OperatingSystem & ")"
+    WriteKV ws, r, "Workbook", wb.Name
+    WriteKV ws, r, "Workbook Path", wb.FullName
+    WriteKV ws, r, "API Base URL", API_BASE_URL
+    r = r + 1
+
+    ws.Cells(r, 1).Value = "Run Log"
+    ws.Cells(r, 1).Font.Bold = True
+    r = r + 1
+
+    Dim rootPath As String
+    rootPath = GetLearningLogRootPath()
+    WriteKV ws, r, "Log Root", rootPath
+
+    Dim runLogPath As String
+    runLogPath = GetRunLogFilePath()
+    WriteKV ws, r, "Run Log File", runLogPath
+
+    Dim runLogFileName As String
+    runLogFileName = Dir$(runLogPath)
+    WriteKV ws, r, "Dir(Run Log File)", runLogFileName
+
+    Dim lastErr As String
+    lastErr = GetLastRunLogError()
+    If Trim$(lastErr) <> "" Then
+        WriteKV ws, r, "Last Log Error", lastErr
+    Else
+        WriteKV ws, r, "Last Log Error", "(none)"
+    End If
+    r = r + 1
+
+    ws.Cells(r, 1).Value = "Last API Scenarios"
+    ws.Cells(r, 1).Font.Bold = True
+    r = r + 1
+
+    If g_LastScenarios Is Nothing Then
+        WriteKV ws, r, "g_LastScenarios", "(Nothing) - run the solver first"
+    Else
+        WriteKV ws, r, "g_LastScenarios", TypeName(g_LastScenarios)
+
+        Dim scenarios As Object
+        Set scenarios = Nothing
+        On Error Resume Next
+        If HasKey(g_LastScenarios, "scenarios") Then Set scenarios = g_LastScenarios("scenarios")
+        On Error GoTo 0
+
+        If scenarios Is Nothing Then
+            WriteKV ws, r, "scenarios", "(missing)"
+        Else
+            WriteKV ws, r, "scenarios.Count", CStr(GetObjectCountSafe(scenarios))
+            r = r + 1
+            ws.Cells(r, 1).Value = "Scenario Keys"
+            ws.Cells(r, 1).Font.Bold = True
+            r = r + 1
+            r = WriteKeysList(ws, r, scenarios)
+            r = r + 1
+        End If
+
+        Dim notes As Object
+        Set notes = Nothing
+        On Error Resume Next
+        If HasKey(g_LastScenarios, "notes") Then Set notes = g_LastScenarios("notes")
+        On Error GoTo 0
+
+        ws.Cells(r, 1).Value = "Solver Notes"
+        ws.Cells(r, 1).Font.Bold = True
+        r = r + 1
+        If notes Is Nothing Then
+            ws.Cells(r, 1).Value = "(none)"
+            r = r + 1
+        Else
+            r = WriteNotesList(ws, r, notes)
+        End If
+    End If
+
+    ws.Activate
+    ws.Range("A1").Select
+    Exit Sub
+
+Fail:
+    MsgBox "Diagnostics failed: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
+Private Sub WriteKV(ws As Worksheet, ByRef r As Long, label As String, value As String)
+    ws.Cells(r, 1).Value = label
+    ws.Cells(r, 2).Value = value
+    ws.Cells(r, 1).Font.Bold = True
+    r = r + 1
+End Sub
+
+Private Function GetOrCreateDiagnosticsSheet(wb As Workbook) As Worksheet
+    On Error GoTo CreateNew
+
+    Dim ws As Worksheet
+    Set ws = wb.Worksheets(DIAG_SHEET_NAME)
+    Set GetOrCreateDiagnosticsSheet = ws
+    Exit Function
+
+CreateNew:
+    On Error GoTo 0
+    Dim newWs As Worksheet
+    Set newWs = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    newWs.Name = DIAG_SHEET_NAME
+    Set GetOrCreateDiagnosticsSheet = newWs
+End Function
+
+Private Function HasKey(d As Object, key As String) As Boolean
+    On Error GoTo Fail
+    If d Is Nothing Then Exit Function
+    HasKey = CBool(d.Exists(key))
+    Exit Function
+Fail:
+    HasKey = False
+End Function
+
+Private Function GetObjectCountSafe(obj As Object) As Long
+    On Error GoTo Fail
+    If obj Is Nothing Then Exit Function
+    GetObjectCountSafe = CLng(obj.Count)
+    Exit Function
+Fail:
+    GetObjectCountSafe = 0
+End Function
+
+Private Function WriteKeysList(ws As Worksheet, ByVal r As Long, scenarios As Object) As Long
+    On Error GoTo Fail
+
+    Dim wroteAny As Boolean
+    wroteAny = False
+
+    Dim k As Variant
+    On Error Resume Next
+    For Each k In scenarios.Keys
+        ws.Cells(r, 1).Value = CStr(k)
+        r = r + 1
+        wroteAny = True
+    Next k
+    On Error GoTo 0
+
+    If Not wroteAny Then
+        ws.Cells(r, 1).Value = "(no keys)"
+        r = r + 1
+    End If
+
+    WriteKeysList = r
+    Exit Function
+
+Fail:
+    ws.Cells(r, 1).Value = "(could not enumerate keys)"
+    WriteKeysList = r + 1
+End Function
+
+Private Function WriteNotesList(ws As Worksheet, ByVal r As Long, notes As Object) As Long
+    On Error GoTo Fail
+
+    Dim wroteAny As Boolean
+    wroteAny = False
+
+    Dim i As Long
+    If TypeName(notes) = "Collection" Then
+        For i = 1 To notes.Count
+            ws.Cells(r, 1).Value = CStr(notes(i))
+            r = r + 1
+            wroteAny = True
+        Next i
+    Else
+        ' Try 1-based indexing for other list-like objects
+        For i = 1 To CLng(notes.Count)
+            On Error Resume Next
+            ws.Cells(r, 1).Value = CStr(notes(i))
+            If Err.Number = 0 Then
+                r = r + 1
+                wroteAny = True
+            End If
+            Err.Clear
+            On Error GoTo Fail
+        Next i
+    End If
+
+    If Not wroteAny Then
+        ws.Cells(r, 1).Value = "(no notes)"
+        r = r + 1
+    End If
+
+    WriteNotesList = r
+    Exit Function
+
+Fail:
+    ws.Cells(r, 1).Value = "(could not enumerate notes)"
+    WriteNotesList = r + 1
+End Function
+

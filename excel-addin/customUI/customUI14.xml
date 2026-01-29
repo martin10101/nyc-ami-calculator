@@ -74,6 +74,12 @@
                   supertip="Open the log folder."/>
         </group>
         <group id="grpHelp" label="Help">
+          <button id="btnDiagnostics"
+                  label="Diagnostics"
+                  size="normal"
+                  imageMso="WatchWindow"
+                  onAction="Ribbon_ShowDiagnostics"
+                  supertip="Create a Diagnostics sheet with the current log path, whether the run log file exists, and the last API scenario counts/keys/notes."/>
           <button id="btnAbout"
                   label="About"
                   size="normal"

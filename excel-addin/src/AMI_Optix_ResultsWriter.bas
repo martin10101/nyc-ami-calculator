@@ -243,16 +243,12 @@ Public Sub CreateScenariosSheet(result As Object)
     ' Start scenarios immediately after the manual block (no hard jump to row 125)
     row = manualEndRow + 2
 
-    ' Process each scenario (skip the best scenario since it's already shown in the manual block)
+    ' Process each scenario (include the best scenario even though it's also shown in the manual block).
+    ' Users expect Scenario 1 to be the "Absolute Best" result, and the manual block is a live view.
     Dim scenarioNum As Long
     scenarioNum = 1
-    Dim bestKey As String
-    bestKey = GetBestScenarioKey(result)
 
     For Each scenarioKey In scenarios.Keys
-        If bestKey <> "" Then
-            If UCase$(CStr(scenarioKey)) = UCase$(bestKey) Then GoTo NextScenario
-        End If
         Set scenario = scenarios(scenarioKey)
 
         ' Scenario header
@@ -269,7 +265,6 @@ Public Sub CreateScenariosSheet(result As Object)
         row = row + 1
         scenarioNum = scenarioNum + 1
 
-NextScenario:
     Next scenarioKey
 
     ' Auto-fit columns
@@ -590,7 +585,8 @@ Private Function FindFirstScenarioHeaderRow(ws As Worksheet) As Long
     For r = 1 To Application.Min(lastRow, 5000)
         Dim v As String
         v = UCase$(Trim$(CStr(ws.Cells(r, 1).Value)))
-        If v Like "SCENARIO #*" Then
+        ' Match scenario table headers like "SCENARIO 1: ..." (not "SCENARIO MANUAL ...").
+        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Then
             FindFirstScenarioHeaderRow = r
             Exit Function
         End If
@@ -614,14 +610,20 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     row = WriteUtilitySettings(ws, row)
     row = row + 1
 
-    ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC)"
+    Dim scenarioKey As String
+    scenarioKey = GetBestScenarioKey(result)
+
+    Dim headerLabel As String
+    headerLabel = "SCENARIO MANUAL (LIVE SYNC)"
+    If Trim$(scenarioKey) <> "" Then
+        headerLabel = headerLabel & " - CURRENT: " & UCase$(FormatScenarioName(CStr(scenarioKey)))
+    End If
+
+    ws.Cells(row, 1).Value = headerLabel
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 14
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
     row = row + 1
-
-    Dim scenarioKey As String
-    scenarioKey = GetBestScenarioKey(result)
     If scenarioKey = "" Then
         WriteManualScenarioBlockFromResult = row
         Exit Function
@@ -699,6 +701,59 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
     WriteManualScenarioBlockFromEvaluate = row
 End Function
+
+'-------------------------------------------------------------------------------
+' MANUAL BLOCK REFRESH (FROM A KNOWN SCENARIO)
+'-------------------------------------------------------------------------------
+
+Public Sub RefreshManualScenarioFromScenario(scenarioKey As String, scenario As Object)
+    ' Refreshes the "Scenario Manual (LIVE SYNC)" block using a scenario object already returned by the API.
+    ' This avoids an extra /api/evaluate call and guarantees the manual block matches the applied scenario.
+    On Error GoTo Fail
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateScenariosSheet()
+
+    Dim prevEnableEvents As Boolean
+    Dim prevScreenUpdating As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevScreenUpdating = Application.ScreenUpdating
+
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    ClearManualBlock ws
+
+    Dim row As Long
+    row = MANUAL_BLOCK_START_ROW
+
+    ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 16
+    row = row + 2
+
+    row = WriteUtilitySettings(ws, row)
+    row = row + 1
+
+    ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC) - CURRENT: " & UCase$(FormatScenarioName(CStr(scenarioKey)))
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 14
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
+    row = row + 1
+
+    If scenario Is Nothing Then GoTo Cleanup
+    row = WriteScenarioSummaryAndTable(ws, row, scenario)
+
+Cleanup:
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.EnableEvents = prevEnableEvents
+    Exit Sub
+
+Fail:
+    On Error Resume Next
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+End Sub
 
 Private Function GetBestScenarioKey(result As Object) As String
     Dim scenarios As Object
@@ -1291,8 +1346,12 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
     Next i
 
     ' Refresh Scenario Manual (live sync) to match what is now applied.
+    Dim manualOk As Boolean
+    manualOk = False
     On Error Resume Next
-    Call UpdateManualScenario(False, programNorm)
+    Call RefreshManualScenarioFromScenario(scenarioKey, scenario)
+    manualOk = (Err.Number = 0)
+    Err.Clear
     On Error GoTo 0
 
     ' Best-effort learning audit: record the user's chosen scenario.
@@ -1315,8 +1374,16 @@ ApplyCleanup:
     Application.EnableEvents = prevEnableEvents
     g_AMIOptixSuppressEvents = prevSuppress
 
-    MsgBox "Applied scenario '" & FormatScenarioName(scenarioKey) & "'" & vbCrLf & _
-           "Updated " & updatedCount & " units.", vbInformation, "AMI Optix"
+    Dim msg As String
+    msg = "Applied scenario '" & FormatScenarioName(scenarioKey) & "'" & vbCrLf & _
+          "Updated " & updatedCount & " units."
+    If Not manualOk Then
+        msg = msg & vbCrLf & vbCrLf & _
+              "Note: Scenario Manual did not refresh." & vbCrLf & _
+              "Click AMI Optix → Diagnostics to see the API/error details."
+    End If
+
+    MsgBox msg, vbInformation, "AMI Optix"
 
     ' Switch to data sheet
     ws.Activate

@@ -151,10 +151,25 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
 
     Call LogScenarioChoiceToRunLog(profileKey, programNorm, mihOption, choiceNum, chosenKey, chosenScenario, choiceReason)
 
-    MsgBox "Recorded choice:" & vbCrLf & _
-           "Scenario: " & chosenLabel & vbCrLf & _
-           "Log file: " & GetRunLogFilePath(), _
-           vbInformation, "AMI Optix"
+    Dim logPath As String
+    logPath = GetRunLogFilePath()
+
+    Dim logFileName As String
+    logFileName = Dir$(logPath)
+
+    If Trim$(logFileName) <> "" Then
+        MsgBox "Recorded choice:" & vbCrLf & _
+               "Scenario: " & chosenLabel & vbCrLf & _
+               "Log file: " & logPath, _
+               vbInformation, "AMI Optix"
+    Else
+        MsgBox "Recorded choice in the workbook, but could not write the run log file." & vbCrLf & vbCrLf & _
+               "Scenario: " & chosenLabel & vbCrLf & _
+               "Log file (expected): " & logPath & vbCrLf & _
+               "Error: " & GetLastRunLogError() & vbCrLf & vbCrLf & _
+               "Try: Settings → Log Settings → set Log Root to a local folder like C:\Temp\AMI_Optix_Learning, then click Record Choice again.", _
+               vbExclamation, "AMI Optix"
+    End If
     Exit Sub
 
 Fail:
@@ -793,7 +808,7 @@ Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
     pathResp = MsgBox(summary & vbCrLf & vbCrLf & "Change log folder root?", vbYesNo + vbQuestion, "AMI Optix - Log Settings")
     If pathResp = vbYes Then
         Dim newRoot As String
-        newRoot = InputBox("Enter log root folder path (e.g. Z:\AMI_Optix_Learning or \\server\share\AMI_Optix_Learning):", _
+        newRoot = InputBox("Enter log root folder path (no quotes) (e.g. Z:\AMI_Optix_Learning or \\server\share\AMI_Optix_Learning):", _
                            "AMI Optix - Log Folder", currentRoot)
         If Trim$(newRoot) <> "" Then
             Call SetLearningLogRootPath(newRoot)
@@ -829,6 +844,14 @@ End Sub
 '-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - HELP GROUP
 '-------------------------------------------------------------------------------
+
+Public Sub Ribbon_ShowDiagnostics(control As IRibbonControl)
+    On Error GoTo Fail
+    Call ShowAMIOptixDiagnostics
+    Exit Sub
+Fail:
+    MsgBox "Diagnostics failed: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
 
 Public Sub Ribbon_ShowAbout(control As IRibbonControl)
     ' Show about dialog

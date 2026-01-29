@@ -18,10 +18,17 @@ Private Const DEFAULT_BASE_BALCONY_WEIGHT As Double = 0.1
 ' Append-only run log (single file; one JSON object per line).
 Private Const RUN_LOG_FILE_NAME As String = "ami_optix_runs.jsonl"
 
+' Last run-log write error (if any). This enables troubleshooting without the VBE.
+Private m_LastRunLogError As String
+
 ' Learning modes (stored as strings in registry)
 Public Const LEARNING_MODE_OFF As String = "OFF"
 Public Const LEARNING_MODE_SHADOW As String = "SHADOW"
 Public Const LEARNING_MODE_ON As String = "ON"
+
+Public Function GetLastRunLogError() As String
+    GetLastRunLogError = m_LastRunLogError
+End Function
 
 Public Function GetLearningProfileKey(program As String, mihOption As String) As String
     Dim programNorm As String
@@ -78,11 +85,31 @@ End Sub
 Public Function GetLearningLogRootPath() As String
     Dim defaultPath As String
     defaultPath = Environ$("USERPROFILE") & "\Documents\AMI_Optix_Learning"
-    GetLearningLogRootPath = GetSetting(LEARNING_REGISTRY_PATH, LEARNING_REGISTRY_SECTION, "LogRootPath", defaultPath)
+    Dim rawPath As String
+    rawPath = GetSetting(LEARNING_REGISTRY_PATH, LEARNING_REGISTRY_SECTION, "LogRootPath", defaultPath)
+
+    Dim normalized As String
+    normalized = NormalizeFolderPath(rawPath)
+    If Trim$(normalized) = "" Then normalized = NormalizeFolderPath(defaultPath)
+
+    ' Self-heal common misconfiguration (users sometimes paste paths with quotes).
+    If normalized <> rawPath Then
+        On Error Resume Next
+        SaveSetting LEARNING_REGISTRY_PATH, LEARNING_REGISTRY_SECTION, "LogRootPath", normalized
+        On Error GoTo 0
+    End If
+
+    GetLearningLogRootPath = normalized
 End Function
 
 Public Sub SetLearningLogRootPath(path As String)
-    SaveSetting LEARNING_REGISTRY_PATH, LEARNING_REGISTRY_SECTION, "LogRootPath", CStr(path)
+    Dim normalized As String
+    normalized = NormalizeFolderPath(CStr(path))
+    If Trim$(normalized) = "" Then
+        normalized = NormalizeFolderPath(Environ$("USERPROFILE") & "\Documents\AMI_Optix_Learning")
+    End If
+
+    SaveSetting LEARNING_REGISTRY_PATH, LEARNING_REGISTRY_SECTION, "LogRootPath", normalized
 End Sub
 
 Public Function GetLearningProfileFolder(profileKey As String) As String
@@ -101,6 +128,38 @@ Public Sub EnsureFolderExists(path As String)
         fso.CreateFolder path
     End If
 End Sub
+
+Private Function NormalizeFolderPath(path As String) As String
+    Dim s As String
+    s = Trim$(CStr(path))
+    If s = "" Then
+        NormalizeFolderPath = ""
+        Exit Function
+    End If
+
+    ' Remove wrapping quotes: "C:\Path\Here"
+    If Len(s) >= 2 Then
+        If Left$(s, 1) = """" And Right$(s, 1) = """" Then
+            s = Mid$(s, 2, Len(s) - 2)
+            s = Trim$(s)
+        End If
+    End If
+
+    ' Remove any remaining quotes (common when users paste from emails/docs).
+    s = Replace(s, """", "")
+
+    ' Normalize forward slashes.
+    s = Replace(s, "/", "\")
+
+    ' Remove trailing backslashes (except drive roots like C:\).
+    Do While Right$(s, 1) = "\"
+        If Len(s) = 3 And Mid$(s, 2, 1) = ":" Then Exit Do
+        s = Left$(s, Len(s) - 1)
+        If Len(s) = 0 Then Exit Do
+    Loop
+
+    NormalizeFolderPath = s
+End Function
 
 Private Function NewGuidString() As String
     On Error GoTo Fail
@@ -347,12 +406,20 @@ Public Sub AppendRunLog(eventName As String, payloadJson As String)
     ' The file is reused across runs (no file spam).
     On Error GoTo Fail
 
+    m_LastRunLogError = ""
+
     Dim rootPath As String
     rootPath = GetLearningLogRootPath()
     Call EnsureFolderExists(rootPath)
 
     Dim filePath As String
     filePath = GetRunLogFilePath()
+
+    ' Confirm the folder exists (EnsureFolderExists intentionally swallows errors).
+    If Len(Dir$(rootPath, vbDirectory)) = 0 Then
+        Err.Raise vbObjectError + 513, "AMI_Optix_Learning.AppendRunLog", _
+                  "Log root folder does not exist or cannot be created: " & rootPath
+    End If
 
     Dim ts As String
     ts = Format$(Now, "yyyy-mm-ddThh:nn:ss")
@@ -372,6 +439,7 @@ Public Sub AppendRunLog(eventName As String, payloadJson As String)
 Fail:
     On Error Resume Next
     If ff <> 0 Then Close #ff
+    m_LastRunLogError = "AppendRunLog failed (" & Err.Number & "): " & Err.Description & " | file: " & filePath
 End Sub
 
 Public Sub AppendSolverNotesToRunLog(apiResult As Object)

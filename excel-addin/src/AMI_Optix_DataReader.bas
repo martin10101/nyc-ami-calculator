@@ -123,6 +123,19 @@ End Function
 
 Private Function HasUnitDataHeaders(ws As Worksheet) As Boolean
     ' Quick check if sheet has recognizable unit data headers
+    If ws Is Nothing Then
+        HasUnitDataHeaders = False
+        Exit Function
+    End If
+
+    ' Avoid false positives from output/diagnostic sheets (these often contain "unit_id"/"bedrooms"/"net_sf").
+    Dim nameNorm As String
+    nameNorm = UCase$(Trim$(ws.Name))
+    If nameNorm = "AMI SCENARIOS" Or nameNorm = "AMI OPTIX DIAGNOSTICS" Then
+        HasUnitDataHeaders = False
+        Exit Function
+    End If
+
     Dim headerRow As Long
     headerRow = FindHeaderRow(ws)
     HasUnitDataHeaders = (headerRow > 0)

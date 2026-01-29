@@ -695,11 +695,11 @@ def optimize_units():
                         edge_settings={"mode": "rent_max", "relaxed": False},
                     )
 
-                    # Edge 1: relax max share at <=40% (try 22% -> 24%).
+                    # Edge 1: relax max share at <=40% (try 22% -> 30%).
                     strict_min_share = strict_rules.get('deep_affordability_min_share')
                     strict_max_share = strict_rules.get('deep_affordability_max_share')
                     if len(edge_keys_added) < target_edge_count:
-                        for max_share in (0.22, 0.23, 0.24):
+                        for max_share in (0.22, 0.23, 0.24, 0.25, 0.26, 0.28, 0.3):
                             if strict_max_share is not None and float(max_share) <= float(strict_max_share) + 1e-12:
                                 continue
                             edge_cfg = copy.deepcopy(config)
@@ -713,9 +713,9 @@ def optimize_units():
                             ):
                                 break
 
-                    # Edge 2: relax min share at <=40% (try 19.9% -> 19.8%).
+                    # Edge 2: relax min share at <=40% (try 19.9% down to 15%).
                     if len(edge_keys_added) < target_edge_count:
-                        for min_share in (0.199, 0.198):
+                        for min_share in (0.199, 0.198, 0.195, 0.19, 0.185, 0.18, 0.175, 0.17, 0.165, 0.16, 0.15):
                             if strict_min_share is not None and float(min_share) >= float(strict_min_share) - 1e-12:
                                 continue
                             edge_cfg = copy.deepcopy(config)
@@ -743,6 +743,11 @@ def optimize_units():
                                 edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
                             ):
                                 break
+
+                    if len(edge_keys_added) < target_edge_count:
+                        notes.append(
+                            f"Edge scenarios: generated {len(edge_keys_added)} of {target_edge_count}; remaining relaxations were infeasible or produced no distinct unit mix."
+                        )
                 except Exception as e:
                     notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
 
