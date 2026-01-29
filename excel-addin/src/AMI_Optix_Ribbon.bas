@@ -85,78 +85,35 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
     Dim profileKey As String
     profileKey = GetLearningProfileKey(programNorm, mihOption)
 
-    ' Build an ordered list: strict first, then edge.
-    Dim strictKeys As Collection
-    Dim edgeKeys As Collection
-    Set strictKeys = New Collection
-    Set edgeKeys = New Collection
-
-    Dim scenarioKey As Variant
-    For Each scenarioKey In scenarios.keys
-        Dim tier As String
-        tier = ""
-
-        On Error Resume Next
-        Dim s As Object
-        Set s = scenarios(scenarioKey)
-        If Not s Is Nothing Then
-            If s.Exists("tier") Then tier = CStr(s("tier"))
-        End If
-        On Error GoTo Fail
-
-        If LCase$(Trim$(tier)) = "edge" Then
-            edgeKeys.Add CStr(scenarioKey)
-        Else
-            strictKeys.Add CStr(scenarioKey)
-        End If
-    Next scenarioKey
-
-    Dim total As Long
-    total = strictKeys.Count + edgeKeys.Count
-
-    Dim keys() As String
-    ReDim keys(1 To total)
-
-    Dim msg As String
-    msg = "Available Scenarios:" & vbCrLf & vbCrLf
-
-    Dim i As Long
-    i = 1
-
-    Dim k As Variant
-    For Each k In strictKeys
-        keys(i) = CStr(k)
-        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
-        i = i + 1
-    Next k
-
-    For Each k In edgeKeys
-        keys(i) = CStr(k)
-        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
-        i = i + 1
-    Next k
-
-    msg = msg & vbCrLf & "Enter chosen scenario number (1-" & total & "):"
-
-    Dim choice As String
-    choice = InputBox(msg, "Record Chosen Scenario", "1")
-    If choice = "" Then Exit Sub
-
-    Dim choiceNum As Long
-    On Error Resume Next
-    choiceNum = CLng(choice)
-    On Error GoTo Fail
-
-    If choiceNum < 1 Or choiceNum > total Then
-        MsgBox "Invalid selection.", vbExclamation, "AMI Optix"
+    ' Determine which scenario is currently applied by comparing the live sheet assignments
+    ' to the last solver scenarios. If none match exactly, we record "Scenario Manual (custom)".
+    Dim liveUnits As Collection
+    Set liveUnits = ReadCurrentProgramUnits(programNorm)
+    If liveUnits Is Nothing Or liveUnits.Count = 0 Then
+        MsgBox "Could not read units from the workbook.", vbExclamation, "AMI Optix"
         Exit Sub
     End If
 
     Dim chosenKey As String
-    chosenKey = keys(choiceNum)
-
     Dim chosenScenario As Object
-    Set chosenScenario = scenarios(chosenKey)
+    Dim isExactMatch As Boolean
+    isExactMatch = False
+
+    chosenKey = FindMatchingScenarioKeyForUnits(liveUnits, scenarios)
+    If chosenKey <> "" Then
+        isExactMatch = True
+        Set chosenScenario = scenarios(chosenKey)
+    Else
+        chosenKey = "scenario_manual"
+        Set chosenScenario = BuildScenarioFromUnits(liveUnits)
+    End If
+
+    Dim chosenLabel As String
+    If isExactMatch Then
+        chosenLabel = FormatScenarioNameForPicker(chosenKey)
+    Else
+        chosenLabel = "Scenario Manual (custom)"
+    End If
 
     ' Ask for a short explanation of why this scenario was chosen.
     Dim wsScenarios As Worksheet
@@ -186,13 +143,16 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
 
     ' Write a visible "Final Selection" box to the scenarios sheet (so it can be shared with the client).
     If Not wsScenarios Is Nothing Then
-        WriteFinalChoiceBox wsScenarios, chosenKey, FormatScenarioNameForPicker(chosenKey), choiceReason
+        WriteFinalChoiceBox wsScenarios, chosenKey, chosenLabel, choiceReason
     End If
+
+    Dim choiceNum As Long
+    choiceNum = IIf(isExactMatch, FindScenarioIndexForKey(chosenKey, scenarios), 0)
 
     Call LogScenarioChoiceToRunLog(profileKey, programNorm, mihOption, choiceNum, chosenKey, chosenScenario, choiceReason)
 
     MsgBox "Recorded choice:" & vbCrLf & _
-           "Scenario: " & FormatScenarioNameForPicker(chosenKey) & vbCrLf & _
+           "Scenario: " & chosenLabel & vbCrLf & _
            "Log file: " & GetRunLogFilePath(), _
            vbInformation, "AMI Optix"
     Exit Sub
@@ -200,6 +160,316 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
 Fail:
     MsgBox "Could not record choice: " & Err.Description, vbExclamation, "AMI Optix"
 End Sub
+
+Private Function ReadCurrentProgramUnits(programNorm As String) As Collection
+    ' Reads the live unit table for the program so we can detect the currently applied scenario.
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+
+    On Error Resume Next
+    If UCase$(Trim$(programNorm)) = "MIH" Then
+        Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
+    Else
+        Set ws = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo Fail
+
+    If Not ws Is Nothing Then ws.Activate
+    Set ReadCurrentProgramUnits = ReadUnitData()
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+    Exit Function
+
+Fail:
+    Set ReadCurrentProgramUnits = Nothing
+End Function
+
+Private Function FindMatchingScenarioKeyForUnits(units As Collection, scenarios As Object) As String
+    ' Returns the scenario key whose canonical assignments match the current live units.
+    On Error GoTo Fail
+
+    If units Is Nothing Or scenarios Is Nothing Then Exit Function
+
+    Dim liveMap As Object
+    Set liveMap = BuildCanonicalMapFromUnits(units)
+    If liveMap Is Nothing Then Exit Function
+
+    Dim scenarioKey As Variant
+    For Each scenarioKey In scenarios.Keys
+        Dim s As Object
+        Set s = scenarios(scenarioKey)
+        If s Is Nothing Then GoTo NextKey
+
+        Dim scenMap As Object
+        Set scenMap = BuildCanonicalMapFromScenario(s)
+        If scenMap Is Nothing Then GoTo NextKey
+
+        If CanonicalMapsEqual(liveMap, scenMap) Then
+            FindMatchingScenarioKeyForUnits = CStr(scenarioKey)
+            Exit Function
+        End If
+
+NextKey:
+    Next scenarioKey
+
+Fail:
+    FindMatchingScenarioKeyForUnits = ""
+End Function
+
+Private Function BuildCanonicalMapFromUnits(units As Collection) As Object
+    On Error GoTo Fail
+
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary") ' unit_id -> band%
+
+    Dim i As Long
+    For i = 1 To units.Count
+        Dim u As Object
+        Set u = units(i)
+        If u Is Nothing Then GoTo NextUnit
+        If Not u.Exists("unit_id") Then GoTo NextUnit
+        If Not u.Exists("client_ami") Then GoTo NextUnit
+
+        Dim unitId As String
+        unitId = CStr(u("unit_id"))
+        If Trim$(unitId) = "" Then GoTo NextUnit
+
+        Dim band As Long
+        band = BandPercentFromAmi(u("client_ami"))
+        If band <= 0 Then GoTo NextUnit
+
+        d(unitId) = band
+
+NextUnit:
+    Next i
+
+    Set BuildCanonicalMapFromUnits = d
+    Exit Function
+
+Fail:
+    Set BuildCanonicalMapFromUnits = Nothing
+End Function
+
+Private Function BuildCanonicalMapFromScenario(scenario As Object) As Object
+    On Error GoTo Fail
+
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary") ' unit_id -> band%
+
+    If scenario.Exists("canonical_assignments") Then
+        Dim canon As Object
+        Set canon = Nothing
+        On Error Resume Next
+        Set canon = scenario("canonical_assignments")
+        On Error GoTo Fail
+
+        If Not canon Is Nothing Then
+            If TypeName(canon) = "Collection" Then
+                Dim i As Long
+                For i = 1 To canon.Count
+                    Dim pair As Object
+                    Set pair = canon(i)
+                    If pair Is Nothing Then GoTo NextPair
+                    If TypeName(pair) <> "Collection" Then GoTo NextPair
+                    If pair.Count < 2 Then GoTo NextPair
+                    d(CStr(pair(1))) = CLng(pair(2))
+NextPair:
+                Next i
+                Set BuildCanonicalMapFromScenario = d
+                Exit Function
+            End If
+        End If
+    End If
+
+    If scenario.Exists("assignments") Then
+        Dim assigns As Object
+        Set assigns = Nothing
+        On Error Resume Next
+        Set assigns = scenario("assignments")
+        On Error GoTo Fail
+
+        If Not assigns Is Nothing And TypeName(assigns) = "Collection" Then
+            Dim j As Long
+            For j = 1 To assigns.Count
+                Dim a As Object
+                Set a = assigns(j)
+                If a Is Nothing Then GoTo NextAssign
+                If Not a.Exists("unit_id") Then GoTo NextAssign
+                If Not a.Exists("assigned_ami") Then GoTo NextAssign
+                d(CStr(a("unit_id"))) = BandPercentFromAmi(a("assigned_ami"))
+NextAssign:
+            Next j
+        End If
+    End If
+
+    Set BuildCanonicalMapFromScenario = d
+    Exit Function
+
+Fail:
+    Set BuildCanonicalMapFromScenario = Nothing
+End Function
+
+Private Function CanonicalMapsEqual(a As Object, b As Object) As Boolean
+    On Error GoTo Fail
+
+    If a Is Nothing Or b Is Nothing Then Exit Function
+    If a.Count <> b.Count Then Exit Function
+
+    Dim k As Variant
+    For Each k In a.Keys
+        If Not b.Exists(k) Then Exit Function
+        If CLng(a(k)) <> CLng(b(k)) Then Exit Function
+    Next k
+
+    CanonicalMapsEqual = True
+    Exit Function
+
+Fail:
+    CanonicalMapsEqual = False
+End Function
+
+Private Function BandPercentFromAmi(value As Variant) As Long
+    On Error GoTo Fail
+
+    If Not IsNumeric(value) Then Exit Function
+
+    Dim v As Double
+    v = CDbl(value)
+    If v > 2# Then
+        BandPercentFromAmi = CLng(Application.WorksheetFunction.Round(v, 0))
+    Else
+        BandPercentFromAmi = CLng(Application.WorksheetFunction.Round(v * 100#, 0))
+    End If
+    Exit Function
+
+Fail:
+    BandPercentFromAmi = 0
+End Function
+
+Private Function BuildScenarioFromUnits(units As Collection) As Object
+    ' Create a minimal scenario-like object for logging when the live sheet doesn't match
+    ' any scenario snapshot exactly (i.e., user customized the manual scenario).
+    On Error GoTo Fail
+
+    Dim scenario As Object
+    Set scenario = CreateObject("Scripting.Dictionary")
+
+    Dim denom As Double
+    Dim numer As Double
+    denom = 0#
+    numer = 0#
+
+    Dim bands As Object
+    Set bands = CreateObject("Scripting.Dictionary") ' band% -> True
+
+    Dim i As Long
+    For i = 1 To units.Count
+        Dim u As Object
+        Set u = units(i)
+        If u Is Nothing Then GoTo NextUnit
+        If Not u.Exists("net_sf") Then GoTo NextUnit
+        If Not u.Exists("client_ami") Then GoTo NextUnit
+        If Not IsNumeric(u("net_sf")) Then GoTo NextUnit
+        If Not IsNumeric(u("client_ami")) Then GoTo NextUnit
+
+        Dim sf As Double
+        sf = CDbl(u("net_sf"))
+        If sf <= 0 Then GoTo NextUnit
+
+        Dim ami As Double
+        ami = CDbl(u("client_ami"))
+        If ami > 2# Then ami = ami / 100#
+        If ami <= 0 Then GoTo NextUnit
+
+        denom = denom + sf
+        numer = numer + (sf * ami)
+
+        Dim b As Long
+        b = BandPercentFromAmi(ami)
+        If b > 0 Then bands(CStr(b)) = True
+
+NextUnit:
+    Next i
+
+    If denom > 0 Then
+        scenario("waami") = (numer / denom)
+    End If
+
+    Dim bandList As New Collection
+    Dim key As Variant
+    For Each key In bands.Keys
+        bandList.Add CLng(key)
+    Next key
+    Set scenario("bands") = bandList
+
+    Set BuildScenarioFromUnits = scenario
+    Exit Function
+
+Fail:
+    Set BuildScenarioFromUnits = Nothing
+End Function
+
+Private Function FindScenarioIndexForKey(scenarioKey As String, scenarios As Object) As Long
+    ' Returns a stable 1-based index: strict first, then edge. 0 if not found.
+    On Error GoTo Fail
+
+    If scenarios Is Nothing Then Exit Function
+
+    Dim strictKeys As Collection
+    Dim edgeKeys As Collection
+    Set strictKeys = New Collection
+    Set edgeKeys = New Collection
+
+    Dim k As Variant
+    For Each k In scenarios.Keys
+        Dim tier As String
+        tier = ""
+        On Error Resume Next
+        Dim s As Object
+        Set s = scenarios(k)
+        If Not s Is Nothing Then
+            If s.Exists("tier") Then tier = CStr(s("tier"))
+        End If
+        On Error GoTo Fail
+
+        If LCase$(Trim$(tier)) = "edge" Then
+            edgeKeys.Add CStr(k)
+        Else
+            strictKeys.Add CStr(k)
+        End If
+    Next k
+
+    Dim idx As Long
+    idx = 1
+
+    For Each k In strictKeys
+        If UCase$(CStr(k)) = UCase$(CStr(scenarioKey)) Then
+            FindScenarioIndexForKey = idx
+            Exit Function
+        End If
+        idx = idx + 1
+    Next k
+
+    For Each k In edgeKeys
+        If UCase$(CStr(k)) = UCase$(CStr(scenarioKey)) Then
+            FindScenarioIndexForKey = idx
+            Exit Function
+        End If
+        idx = idx + 1
+    Next k
+
+Fail:
+    FindScenarioIndexForKey = 0
+End Function
 
 Private Function ReadFinalChoiceReason(ws As Worksheet) As String
     On Error GoTo Fail
