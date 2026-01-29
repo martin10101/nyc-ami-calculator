@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 import json
 import math
@@ -17,6 +18,75 @@ from ami_optix.solver import find_optimal_scenarios, find_max_revenue_scenario
 from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
 
 app = Flask(__name__)
+
+# ----------------------------------------------------------------------------
+# Basic hardening / safety limits (configurable via env vars)
+# ----------------------------------------------------------------------------
+# NOTE: These are especially important if file upload endpoints are enabled.
+# We keep defaults conservative; you can raise them via Render env vars if needed.
+
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(float(str(raw).strip()))
+    except Exception:
+        return default
+
+
+# Request size limit (applies to ALL requests, including /api/analyze uploads).
+MAX_UPLOAD_MB = max(1, _get_int_env("AMI_OPTIX_MAX_UPLOAD_MB", 50))
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+# Uploaded report cleanup policy for UPLOADS_DIR (zips from /api/analyze).
+UPLOAD_RETENTION_HOURS = max(1, _get_int_env("AMI_OPTIX_UPLOAD_RETENTION_HOURS", 24))
+UPLOAD_MAX_FILES = max(1, _get_int_env("AMI_OPTIX_UPLOAD_MAX_FILES", 50))
+
+
+def _cleanup_uploads_dir() -> None:
+    """
+    Best-effort cleanup for generated report zips to prevent disk bloat.
+
+    Policy:
+    - Delete .zip files older than UPLOAD_RETENTION_HOURS
+    - Keep at most UPLOAD_MAX_FILES newest .zip files
+    """
+    try:
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+        now = time.time()
+        max_age = float(UPLOAD_RETENTION_HOURS) * 3600.0
+
+        remaining: list[tuple[float, str]] = []
+        for entry in os.scandir(UPLOADS_DIR):
+            if not entry.is_file():
+                continue
+            if not entry.name.lower().endswith(".zip"):
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+            except Exception:
+                continue
+            age = now - float(mtime)
+            if age > max_age:
+                try:
+                    os.remove(entry.path)
+                except OSError:
+                    pass
+                continue
+            remaining.append((float(mtime), entry.path))
+
+        if len(remaining) > UPLOAD_MAX_FILES:
+            remaining.sort(key=lambda x: x[0])  # oldest first
+            for _, path in remaining[:-UPLOAD_MAX_FILES]:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+    except Exception:
+        # Never break request flow due to cleanup failures.
+        pass
+
 UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')
 DASHBOARD_DIR = os.path.join(os.getcwd(), 'dashboard_static')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -851,6 +921,14 @@ def evaluate_assignment():
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_file():
+    # Lock down file-upload endpoints if you are not using the public dashboard flow.
+    auth_error = _validate_api_key()
+    if auth_error:
+        return auth_error
+
+    # Prevent disk bloat from old zips (best-effort).
+    _cleanup_uploads_dir()
+
     if 'file' not in request.files:
         return jsonify({"error": "No file part in the request"}), 400
 
@@ -954,6 +1032,11 @@ def analyze_file():
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_report(filename):
     """Serves the generated zip file for download."""
+    auth_error = _validate_api_key()
+    if auth_error:
+        return auth_error
+
+    filename = secure_filename(filename)
     try:
         return send_from_directory(UPLOADS_DIR, filename, as_attachment=True)
     except FileNotFoundError:
