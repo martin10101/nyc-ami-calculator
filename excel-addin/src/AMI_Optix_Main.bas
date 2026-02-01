@@ -610,14 +610,23 @@ Public Function TryReadMIHInputs(ByRef mihOption As String, ByRef residentialSF 
     End If
 
     Dim v As Variant
-    v = wsMIH.Range("J21").Value
-    If Not IsNumeric(v) Or CDbl(v) <= 0 Then
-        MsgBox "MIH residential SF is missing." & vbCrLf & vbCrLf & _
-               "Expected a numeric value in MIH!J21.", vbExclamation, "AMI Optix"
-        TryReadMIHInputs = False
-        Exit Function
+    ' Prefer "Net Floor Area" (this is what the MIH compliance box uses as the denominator).
+    ' Fall back to MIH!J21 only if the Net Floor Area label/value isn't present.
+    Dim netFloorArea As Double
+    netFloorArea = 0#
+    If TryFindNetFloorArea(wsMIH, netFloorArea) Then
+        residentialSF = netFloorArea
+    Else
+        v = wsMIH.Range("J21").Value
+        If Not IsNumeric(v) Or CDbl(v) <= 0 Then
+            MsgBox "MIH residential SF is missing." & vbCrLf & vbCrLf & _
+                   "Expected a numeric value next to 'Net Floor Area' on the MIH sheet," & vbCrLf & _
+                   "or a numeric value in MIH!J21.", vbExclamation, "AMI Optix"
+            TryReadMIHInputs = False
+            Exit Function
+        End If
+        residentialSF = CDbl(v)
     End If
-    residentialSF = CDbl(v)
 
     mihOption = Trim(CStr(wsProg.Range("K4").Value))
     If mihOption = "" Then
@@ -640,6 +649,44 @@ Public Function TryReadMIHInputs(ByRef mihOption As String, ByRef residentialSF 
 
 Fail:
     TryReadMIHInputs = False
+End Function
+
+Private Function TryFindNetFloorArea(wsMIH As Worksheet, ByRef netFloorArea As Double) As Boolean
+    ' Best-effort: locate the "Net Floor Area" label and read the numeric value to the right.
+    ' This matches the denominator used by the MIH compliance dashboard in the provided templates.
+    On Error GoTo Fail
+
+    TryFindNetFloorArea = False
+    netFloorArea = 0#
+    If wsMIH Is Nothing Then Exit Function
+
+    Dim found As Range
+    Set found = wsMIH.Cells.Find(What:="Net Floor Area", After:=wsMIH.Cells(1, 1), LookIn:=xlValues, LookAt:=xlPart, _
+                                 SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    If found Is Nothing Then Exit Function
+
+    Dim firstAddress As String
+    firstAddress = found.Address(False, False)
+
+    Do
+        Dim i As Long
+        For i = 1 To 6
+            Dim v As Variant
+            v = found.Offset(0, i).Value
+            If IsNumeric(v) And CDbl(v) > 0 Then
+                netFloorArea = CDbl(v)
+                TryFindNetFloorArea = True
+                Exit Function
+            End If
+        Next i
+
+        Set found = wsMIH.Cells.FindNext(found)
+        If found Is Nothing Then Exit Do
+    Loop While found.Address(False, False) <> firstAddress
+    Exit Function
+
+Fail:
+    TryFindNetFloorArea = False
 End Function
 
 Public Sub SaveUtilitySelections(electricity As String, cooking As String, _
