@@ -100,11 +100,13 @@ Public Sub ApplyBestScenario(result As Object)
             row = unitRows(unitId)
 
             ' Write AMI value
-            ' API returns integer (60, 80, 130) - convert to decimal for percentage format
-            If ami > 1 Then
-                amiValue = ami / 100  ' Convert 60 to 0.60
+            ' Support both styles:
+            ' - Whole-percent values (e.g., 60, 120, 130) -> divide by 100
+            ' - Decimal values (e.g., 0.6, 1.2, 1.3) -> keep as-is
+            If ami > 2# Then
+                amiValue = ami / 100#  ' Convert 60 to 0.60; 120 to 1.20
             Else
-                amiValue = ami  ' Already decimal
+                amiValue = ami
             End If
 
             ws.Cells(row, amiCol).Value = amiValue
@@ -357,7 +359,7 @@ Public Sub ApplyCanonicalAssignmentsToDataSheet(canonicalAssignments As Object, 
         If Not TryGetCanonicalPair(canonicalAssignments(i), unitId, band) Then GoTo NextPair
 
         Dim amiValue As Double
-        If band > 1 Then
+        If band > 2# Then
             amiValue = band / 100#
         Else
             amiValue = band
@@ -1003,7 +1005,10 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             If assignment.Exists("net_sf") Then ws.Cells(row, 3).Value = assignment("net_sf")
             If assignment.Exists("floor") Then ws.Cells(row, 4).Value = assignment("floor")
             If assignment.Exists("balcony") Then ws.Cells(row, 5).Value = IIf(assignment("balcony"), "Y", "")
-            ws.Cells(row, 6).Value = Format(assignment("assigned_ami"), "0%")
+            Dim assignedAmi As Double
+            assignedAmi = CDbl(assignment("assigned_ami"))
+            If assignedAmi > 2# Then assignedAmi = assignedAmi / 100#
+            ws.Cells(row, 6).Value = Format(assignedAmi, "0%")
 
             If assignment.Exists("gross_rent") Then
                 ws.Cells(row, 7).Value = assignment("gross_rent")
@@ -1331,11 +1336,11 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
         If unitRows.Exists(unitId) Then
             row = unitRows(unitId)
 
-            ' API returns integer (60, 80, 130) - convert to decimal for percentage format
-            If ami > 1 Then
-                amiValue = ami / 100  ' Convert 60 to 0.60
+            ' Support both whole-percent (60/120) and decimal (0.6/1.2) values.
+            If ami > 2# Then
+                amiValue = ami / 100#  ' Convert 60 to 0.60; 120 to 1.20
             Else
-                amiValue = ami  ' Already decimal
+                amiValue = ami
             End If
 
             ws.Cells(row, amiCol).Value = amiValue

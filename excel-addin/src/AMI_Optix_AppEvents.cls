@@ -667,7 +667,8 @@ Private Function ParseAmiValue(value As Variant) As Double
     On Error GoTo Fail
     If IsNumeric(value) Then
         ParseAmiValue = CDbl(value)
-        If ParseAmiValue > 1 Then ParseAmiValue = ParseAmiValue / 100
+        ' Only divide whole-percent entries like 60/120; MIH can legitimately be 1.2 (120%).
+        If ParseAmiValue > 2# Then ParseAmiValue = ParseAmiValue / 100#
         Exit Function
     End If
     Dim s As String

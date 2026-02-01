@@ -488,13 +488,15 @@ Private Function ReadUnitRow(ws As Worksheet, row As Long) As Object
     unit("row") = row  ' Store row number for writing back
 
     ' CRITICAL: Store the client_ami value so it gets sent to the API
-    ' Normalize to decimal (0.6) if it was percentage (60)
+    ' Normalize to decimal (0.6) if it was percentage (60).
+    ' IMPORTANT: MIH can use >100% AMI bands (e.g., 120% = 1.2), so only divide
+    ' when the value looks like a whole-percent entry (e.g., 60, 120, 130).
     If m_AMICol > 0 And IsNumeric(clientAMI) Then
         Dim amiValue As Double
         amiValue = CDbl(clientAMI)
-        ' If value > 1, assume it's a percentage like 60 and convert to 0.6
-        If amiValue > 1 Then
-            amiValue = amiValue / 100
+        ' If value > 2, assume it's a percentage like 60/120 and convert to 0.6/1.2
+        If amiValue > 2# Then
+            amiValue = amiValue / 100#
         End If
         unit("client_ami") = amiValue
     End If
