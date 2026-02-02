@@ -18,6 +18,26 @@ Private m_LastSelectionSheet As String
 Private m_LastSelectionAddress As String
 Private m_LastSelectionValue As Variant
 
+Private Sub App_SheetActivate(ByVal Sh As Object)
+    ' Keep AMI Optix sheets visible even in client workbooks that hide sheets via macros.
+    On Error GoTo SafeExit
+
+    Dim wbName As String
+    wbName = ""
+    On Error Resume Next
+    wbName = CStr(Sh.Parent.Name)
+    On Error GoTo SafeExit
+
+    If Trim$(wbName) <> "" Then
+        g_AMIOptixVisibilityWorkbookName = wbName
+    End If
+
+    Call AMI_Optix_EnsureSheetsVisible
+    Call AMI_Optix_ScheduleEnsureSheetsVisible(wbName)
+
+SafeExit:
+End Sub
+
 Private Sub App_SheetSelectionChange(ByVal Sh As Object, ByVal Target As Range)
     On Error GoTo SafeExit
 
@@ -79,26 +99,17 @@ SafeExit:
 End Sub
 
 Private Function DetectProgramFromWorkbook() As String
-    ' Best-effort program detection:
-    ' - If a sheet named "MIH" exists, treat workbook as MIH.
-    ' - Otherwise, treat as UAP.
-    On Error GoTo Fail
+    Dim mihOption As String
+    mihOption = ""
 
-    DetectProgramFromWorkbook = "UAP"
+    Dim kind As String
+    kind = DetectWorkbookKind(mihOption)
 
-    If ActiveWorkbook Is Nothing Then Exit Function
-
-    Dim wsMIH As Worksheet
-    Set wsMIH = Nothing
-    On Error Resume Next
-    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
-    On Error GoTo Fail
-    If Not wsMIH Is Nothing Then DetectProgramFromWorkbook = "MIH"
-
-    Exit Function
-
-Fail:
-    DetectProgramFromWorkbook = "UAP"
+    If kind = "MIH" Or kind = "MIH_INVALID" Then
+        DetectProgramFromWorkbook = "MIH"
+    Else
+        DetectProgramFromWorkbook = "UAP"
+    End If
 End Function
 
 Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNorm As String)

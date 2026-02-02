@@ -53,3 +53,7 @@ Branch: `feature/results-overhaul-2026-01-28`
 - Fixed Excel ribbon `getPressed` callback signature for the Live Sync toggle (was causing: “Wrong number of arguments or invalid property assignment” when clicking the AMI Optix tab).
 - Forced the `AMI Scenarios` sheet to `xlSheetVisible` whenever the add-in creates/uses/activates it (prevents the tab from “disappearing” in client workbooks that hide sheets via macros).
 - Preserved the user’s active sheet after applying a scenario (avoids confusion where it looks like the scenarios sheet “flew away”).
+- Added a sheet-visibility guard (Application `SheetActivate` + deferred `OnTime`) to re-unhide `AMI Scenarios` / `AMI Optix Diagnostics` even if the client workbook hides them after the fact.
+- Added program mismatch guard rails: block **Run UAP** on MIH workbooks and block **Run MIH** on non-MIH workbooks; MIH requires `Prog!K4` to be Option 1 or Option 4.
+- Fixed a common MIH utility parsing crash (`Type mismatch`) when the `Rents & Utilities` sheet contains Excel error values in the selection cells.
+- Improved unit reading for solver runs to always read from the correct program sheet (so running MIH/UAP from `AMI Scenarios` does not cause “no data”).

@@ -181,6 +181,8 @@ Public Sub RunOptimizationForProgram(program As String)
     Dim response As String
     Dim result As Object
     Dim programNorm As String
+    Dim workbookKind As String
+    Dim detectedMihOption As String
     Dim mihOption As String
     Dim mihResidentialSF As Double
     Dim mihMaxBandPercent As Long
@@ -189,6 +191,37 @@ Public Sub RunOptimizationForProgram(program As String)
 
     programNorm = UCase(Trim(program))
     If programNorm = "" Then programNorm = "UAP"
+
+    ' Guard rails: prevent running the wrong program on the wrong workbook.
+    detectedMihOption = ""
+    workbookKind = DetectWorkbookKind(detectedMihOption)
+    If programNorm = "UAP" Then
+        If workbookKind = "MIH" Then
+            MsgBox "This workbook is an MIH file (" & detectedMihOption & ")." & vbCrLf & vbCrLf & _
+                   "Please click AMI Optix → Run MIH (not Run UAP).", _
+                   vbExclamation, "AMI Optix"
+            Exit Sub
+        ElseIf workbookKind = "MIH_INVALID" Then
+            MsgBox "This workbook appears to be an MIH file, but the MIH option is not supported." & vbCrLf & vbCrLf & _
+                   "Expected Prog!K4 = 'Option 1' or 'Option 4'." & vbCrLf & _
+                   "Please fix the workbook or use a valid MIH template.", _
+                   vbExclamation, "AMI Optix"
+            Exit Sub
+        End If
+    ElseIf programNorm = "MIH" Then
+        If workbookKind = "UAP" Then
+            MsgBox "This workbook does not look like an MIH file." & vbCrLf & vbCrLf & _
+                   "Please click AMI Optix → Run UAP (not Run MIH).", _
+                   vbExclamation, "AMI Optix"
+            Exit Sub
+        ElseIf workbookKind = "MIH_INVALID" Then
+            MsgBox "MIH file detected, but MIH option is not supported." & vbCrLf & vbCrLf & _
+                   "Expected Prog!K4 = 'Option 1' or 'Option 4'." & vbCrLf & _
+                   "Please fix the workbook and try again.", _
+                   vbExclamation, "AMI Optix"
+            Exit Sub
+        End If
+    End If
 
     ' Step 0: Check API key is configured
     If Not HasAPIKey() Then
@@ -209,8 +242,32 @@ Public Sub RunOptimizationForProgram(program As String)
     Application.StatusBar = "AMI Optix: Reading unit data..."
     Application.ScreenUpdating = False
 
-    ' Step 2: Read unit data from active workbook
+    ' Step 2: Read unit data from the program sheet (do not rely on the active sheet).
+    Dim prevSheet As Worksheet
+    Dim prevEnableEvents As Boolean
+    Dim dataWs As Worksheet
+    Set prevSheet = ActiveSheet
+    prevEnableEvents = Application.EnableEvents
+
+    Application.EnableEvents = False
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("UAP")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo ErrorHandler
+
+    If Not dataWs Is Nothing Then dataWs.Activate
     Set units = ReadUnitData()
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+    Application.EnableEvents = prevEnableEvents
+
     If units Is Nothing Then GoTo NoUnitsFound
     If units.Count = 0 Then GoTo NoUnitsFound
 
@@ -410,11 +467,13 @@ NoUnitsFound:
 Cleanup:
     Application.StatusBar = False
     Application.ScreenUpdating = True
+    Application.EnableEvents = True
     Exit Sub
 
 ErrorHandler:
     Application.StatusBar = False
     Application.ScreenUpdating = True
+    Application.EnableEvents = True
     MsgBox "Optimization failed: " & Err.Description & vbCrLf & vbCrLf & _
            "Try the web dashboard as backup: " & API_BASE_URL, _
            vbCritical, "AMI Optix"
@@ -460,9 +519,20 @@ Public Function GetUtilitySelectionsForProgram(program As String) As Object
 End Function
 
 Private Function IsTenantPays(value As Variant) As Boolean
+    On Error GoTo Fail
+
+    If IsError(value) Then
+        IsTenantPays = False
+        Exit Function
+    End If
+
     Dim s As String
-    s = UCase(Trim(CStr(value)))
-    IsTenantPays = (s = "TENANT PAYS" Or InStr(s, "TENANT") > 0)
+    s = UCase$(Trim$(CStr(value)))
+    IsTenantPays = (s = "TENANT PAYS" Or InStr(1, s, "TENANT", vbTextCompare) > 0)
+    Exit Function
+
+Fail:
+    IsTenantPays = False
 End Function
 
 Private Function TryReadUAPUtilities(ByRef utils As Object) As Boolean
@@ -707,12 +777,28 @@ Public Sub SaveUtilitySelections(electricity As String, cooking As String, _
 End Sub
 
 Public Function DetectProgramFromWorkbook() As String
-    ' Best-effort program detection:
-    ' - If a sheet named "MIH" exists, treat workbook as MIH.
-    ' - Otherwise, treat as UAP.
+    Dim mihOption As String
+    mihOption = ""
+
+    Dim kind As String
+    kind = DetectWorkbookKind(mihOption)
+
+    If kind = "MIH" Or kind = "MIH_INVALID" Then
+        DetectProgramFromWorkbook = "MIH"
+    Else
+        DetectProgramFromWorkbook = "UAP"
+    End If
+End Function
+
+Public Function DetectWorkbookKind(ByRef mihOptionOut As String) As String
+    ' Returns:
+    ' - "UAP" when the workbook does not look like MIH
+    ' - "MIH" when MIH + Prog exists and Prog!K4 is Option 1/4
+    ' - "MIH_INVALID" when MIH exists but option is missing/unsupported (Option 2/3/etc)
     On Error GoTo Fail
 
-    DetectProgramFromWorkbook = "UAP"
+    mihOptionOut = ""
+    DetectWorkbookKind = "UAP"
 
     If ActiveWorkbook Is Nothing Then Exit Function
 
@@ -721,10 +807,52 @@ Public Function DetectProgramFromWorkbook() As String
     On Error Resume Next
     Set wsMIH = ActiveWorkbook.Worksheets("MIH")
     On Error GoTo Fail
+    If wsMIH Is Nothing Then Exit Function
 
-    If Not wsMIH Is Nothing Then DetectProgramFromWorkbook = "MIH"
+    Dim wsProg As Worksheet
+    Set wsProg = Nothing
+    On Error Resume Next
+    Set wsProg = ActiveWorkbook.Worksheets("Prog")
+    On Error GoTo Fail
+    If wsProg Is Nothing Then
+        DetectWorkbookKind = "MIH_INVALID"
+        Exit Function
+    End If
+
+    Dim raw As Variant
+    raw = wsProg.Range("K4").Value
+    If IsError(raw) Then
+        DetectWorkbookKind = "MIH_INVALID"
+        Exit Function
+    End If
+
+    Dim s As String
+    s = Trim$(CStr(raw))
+    If s = "" Then
+        DetectWorkbookKind = "MIH_INVALID"
+        Exit Function
+    End If
+
+    Dim norm As String
+    norm = UCase$(Replace$(s, "_", " "))
+    norm = Replace$(norm, "  ", " ")
+
+    If norm = "1" Or norm = "OPTION1" Or norm = "OPTION 1" Then
+        mihOptionOut = "Option 1"
+        DetectWorkbookKind = "MIH"
+        Exit Function
+    End If
+    If norm = "4" Or norm = "OPTION4" Or norm = "OPTION 4" Then
+        mihOptionOut = "Option 4"
+        DetectWorkbookKind = "MIH"
+        Exit Function
+    End If
+
+    mihOptionOut = s
+    DetectWorkbookKind = "MIH_INVALID"
     Exit Function
 
 Fail:
-    DetectProgramFromWorkbook = "UAP"
+    mihOptionOut = ""
+    DetectWorkbookKind = "UAP"
 End Function
