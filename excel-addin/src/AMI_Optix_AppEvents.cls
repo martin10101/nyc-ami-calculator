@@ -45,6 +45,7 @@ Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     If g_AMIOptixSuppressEvents Then Exit Sub
     If Target Is Nothing Then Exit Sub
     If TypeName(Sh) <> "Worksheet" Then Exit Sub
+    If Not GetLiveSyncEnabled() Then Exit Sub
 
     Dim ws As Worksheet
     Set ws = Sh
@@ -236,8 +237,9 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     Set dataWs = Nothing
     On Error Resume Next
     If programNorm = "MIH" Then
-        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
-        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
     Else
         Set dataWs = ActiveWorkbook.Worksheets("UAP")
     End If
@@ -396,10 +398,11 @@ NextCell:
     Set dataWs = Nothing
     On Error Resume Next
     If programNorm = "MIH" Then
-        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
         If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("UAP")
         If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
-        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
     Else
         Set dataWs = ActiveWorkbook.Worksheets("UAP")
     End If
@@ -647,10 +650,11 @@ Private Function GetProgramDataSheet(programNorm As String) As Worksheet
 
     On Error Resume Next
     If UCase$(Trim$(programNorm)) = "MIH" Then
-        Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set ws = ActiveWorkbook.Worksheets("MIH")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("RentRoll")
         If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
         If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
-        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
     Else
         Set ws = ActiveWorkbook.Worksheets("UAP")
     End If

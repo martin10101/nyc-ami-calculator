@@ -634,8 +634,9 @@ Public Sub LogScenarioChoiceToRunLog(profileKey As String, programNorm As String
     Dim dataWs As Worksheet
     Set dataWs = Nothing
     If UCase$(Trim$(programNorm)) = "MIH" Then
-        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
-        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
     Else
         Set dataWs = ActiveWorkbook.Worksheets("UAP")
     End If

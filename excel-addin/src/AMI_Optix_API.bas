@@ -157,6 +157,53 @@ ErrorHandler:
     CallEvaluateAPI = ""
 End Function
 
+Public Function CallManualCalculateAPI(payload As String) As String
+    ' Makes POST request to /api/manual_calculate endpoint.
+    ' This endpoint always returns computed rents/totals and diagnostics, even if the assignment is non-compliant.
+    Dim http As Object
+    Dim url As String
+    Dim apiKey As String
+
+    On Error GoTo ErrorHandler
+
+    url = API_BASE_URL & "/api/manual_calculate"
+    apiKey = GetAPIKey()
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 30000, 30000, 120000
+
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Accept", "application/json"
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
+
+    http.send payload
+
+    If http.Status = 200 Then
+        CallManualCalculateAPI = http.responseText
+    ElseIf http.Status = 401 Then
+        MsgBox "Invalid API key." & vbCrLf & vbCrLf & _
+               "Please check your API key in Settings.", _
+               vbCritical, "AMI Optix - Authentication Failed"
+        CallManualCalculateAPI = ""
+    Else
+        Debug.Print "API Error: " & http.Status & " - " & http.statusText
+        Debug.Print "Response: " & http.responseText
+        MsgBox "API Error: " & http.Status & " - " & http.statusText, _
+               vbExclamation, "AMI Optix"
+        CallManualCalculateAPI = ""
+    End If
+
+    Exit Function
+
+ErrorHandler:
+    Debug.Print "HTTP Error: " & Err.Description
+    MsgBox "Connection error: " & Err.Description, vbExclamation, "AMI Optix"
+    CallManualCalculateAPI = ""
+End Function
+
 Public Function BuildAPIPayloadV2( _
     units As Collection, _
     utilities As Object, _

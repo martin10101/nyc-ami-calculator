@@ -176,6 +176,71 @@ Fail:
     MsgBox "Could not record choice: " & Err.Description, vbExclamation, "AMI Optix"
 End Sub
 
+'-------------------------------------------------------------------------------
+' RIBBON CALLBACKS - MANUAL GROUP
+'-------------------------------------------------------------------------------
+
+Public Function Ribbon_GetLiveSync(control As IRibbonControl) As Boolean
+    Ribbon_GetLiveSync = GetLiveSyncEnabled()
+End Function
+
+Public Sub Ribbon_ToggleLiveSync(control As IRibbonControl, pressed As Boolean)
+    ' Toggle Live Sync ON/OFF.
+    ' When OFF: clear Scenario Manual block + clear the program AMI column so the user can type custom values.
+    On Error GoTo Fail
+
+    Dim programNorm As String
+    programNorm = DetectProgramFromWorkbook()
+
+    Call SetLiveSyncEnabled(pressed)
+
+    If Not pressed Then
+        Dim prevEnableEvents As Boolean
+        Dim prevScreenUpdating As Boolean
+        prevEnableEvents = Application.EnableEvents
+        prevScreenUpdating = Application.ScreenUpdating
+
+        Application.EnableEvents = False
+        Application.ScreenUpdating = False
+        g_AMIOptixSuppressEvents = True
+
+        Call ClearScenarioManualBlock
+        Call ClearProgramAmiColumn(programNorm)
+
+        g_AMIOptixSuppressEvents = False
+        Application.ScreenUpdating = prevScreenUpdating
+        Application.EnableEvents = prevEnableEvents
+
+        MsgBox "Live Sync is now OFF." & vbCrLf & vbCrLf & _
+               "- Scenario Manual was cleared." & vbCrLf & _
+               "- The program AMI column was cleared so you can type custom values." & vbCrLf & vbCrLf & _
+               "When you're ready, click AMI Optix → Manual Calculate to compute rents/band mix.", _
+               vbInformation, "AMI Optix"
+    Else
+        MsgBox "Live Sync is now ON." & vbCrLf & vbCrLf & _
+               "Edits in the program AMI column will refresh Scenario Manual automatically.", _
+               vbInformation, "AMI Optix"
+    End If
+    Exit Sub
+
+Fail:
+    MsgBox "Could not toggle Live Sync: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
+Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
+    ' Compute Scenario Manual from the current sheet inputs (even if non-compliant).
+    On Error GoTo Fail
+
+    Dim programNorm As String
+    programNorm = DetectProgramFromWorkbook()
+
+    If Not ManualCalculateScenario(programNorm) Then Exit Sub
+    Exit Sub
+
+Fail:
+    MsgBox "Manual Calculate failed: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
 Private Function ReadCurrentProgramUnits(programNorm As String) As Collection
     ' Reads the live unit table for the program so we can detect the currently applied scenario.
     On Error GoTo Fail
@@ -190,10 +255,11 @@ Private Function ReadCurrentProgramUnits(programNorm As String) As Collection
 
     On Error Resume Next
     If UCase$(Trim$(programNorm)) = "MIH" Then
-        Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set ws = ActiveWorkbook.Worksheets("MIH")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("RentRoll")
         If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
         If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
-        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
     Else
         Set ws = ActiveWorkbook.Worksheets("UAP")
     End If

@@ -697,3 +697,26 @@ Public Sub SaveUtilitySelections(electricity As String, cooking As String, _
     SaveSetting "AMI_Optix", "Utilities", "heat", heat
     SaveSetting "AMI_Optix", "Utilities", "hot_water", hot_water
 End Sub
+
+Public Function DetectProgramFromWorkbook() As String
+    ' Best-effort program detection:
+    ' - If a sheet named "MIH" exists, treat workbook as MIH.
+    ' - Otherwise, treat as UAP.
+    On Error GoTo Fail
+
+    DetectProgramFromWorkbook = "UAP"
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim wsMIH As Worksheet
+    Set wsMIH = Nothing
+    On Error Resume Next
+    Set wsMIH = ActiveWorkbook.Worksheets("MIH")
+    On Error GoTo Fail
+
+    If Not wsMIH Is Nothing Then DetectProgramFromWorkbook = "MIH"
+    Exit Function
+
+Fail:
+    DetectProgramFromWorkbook = "UAP"
+End Function

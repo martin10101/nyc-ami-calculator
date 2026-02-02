@@ -459,6 +459,28 @@ def find_max_revenue_scenario(
         band_combos.extend(list(itertools.combinations(potential_bands, size)))
     band_combos = [sorted(combo) for combo in band_combos]
 
+    # Pre-filter band mixes that cannot possibly satisfy minimum share thresholds.
+    # Example: if the rules require >=10% at <=40% AMI, any viable combo MUST include 40.
+    if share_thresholds:
+        filtered = band_combos
+        for threshold in share_thresholds:
+            try:
+                min_share = threshold.get('min_share')
+                if min_share is None or float(min_share) <= 0:
+                    continue
+                band_threshold = int(threshold.get('band_threshold') or 0)
+                filtered = [combo for combo in filtered if any(int(b) <= band_threshold for b in combo)]
+            except Exception:
+                continue
+        band_combos = filtered
+
+    # Prefer checking higher-band mixes first for rent maximization (usually finds good solutions faster).
+    band_combos = sorted(
+        band_combos,
+        key=lambda combo: (max(combo), sum(combo) / len(combo), -min(combo)),
+        reverse=True,
+    )
+
     max_combo_checks = optimization_rules.get('max_revenue_combo_checks')
     if max_combo_checks is None:
         max_combo_checks = optimization_rules.get('max_band_combo_checks', 50)

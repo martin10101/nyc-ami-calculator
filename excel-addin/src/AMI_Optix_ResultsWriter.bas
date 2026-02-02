@@ -465,8 +465,9 @@ Public Function UpdateManualScenario(Optional undoOnInvalid As Boolean = False, 
     Set dataWs = Nothing
     On Error Resume Next
     If programNorm = "MIH" Then
-        Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
-        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
     Else
         Set dataWs = ActiveWorkbook.Worksheets("UAP")
     End If
@@ -561,6 +562,196 @@ Private Function GetOrCreateScenariosSheet() As Worksheet
     Set GetOrCreateScenariosSheet = ws
 End Function
 
+Public Sub ClearScenarioManualBlock()
+    ' Clears only the Scenario Manual block (top of AMI Scenarios), leaving Scenario 1/2/3... intact.
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Sub
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateScenariosSheet()
+    ClearManualBlock ws
+    Exit Sub
+
+Fail:
+End Sub
+
+Public Sub ClearProgramAmiColumn(programNorm As String)
+    ' Clears the entire AMI input column (below header) on the active program sheet (UAP/MIH).
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Sub
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    If UCase$(Trim$(programNorm)) = "MIH" Then
+        ' Prefer MIH sheet first (per client request), fallback only if needed.
+        Set ws = ActiveWorkbook.Worksheets("MIH")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+    Else
+        Set ws = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo Fail
+
+    If ws Is Nothing Then GoTo Cleanup
+
+    ws.Activate
+
+    ' Force a column map so GetAMIColumn/GetHeaderRow are valid even if zero units have AMI values.
+    Dim dummy As Collection
+    Set dummy = ReadUnitData()
+
+    Dim dataWs As Worksheet
+    Dim headerRow As Long
+    Dim amiCol As Long
+    Set dataWs = GetDataSheet()
+    headerRow = GetHeaderRow()
+    amiCol = GetAMIColumn()
+
+    If dataWs Is Nothing Or headerRow = 0 Or amiCol = 0 Then GoTo Cleanup
+
+    Dim used As Range
+    Set used = dataWs.UsedRange
+
+    Dim lastRow As Long
+    lastRow = used.row + used.Rows.Count - 1
+    If lastRow < headerRow + 1 Then lastRow = headerRow + 1
+
+    Dim rng As Range
+    Set rng = dataWs.Range(dataWs.Cells(headerRow + 1, amiCol), dataWs.Cells(lastRow, amiCol))
+    rng.ClearContents
+    rng.Interior.Pattern = xlNone
+
+Cleanup:
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+    Exit Sub
+
+Fail:
+    On Error Resume Next
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+End Sub
+
+Public Function ManualCalculateScenario(Optional programOverride As String = "") As Boolean
+    ' Computes the Scenario Manual results from the current sheet inputs without enforcing constraints.
+    ' Uses /api/manual_calculate so we can show tradeoffs instead of reverting edits.
+    On Error GoTo ErrorHandler
+
+    ManualCalculateScenario = False
+
+    If Not HasAPIKey() Then
+        MsgBox "API key is not configured." & vbCrLf & vbCrLf & _
+               "Click AMI Optix → API Settings to set your key.", _
+               vbExclamation, "AMI Optix"
+        Exit Function
+    End If
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim programNorm As String
+    programNorm = UCase$(Trim$(programOverride))
+    If programNorm <> "UAP" And programNorm <> "MIH" Then
+        programNorm = DetectProgramFromWorkbook()
+    End If
+
+    Dim mihOption As String
+    Dim mihResidentialSF As Double
+    Dim mihMaxBandPercent As Long
+    mihOption = ""
+    mihResidentialSF = 0
+    mihMaxBandPercent = 0
+    If programNorm = "MIH" Then
+        If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Function
+    End If
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    ' Read units from the program sheet (prefer template sheet by name).
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        ' Prefer MIH sheet first.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("UAP")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo ErrorHandler
+    If dataWs Is Nothing Then Exit Function
+
+    dataWs.Activate
+    Dim units As Collection
+    Set units = ReadUnitData()
+    prevSheet.Activate
+
+    If units Is Nothing Or units.Count = 0 Then
+        MsgBox "Could not read units from the workbook." & vbCrLf & vbCrLf & _
+               "Make sure the AMI column has numeric values for the units you want to calculate.", _
+               vbExclamation, "AMI Optix"
+        Exit Function
+    End If
+
+    Dim utilities As Object
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
+
+    Dim payload As String
+    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
+
+    Dim response As String
+    response = CallManualCalculateAPI(payload)
+    If response = "" Then Exit Function
+
+    Dim evalResult As Object
+    Set evalResult = ParseJSON(response)
+    If evalResult Is Nothing Then Exit Function
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateScenariosSheet()
+
+    Dim prevEnableEvents As Boolean
+    Dim prevScreenUpdating As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevScreenUpdating = Application.ScreenUpdating
+
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    Dim headerLabel As String
+    If GetLiveSyncEnabled() Then
+        headerLabel = "SCENARIO MANUAL (LIVE SYNC)"
+    Else
+        headerLabel = "SCENARIO MANUAL (CUSTOM - LIVE SYNC OFF)"
+    End If
+
+    Call WriteManualScenarioBlockFromEvaluate(ws, evalResult, headerLabel)
+
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.EnableEvents = prevEnableEvents
+
+    ' Ensure Avg AMI display shows sufficient precision (e.g., 59.96% vs 60.0%).
+    On Error Resume Next
+    EnsureProvidedAvgAmiPrecision
+    On Error GoTo 0
+
+    ws.Activate
+    ManualCalculateScenario = True
+    Exit Function
+
+ErrorHandler:
+    On Error Resume Next
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ManualCalculateScenario = False
+End Function
+
 Private Sub ClearManualBlock(ws As Worksheet)
     ' Clears only the top "Scenario Manual" region without wiping the scenarios below.
     Dim firstScenarioRow As Long
@@ -649,7 +840,7 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     WriteManualScenarioBlockFromResult = row
 End Function
 
-Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object) As Long
+Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object, Optional headerLabel As String = "SCENARIO MANUAL (LIVE SYNC)") As Long
     ClearManualBlock ws
 
     Dim row As Long
@@ -663,7 +854,7 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     row = WriteUtilitySettings(ws, row)
     row = row + 1
 
-    ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC)"
+    ws.Cells(row, 1).Value = headerLabel
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 14
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
@@ -683,6 +874,20 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
             Else
                 scenario("bands") = summary("bands_used")
             End If
+        End If
+    End If
+    If evalResult.Exists("metrics") Then
+        If IsObject(evalResult("metrics")) Then
+            Set scenario("metrics") = evalResult("metrics")
+        Else
+            scenario("metrics") = evalResult("metrics")
+        End If
+    End If
+    If evalResult.Exists("tradeoffs") Then
+        If IsObject(evalResult("tradeoffs")) Then
+            Set scenario("tradeoffs") = evalResult("tradeoffs")
+        Else
+            scenario("tradeoffs") = evalResult("tradeoffs")
         End If
     End If
     If evalResult.Exists("assignments") Then

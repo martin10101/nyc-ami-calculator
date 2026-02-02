@@ -400,6 +400,48 @@ def _validate_assignment_payload(
     return len(errors) == 0, errors, summary
 
 
+def _build_metrics_from_assignments(assignments: list[dict]) -> dict:
+    """Compute lightweight scenario metrics for display in Excel (band mix, totals, etc.)."""
+    total_sf = 0.0
+    waami_num = 0.0
+    band_stats: dict[int, dict] = {}
+
+    for unit in assignments or []:
+        try:
+            net_sf = float(unit.get('net_sf') or 0.0)
+        except Exception:
+            net_sf = 0.0
+        try:
+            assigned = float(unit.get('assigned_ami') or 0.0)
+        except Exception:
+            assigned = 0.0
+
+        total_sf += net_sf
+        waami_num += net_sf * assigned
+
+        band = int(round(assigned * 100))
+        stats = band_stats.setdefault(band, {'band': band, 'units': 0, 'net_sf': 0.0})
+        stats['units'] += 1
+        stats['net_sf'] += net_sf
+
+    waami = (waami_num / total_sf) if total_sf else 0.0
+    band_mix = []
+    for band in sorted(band_stats.keys()):
+        stats = band_stats[band]
+        share = (stats['net_sf'] / total_sf) if total_sf else 0.0
+        band_mix.append({**stats, 'share_of_sf': share})
+
+    return {
+        'total_units': len(assignments or []),
+        'total_sf': total_sf,
+        'revenue_score': waami_num,
+        'waami_percent': waami * 100.0,
+        'band_mix': band_mix,
+        'total_monthly_rent': 0.0,
+        'total_annual_rent': 0.0,
+    }
+
+
 @app.route('/healthz')
 def healthcheck():
     """Lightweight health endpoint for uptime checks."""
@@ -570,6 +612,10 @@ def optimize_units():
                 "notes": notes
             }), 200
 
+        # Keep the full strict scenario set around as a fallback so we can top up to ~6 scenarios
+        # even if edge/rent-max variants can't produce enough distinct mixes.
+        strict_scenarios_full = copy.deepcopy(scenarios or {})
+
         # Keep strict output client-friendly: cap strict scenarios to 3 (best + 2 variants).
         # This prevents Excel from being overwhelmed while still showing meaningful alternatives.
         try:
@@ -630,18 +676,21 @@ def optimize_units():
         # Apply rent calculations to each scenario
         if rent_schedule:
             _apply_rents_to_scenarios(scenarios)
+            if strict_scenarios_full:
+                _apply_rents_to_scenarios(strict_scenarios_full)
             if baseline_scenarios:
                 _apply_rents_to_scenarios(baseline_scenarios)
 
-            # --- Edge scenarios (UAP only) ---
-            # Generate up to N "edge" scenarios by relaxing ONE constraint at a time to improve rent,
-            # while never exceeding the WAAMI cap (60%) and never using the 50% AMI band.
-            if program_norm == 'UAP':
+            # --- Edge / relaxed scenarios (UAP + MIH) ---
+            # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
+            # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH
+            # we keep share rules fixed and only relax the WAAMI floor (down to 58%).
+            if program_norm in ('UAP', 'MIH'):
                 try:
                     strict_config = copy.deepcopy(config)
                     strict_rules = strict_config.get('optimization_rules', {}) or {}
 
-                    edge_min_waami = 0.575  # never go below 57.50% in edge scenarios
+                    edge_min_waami = 0.58  # never go below 58.00% in relaxed scenarios
 
                     def _canon_key(canon) -> tuple | None:
                         if not canon:
@@ -677,14 +726,9 @@ def optimize_units():
                         if len(edge_keys_added) >= target_edge_count:
                             return False
 
-                        # Ensure the rent search has enough time to explore (default is capped to 1s).
+                        # Keep the rent search bounded and responsive.
+                        # find_max_revenue_scenario applies its own conservative defaults if these are unset.
                         edge_config = copy.deepcopy(edge_config)
-                        edge_cfg_rules = edge_config.get('optimization_rules', {}) or {}
-                        if edge_cfg_rules.get('max_revenue_time_limit_seconds') is None:
-                            edge_cfg_rules['max_revenue_time_limit_seconds'] = max(float(edge_cfg_rules.get('scenario_time_limit_seconds', 3) or 3.0), 3.0)
-                        if edge_cfg_rules.get('max_revenue_combo_checks') is None:
-                            edge_cfg_rules['max_revenue_combo_checks'] = max(int(edge_cfg_rules.get('max_band_combo_checks', 50) or 50), 80)
-                        edge_config['optimization_rules'] = edge_cfg_rules
 
                         candidate = find_max_revenue_scenario(
                             df_units,
@@ -725,81 +769,129 @@ def optimize_units():
                         return True
 
                     # Strict "Max Revenue" (no relaxation): rent-maximizing scenario under strict rules.
-                    strict_floor = float(strict_rules.get('waami_floor') or 0.591)
+                    waami_cap_percent = float(strict_rules.get('waami_cap_percent') or 60.0)
+                    if program_norm == 'MIH':
+                        # MIH templates display compliance against ~60% Avg AMI when the cap is 60.
+                        # Use 60% as the "strict" baseline so relaxed scenarios can show tradeoffs below 60.
+                        if waami_cap_percent <= 60.0001:
+                            strict_floor = 0.6
+                        else:
+                            strict_floor = float(strict_rules.get('waami_floor') or edge_min_waami)
+
+                        strict_cfg_rules = strict_config.get('optimization_rules', {}) or {}
+                        strict_cfg_rules['waami_floor'] = float(strict_floor)
+                        strict_config['optimization_rules'] = strict_cfg_rules
+                    else:
+                        strict_floor = float(strict_rules.get('waami_floor') or 0.591)
                     _maybe_add_edge(
                         "max_revenue",
                         config,
                         waami_floor=strict_floor,
-                        edge_settings={"mode": "rent_max", "relaxed": False},
+                        edge_settings={"mode": "rent_max", "relaxed": False, "waami_floor": float(strict_floor)},
                     )
 
-                    # Edge 1: relax max share at <=40% (try 22% -> 30%).
-                    strict_min_share = strict_rules.get('deep_affordability_min_share')
-                    strict_max_share = strict_rules.get('deep_affordability_max_share')
-                    if len(edge_keys_added) < target_edge_count:
-                        for max_share in (0.22, 0.23, 0.24, 0.25, 0.26, 0.28, 0.3):
-                            if strict_max_share is not None and float(max_share) <= float(strict_max_share) + 1e-12:
-                                continue
+                    if program_norm == 'UAP':
+                        # Edge 1: relax max share at <=40% (try 22% -> 30%).
+                        strict_min_share = strict_rules.get('deep_affordability_min_share')
+                        strict_max_share = strict_rules.get('deep_affordability_max_share')
+                        if len(edge_keys_added) < target_edge_count:
+                            for max_share in (0.22, 0.23, 0.24, 0.25, 0.26, 0.28, 0.3):
+                                if strict_max_share is not None and float(max_share) <= float(strict_max_share) + 1e-12:
+                                    continue
+                                edge_cfg = copy.deepcopy(config)
+                                edge_cfg['optimization_rules']['deep_affordability_min_share'] = strict_min_share
+                                edge_cfg['optimization_rules']['deep_affordability_max_share'] = float(max_share)
+                                if _maybe_add_edge(
+                                    f"edge_max_share_{int(round(max_share*100))}",
+                                    edge_cfg,
+                                    waami_floor=strict_floor,
+                                    edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_max_share": float(max_share)},
+                                ):
+                                    break
+
+                        # Edge 2: relax min share at <=40% (try 19.9% down to 15%).
+                        if len(edge_keys_added) < target_edge_count:
+                            for min_share in (0.199, 0.198, 0.195, 0.19, 0.185, 0.18, 0.175, 0.17, 0.165, 0.16, 0.15):
+                                if strict_min_share is not None and float(min_share) >= float(strict_min_share) - 1e-12:
+                                    continue
+                                edge_cfg = copy.deepcopy(config)
+                                edge_cfg['optimization_rules']['deep_affordability_min_share'] = float(min_share)
+                                edge_cfg['optimization_rules']['deep_affordability_max_share'] = strict_max_share
+                                if _maybe_add_edge(
+                                    f"edge_min_share_{int(round(min_share*1000))}",
+                                    edge_cfg,
+                                    waami_floor=strict_floor,
+                                    edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_min_share": float(min_share)},
+                                ):
+                                    break
+
+                        # Edge 3: relax WAAMI floor only if we still don't have enough edge scenarios.
+                        if len(edge_keys_added) < target_edge_count:
+                            for floor in (0.589, 0.585, 0.58):
+                                if float(floor) + 1e-12 < edge_min_waami:
+                                    continue
+                                if float(floor) >= strict_floor - 1e-12:
+                                    continue
+                                _maybe_add_edge(
+                                    f"edge_waami_floor_{int(round(floor*1000))}",
+                                    config,
+                                    waami_floor=float(floor),
+                                    edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
+                                )
+
+                        # Edge 4: disable deep affordability share constraints entirely.
+                        if len(edge_keys_added) < target_edge_count:
                             edge_cfg = copy.deepcopy(config)
-                            edge_cfg['optimization_rules']['deep_affordability_min_share'] = strict_min_share
-                            edge_cfg['optimization_rules']['deep_affordability_max_share'] = float(max_share)
-                            if _maybe_add_edge(
-                                f"edge_max_share_{int(round(max_share*100))}",
+                            edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
+                            edge_cfg_rules['deep_affordability_min_share'] = None
+                            edge_cfg_rules['deep_affordability_max_share'] = None
+                            edge_cfg['optimization_rules'] = edge_cfg_rules
+                            _maybe_add_edge(
+                                "edge_no_deep_aff_share",
                                 edge_cfg,
                                 waami_floor=strict_floor,
-                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_max_share": float(max_share)},
-                            ):
-                                break
-
-                    # Edge 2: relax min share at <=40% (try 19.9% down to 15%).
-                    if len(edge_keys_added) < target_edge_count:
-                        for min_share in (0.199, 0.198, 0.195, 0.19, 0.185, 0.18, 0.175, 0.17, 0.165, 0.16, 0.15):
-                            if strict_min_share is not None and float(min_share) >= float(strict_min_share) - 1e-12:
-                                continue
-                            edge_cfg = copy.deepcopy(config)
-                            edge_cfg['optimization_rules']['deep_affordability_min_share'] = float(min_share)
-                            edge_cfg['optimization_rules']['deep_affordability_max_share'] = strict_max_share
-                            if _maybe_add_edge(
-                                f"edge_min_share_{int(round(min_share*1000))}",
-                                edge_cfg,
-                                waami_floor=strict_floor,
-                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_min_share": float(min_share)},
-                            ):
-                                break
-
-                    # Edge 3: relax WAAMI floor only if we still don't have enough edge scenarios.
-                    if len(edge_keys_added) < target_edge_count:
-                        for floor in (0.589, 0.585, 0.58, 0.575):
-                            if float(floor) + 1e-12 < edge_min_waami:
-                                continue
-                            if float(floor) >= strict_floor - 1e-12:
-                                continue
-                            if _maybe_add_edge(
-                                f"edge_waami_floor_{int(round(floor*1000))}",
-                                config,
-                                waami_floor=float(floor),
-                                edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
-                            ):
-                                break
-
-                    # Edge 4: disable deep affordability share constraints entirely.
-                    if len(edge_keys_added) < target_edge_count:
-                        edge_cfg = copy.deepcopy(config)
-                        edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
-                        edge_cfg_rules['deep_affordability_min_share'] = None
-                        edge_cfg_rules['deep_affordability_max_share'] = None
-                        edge_cfg['optimization_rules'] = edge_cfg_rules
-                        _maybe_add_edge(
-                            "edge_no_deep_aff_share",
-                            edge_cfg,
-                            waami_floor=strict_floor,
-                            edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_share": None},
-                        )
+                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_share": None},
+                            )
+                    elif program_norm == 'MIH':
+                        # MIH relaxed scenarios: keep share rules fixed; only relax WAAMI floor down to 58%.
+                        if len(edge_keys_added) < target_edge_count:
+                            for floor in (0.59, 0.58):
+                                if float(floor) + 1e-12 < edge_min_waami:
+                                    continue
+                                if float(floor) >= strict_floor - 1e-12:
+                                    continue
+                                _maybe_add_edge(
+                                    f"edge_waami_floor_{int(round(floor*1000))}",
+                                    config,
+                                    waami_floor=float(floor),
+                                    edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
+                                )
+                                if len(edge_keys_added) >= target_edge_count:
+                                    break
 
                     if target_edge_count > 0 and len(edge_keys_added) < target_edge_count:
                         notes.append(
                             f"Edge scenarios: generated {len(edge_keys_added)} of {target_edge_count}; remaining relaxations were infeasible or produced no distinct unit mix."
                         )
+
+                    # Top-up: If we still have fewer than the target scenario count, append additional strict
+                    # variants (e.g., client_oriented / alternative) so Excel users still see ~6 options.
+                    if strict_scenarios_full and len(scenarios or {}) < target_total_count:
+                        preferred_fill_keys = ["client_oriented", "alternative", "best_3_band", "best_2_band"]
+                        for fill_key in preferred_fill_keys:
+                            if len(scenarios) >= target_total_count:
+                                break
+                            if fill_key in scenarios:
+                                continue
+                            candidate = strict_scenarios_full.get(fill_key)
+                            if not candidate:
+                                continue
+                            ck = _canon_key(candidate.get('canonical_assignments'))
+                            if ck and ck in existing_canons:
+                                continue
+                            scenarios[fill_key] = candidate
+                            if ck:
+                                existing_canons.add(ck)
                 except Exception as e:
                     notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
 
@@ -956,13 +1048,29 @@ def evaluate_assignment():
             rent_schedule = load_rent_schedule(rent_calc_path)
 
         assignments = df_units.to_dict(orient='records')
+        # Normalize assigned_ami to the 0-2 range (support 60/120 inputs as well as 0.6/1.2).
+        for a in assignments:
+            try:
+                v = float(a.get('assigned_ami'))
+                if v > 2.0:
+                    a['assigned_ami'] = v / 100.0
+            except Exception:
+                pass
+
+        metrics = _build_metrics_from_assignments(assignments)
         rent_totals = None
         if rent_schedule:
             assignments, rent_totals = compute_rents_for_assignments(rent_schedule, assignments, utilities_clean)
+            try:
+                metrics['total_monthly_rent'] = float((rent_totals or {}).get('net_monthly') or 0.0)
+                metrics['total_annual_rent'] = float((rent_totals or {}).get('net_annual') or 0.0)
+            except Exception:
+                pass
 
         return jsonify({
             "success": True,
             "summary": summary,
+            "metrics": _sanitize_for_json(metrics),
             "assignments": _sanitize_for_json(assignments),
             "rent_totals": _sanitize_for_json(rent_totals),
             "utility_selections": utilities_clean,
@@ -974,6 +1082,112 @@ def evaluate_assignment():
     except Exception as e:
         app.logger.exception("evaluate_assignment failed: %s", e)
         return jsonify({"error": f"Evaluation failed: {str(e)}"}), 500
+
+
+@app.route('/api/manual_calculate', methods=['POST'])
+def manual_calculate_assignment():
+    """
+    Compute rents/totals + diagnostics for a user-specified assignment, even if it violates program rules.
+
+    This powers the Excel add-in "Live Sync OFF" workflow where the user types AMIs directly into the
+    program sheet and clicks a button to compute the resulting rents/band mix without auto-reverting.
+    """
+    auth_error = _validate_api_key()
+    if auth_error:
+        return auth_error
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body must be JSON"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
+
+    units = data.get('units', [])
+    if not units or not isinstance(units, list):
+        return jsonify({"error": "Missing or invalid 'units' array"}), 400
+
+    utilities = data.get('utilities', {})
+    utilities_clean = {
+        'electricity': utilities.get('electricity', 'na'),
+        'cooking': utilities.get('cooking', 'na'),
+        'heat': utilities.get('heat', 'na'),
+        'hot_water': utilities.get('hot_water', 'na'),
+    }
+
+    program = (data.get('program') or 'UAP')
+    mih_option = data.get('mih_option')
+    mih_residential_sf = data.get('mih_residential_sf')
+    mih_max_band_percent = data.get('mih_max_band_percent')
+
+    try:
+        df_units = pd.DataFrame(units)
+        if 'assigned_ami' not in df_units.columns:
+            return jsonify({"error": "Each unit must include 'assigned_ami'."}), 400
+
+        df_units['unit_id'] = df_units['unit_id'].astype(str)
+        df_units['bedrooms'] = pd.to_numeric(df_units.get('bedrooms'), errors='coerce')
+        df_units['net_sf'] = pd.to_numeric(df_units.get('net_sf'), errors='coerce')
+        df_units['assigned_ami'] = pd.to_numeric(df_units.get('assigned_ami'), errors='coerce')
+
+        # Normalize assigned_ami to 0-2 range (support 60/120 inputs).
+        df_units.loc[df_units['assigned_ami'] > 2.0, 'assigned_ami'] = df_units['assigned_ami'] / 100.0
+
+        config = load_config()
+        try:
+            config = _build_program_config(
+                config,
+                program=program,
+                mih_option=mih_option,
+                mih_residential_sf=mih_residential_sf,
+                mih_max_band_percent=mih_max_band_percent,
+            )
+        except ValueError as e:
+            return jsonify({
+                "success": False,
+                "tradeoffs": [str(e)],
+                "summary": {},
+                "metrics": {},
+                "assignments": [],
+                "rent_totals": None,
+            }), 200
+
+        is_valid, errors, summary = _validate_assignment_payload(units, config)
+
+        assignments = df_units.to_dict(orient='records')
+        metrics = _build_metrics_from_assignments(assignments)
+
+        rent_schedule = None
+        rent_calc_path = _get_active_rent_calculator_path()
+        if rent_calc_path:
+            rent_schedule = load_rent_schedule(rent_calc_path)
+
+        rent_totals = None
+        if rent_schedule:
+            assignments, rent_totals = compute_rents_for_assignments(rent_schedule, assignments, utilities_clean)
+            try:
+                metrics['total_monthly_rent'] = float((rent_totals or {}).get('net_monthly') or 0.0)
+                metrics['total_annual_rent'] = float((rent_totals or {}).get('net_annual') or 0.0)
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": True,
+            "is_valid": bool(is_valid),
+            "tradeoffs": [] if is_valid else errors[:12],
+            "summary": summary,
+            "metrics": _sanitize_for_json(metrics),
+            "assignments": _sanitize_for_json(assignments),
+            "rent_totals": _sanitize_for_json(rent_totals),
+            "utility_selections": utilities_clean,
+            "program": program,
+            "mih_option": mih_option,
+            "mih_residential_sf": mih_residential_sf,
+        })
+
+    except Exception as e:
+        app.logger.exception("manual_calculate_assignment failed: %s", e)
+        return jsonify({"error": f"Manual calculation failed: {str(e)}"}), 500
 
 
 @app.route('/api/analyze', methods=['POST'])
