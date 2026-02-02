@@ -94,7 +94,10 @@ Public Sub OnViewScenariosClick(control As IRibbonControl)
     If ws Is Nothing Then
         MsgBox "No scenarios available. Run Optimize first.", vbInformation, "AMI Optix"
     Else
+        On Error Resume Next
+        ws.Visible = xlSheetVisible
         ws.Activate
+        On Error GoTo ErrorHandler
     End If
     Exit Sub
 
@@ -383,7 +386,12 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Navigate to scenarios sheet
     On Error Resume Next
-    ActiveWorkbook.Worksheets("AMI Scenarios").Activate
+    Dim wsScenarios As Worksheet
+    Set wsScenarios = ActiveWorkbook.Worksheets("AMI Scenarios")
+    If Not wsScenarios Is Nothing Then
+        wsScenarios.Visible = xlSheetVisible
+        wsScenarios.Activate
+    End If
     On Error GoTo 0
 
     Exit Sub

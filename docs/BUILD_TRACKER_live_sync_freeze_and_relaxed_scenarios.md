@@ -48,3 +48,8 @@ Branch: `feature/results-overhaul-2026-01-28`
 ## Remaining questions / follow-ups
 - Decide how we want to label “strict vs relaxed” in the UI when the 6th scenario is a strict fallback (e.g., `client_oriented`).
 - Confirm the desired WAAMI floors for “relaxed” scenarios (currently we target 59% + 58% floors, but 58% may be non-distinct for some projects).
+
+## Fixes (2026-02-02)
+- Fixed Excel ribbon `getPressed` callback signature for the Live Sync toggle (was causing: “Wrong number of arguments or invalid property assignment” when clicking the AMI Optix tab).
+- Forced the `AMI Scenarios` sheet to `xlSheetVisible` whenever the add-in creates/uses/activates it (prevents the tab from “disappearing” in client workbooks that hide sheets via macros).
+- Preserved the user’s active sheet after applying a scenario (avoids confusion where it looks like the scenarios sheet “flew away”).

@@ -233,6 +233,10 @@ Public Sub CreateScenariosSheet(result As Object)
     Else
         ws.Cells.Clear
     End If
+    ' Some client workbooks hide sheets via macros; force visibility so the tab doesn't "disappear".
+    On Error Resume Next
+    ws.Visible = xlSheetVisible
+    On Error GoTo ErrorHandler
 
     If result Is Nothing Then GoTo ErrorHandler
     If Not result.Exists("scenarios") Then GoTo ErrorHandler
@@ -559,6 +563,10 @@ Private Function GetOrCreateScenariosSheet() As Worksheet
         Set ws = ActiveWorkbook.Worksheets.Add(After:=ActiveWorkbook.Worksheets(ActiveWorkbook.Worksheets.Count))
         ws.Name = "AMI Scenarios"
     End If
+    ' Some client workbooks hide sheets via macros; force visibility so the tab doesn't "disappear".
+    On Error Resume Next
+    ws.Visible = xlSheetVisible
+    On Error GoTo 0
     Set GetOrCreateScenariosSheet = ws
 End Function
 
@@ -1460,6 +1468,9 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
     ' Applies a specific scenario by its key
     ' Called from scenario sheet buttons
 
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
     If g_LastScenarios Is Nothing Then
         MsgBox "No scenarios available. Run Optimize first.", vbExclamation, "AMI Optix"
         Exit Sub
@@ -1595,8 +1606,10 @@ ApplyCleanup:
 
     MsgBox msg, vbInformation, "AMI Optix"
 
-    ' Switch to data sheet
-    ws.Activate
+    ' Preserve where the user was working (avoid the "AMI Scenarios tab disappeared" confusion).
+    On Error Resume Next
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+    On Error GoTo 0
 End Sub
 
 Private Sub EnsureProvidedAvgAmiPrecision()

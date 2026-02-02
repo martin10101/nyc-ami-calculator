@@ -180,9 +180,9 @@ End Sub
 ' RIBBON CALLBACKS - MANUAL GROUP
 '-------------------------------------------------------------------------------
 
-Public Function Ribbon_GetLiveSync(control As IRibbonControl) As Boolean
-    Ribbon_GetLiveSync = GetLiveSyncEnabled()
-End Function
+Public Sub Ribbon_GetLiveSync(control As IRibbonControl, ByRef returnedVal As Boolean)
+    returnedVal = GetLiveSyncEnabled()
+End Sub
 
 Public Sub Ribbon_ToggleLiveSync(control As IRibbonControl, pressed As Boolean)
     ' Toggle Live Sync ON/OFF.
@@ -1069,6 +1069,12 @@ Public Sub ShowScenarioSelector()
                vbInformation, "AMI Optix"
         Exit Sub
     End If
+
+    ' Some client workbooks hide sheets via macros; force visibility so the tab doesn't "disappear".
+    On Error Resume Next
+    ws.Visible = xlSheetVisible
+    ws.Activate
+    On Error GoTo 0
 
     ' Show simple scenario list (InputBox-based)
     ShowScenarioList
