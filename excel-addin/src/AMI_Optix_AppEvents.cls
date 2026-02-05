@@ -180,20 +180,24 @@ Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolea
 End Function
 
 Private Function ChangeIsManualScenarioAMI(ws As Worksheet, target As Range) As Boolean
-    Dim amiCells As Range
-    Set amiCells = Intersect(target, ws.Columns(6))
-    If amiCells Is Nothing Then Exit Function
-
     Dim headerRow As Long
     headerRow = FindManualTableHeaderRow(ws)
     If headerRow = 0 Then Exit Function
+
+    Dim amiCol As Long
+    amiCol = FindAMIColumn(ws, headerRow)
+    If amiCol = 0 Then Exit Function
+
+    Dim amiCells As Range
+    Set amiCells = Intersect(target, ws.Columns(amiCol))
+    If amiCells Is Nothing Then Exit Function
 
     Dim lastRow As Long
     lastRow = FindManualTableLastRow(ws, headerRow)
     If lastRow = 0 Then Exit Function
 
     Dim tableAmi As Range
-    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, 6), ws.Cells(lastRow, 6))
+    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(lastRow, amiCol))
 
     Dim inTable As Range
     Set inTable = Intersect(amiCells, tableAmi)
@@ -349,16 +353,20 @@ Private Sub HandleManualScenarioEditRange(ws As Worksheet, target As Range)
     headerRow = FindManualTableHeaderRow(ws)
     If headerRow = 0 Then Exit Sub
 
+    Dim amiCol As Long
+    amiCol = FindAMIColumn(ws, headerRow)
+    If amiCol = 0 Then Exit Sub
+
     Dim lastRow As Long
     lastRow = FindManualTableLastRow(ws, headerRow)
     If lastRow = 0 Then Exit Sub
 
     Dim amiCells As Range
-    Set amiCells = Intersect(target, ws.Columns(6))
+    Set amiCells = Intersect(target, ws.Columns(amiCol))
     If amiCells Is Nothing Then Exit Sub
 
     Dim tableAmi As Range
-    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, 6), ws.Cells(lastRow, 6))
+    Set tableAmi = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(lastRow, amiCol))
 
     Dim inTable As Range
     Set inTable = Intersect(amiCells, tableAmi)
@@ -472,8 +480,8 @@ NextCell:
                     hasFallback = TryGetAmiValueFromWorksheet(dataWs, CStr(key), fallbackValue)
                 End If
                 If hasFallback Then
-                    ws.Cells(CLng(changeRows(key)), 6).Value = fallbackValue
-                    ws.Cells(CLng(changeRows(key)), 6).NumberFormat = "0%"
+                    ws.Cells(CLng(changeRows(key)), amiCol).Value = fallbackValue
+                    ws.Cells(CLng(changeRows(key)), amiCol).NumberFormat = "0%"
                 End If
             Next key
 
@@ -719,18 +727,22 @@ Private Function FindManualTableHeaderRow(ws As Worksheet) As Long
 
     If labelRow > 0 Then
         For r = labelRow + 1 To labelRow + 80
-            If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" And UCase$(Trim$(CStr(ws.Cells(r, 6).Value))) = "AMI" Then
-                FindManualTableHeaderRow = r
-                Exit Function
+            If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" Then
+                If FindAMIColumn(ws, r) > 0 Then
+                    FindManualTableHeaderRow = r
+                    Exit Function
+                End If
             End If
         Next r
     End If
 
     ' Fallback: search near the top of the sheet.
     For r = 1 To 200
-        If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" And UCase$(Trim$(CStr(ws.Cells(r, 6).Value))) = "AMI" Then
-            FindManualTableHeaderRow = r
-            Exit Function
+        If UCase$(Trim$(CStr(ws.Cells(r, 1).Value))) = "UNIT" Then
+            If FindAMIColumn(ws, r) > 0 Then
+                FindManualTableHeaderRow = r
+                Exit Function
+            End If
         End If
     Next r
 
