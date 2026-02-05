@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from ortools.sat.python import cp_model
 import itertools
@@ -304,14 +305,35 @@ def _solve_single_scenario(
     else:
         return {"status": "NO_SOLUTION"}
 
-    solver = cp_model.CpSolver()
-    solver.parameters.num_workers = 1
-    solver.parameters.random_seed = 0
+    def _configure_solver(solver_obj: cp_model.CpSolver, time_limit_seconds: Optional[float]) -> None:
+        try:
+            workers = int(float(str(os.environ.get("AMI_OPTIX_SOLVER_WORKERS", "1")).strip() or "1"))
+        except Exception:
+            workers = 1
+        cpu_count = os.cpu_count() or 1
+        workers = max(1, min(int(workers), int(cpu_count)))
+        solver_obj.parameters.num_workers = int(workers)
+        solver_obj.parameters.random_seed = 0
+        if time_limit_seconds is not None:
+            try:
+                solver_obj.parameters.max_time_in_seconds = float(time_limit_seconds)
+            except Exception:
+                pass
+
     time_limit = optimization_rules.get('scenario_time_limit_seconds')
-    if time_limit:
-        solver.parameters.max_time_in_seconds = time_limit
+    time_limit_seconds: Optional[float] = None
+    if time_limit is not None:
+        try:
+            time_limit_seconds = float(time_limit)
+        except Exception:
+            time_limit_seconds = None
+    if time_limit_seconds is not None and time_limit_seconds <= 0:
+        time_limit_seconds = None
+
+    solver_pass1 = cp_model.CpSolver()
+    _configure_solver(solver_pass1, time_limit_seconds)
     try:
-        status = solver.Solve(model)
+        status = solver_pass1.Solve(model)
     except (SystemExit, KeyboardInterrupt):
         return {"status": "INTERRUPTED"}
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
@@ -328,8 +350,31 @@ def _solve_single_scenario(
                     break
         return extracted
 
-    optimal_primary = solver.Value(primary_var)
-    pass1_assignments = _extract_assignments_from_solver(solver)
+    optimal_primary = solver_pass1.Value(primary_var)
+    pass1_assignments = _extract_assignments_from_solver(solver_pass1)
+
+    # For rent-max scenarios, keep the primary (rent) objective result.
+    # Skip premium-alignment tie-breaking entirely to avoid extra solve work.
+    if objective_mode_norm == "rent":
+        assignments = pass1_assignments
+        final_waami = _calculate_waami_from_assignments(assignments)
+        metrics = _build_metrics(assignments)
+        rent_score = None
+        try:
+            rent_score = int(optimal_primary)
+        except Exception:
+            rent_score = None
+        return {
+            "status": "OPTIMAL",
+            "waami": final_waami,
+            "assignments": assignments,
+            "bands": _get_bands_from_assignments(assignments),
+            "metrics": metrics,
+            "revenue_score": metrics['revenue_score'],
+            "rent_score": rent_score,
+            "canonical_assignments": _assignments_to_canonical(assignments),
+        }
+
     model.Add(primary_var == optimal_primary)
     premium_scores_int = (df_affordable['premium_score'] * 1000).astype(int)
     premium_alignment_expr = sum(
@@ -337,8 +382,13 @@ def _solve_single_scenario(
         for i in range(num_units)
     )
     model.Maximize(premium_alignment_expr)
+    pass2_time_limit_seconds = 0.25
+    if time_limit_seconds is not None:
+        pass2_time_limit_seconds = min(float(pass2_time_limit_seconds), float(time_limit_seconds))
+    solver_pass2 = cp_model.CpSolver()
+    _configure_solver(solver_pass2, pass2_time_limit_seconds)
     try:
-        status = solver.Solve(model)
+        status = solver_pass2.Solve(model)
     except (SystemExit, KeyboardInterrupt):
         return {"status": "INTERRUPTED"}
     if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
@@ -366,20 +416,7 @@ def _solve_single_scenario(
             "pass_2_status": "FAILED",
         }
 
-    best_assignments = _extract_assignments_from_solver(solver)
-    premium_optimal = solver.Value(premium_alignment_expr)
-    model.Add(premium_alignment_expr == premium_optimal)
-
-    lex_failed = False
-    for unit_idx in range(num_units):
-        assignment_index_expr = sum(j * x[unit_idx][j] for j in range(num_bands))
-        model.Minimize(assignment_index_expr)
-        status = solver.Solve(model)
-        if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
-            lex_failed = True
-            break
-        model.Add(assignment_index_expr == solver.Value(assignment_index_expr))
-    assignments = best_assignments if lex_failed else _extract_assignments_from_solver(solver)
+    assignments = _extract_assignments_from_solver(solver_pass2)
     final_waami = _calculate_waami_from_assignments(assignments)
     metrics = _build_metrics(assignments)
     rent_score = None

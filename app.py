@@ -103,6 +103,40 @@ API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')
 # Admin key for rent calculator management (optional, defaults to API key)
 ADMIN_KEY = os.environ.get('AMI_OPTIX_ADMIN_KEY', API_KEY)
 
+# ----------------------------------------------------------------------------
+# Rent schedule cache (per-process)
+# ----------------------------------------------------------------------------
+
+_RENT_SCHEDULE_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def _timing_log_enabled() -> bool:
+    raw = str(os.environ.get("AMI_OPTIX_TIMING_LOG", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _load_rent_schedule_cached(workbook_path: str) -> tuple[object | None, bool]:
+    """
+    Load the active rent schedule with a simple in-memory cache.
+
+    Keyed by (workbook_path, mtime) so edits to the workbook invalidate the cache.
+    Returns: (schedule|None, cache_hit)
+    """
+    if not workbook_path:
+        return None, False
+    try:
+        mtime = float(os.path.getmtime(workbook_path))
+    except Exception:
+        return load_rent_schedule(workbook_path), False
+
+    cached = _RENT_SCHEDULE_CACHE.get(workbook_path)
+    if cached and float(cached[0]) == mtime:
+        return cached[1], True
+
+    schedule = load_rent_schedule(workbook_path)
+    _RENT_SCHEDULE_CACHE[workbook_path] = (mtime, schedule)
+    return schedule, False
+
 
 def _build_program_config(
     base_config: dict,
@@ -477,22 +511,43 @@ def optimize_units():
         "project_summary": { ... }
     }
     """
+    timing_enabled = _timing_log_enabled()
+    timing: dict[str, object] = {"endpoint": "optimize"}
+    request_start = time.perf_counter()
+
+    def _emit_timing(status: str, extra: dict | None = None) -> None:
+        if not timing_enabled:
+            return
+        payload = dict(timing)
+        payload["status"] = status
+        payload["elapsed_ms"] = int(round((time.perf_counter() - request_start) * 1000))
+        if extra:
+            payload.update(extra)
+        try:
+            print(json.dumps(payload), flush=True)
+        except Exception:
+            pass
+
     # Validate API key
     auth_error = _validate_api_key()
     if auth_error:
+        _emit_timing("auth_error")
         return auth_error
 
     # Parse JSON body
     try:
         data = request.get_json()
         if not data:
+            _emit_timing("invalid_json", {"error": "Request body must be JSON"})
             return jsonify({"error": "Request body must be JSON"}), 400
     except Exception as e:
+        _emit_timing("invalid_json", {"error": str(e)})
         return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
 
     # Extract units
     units = data.get('units', [])
     if not units or not isinstance(units, list):
+        _emit_timing("invalid_units", {"error": "Missing or invalid 'units' array"})
         return jsonify({"error": "Missing or invalid 'units' array"}), 400
 
     # Validate required fields for each unit
@@ -500,6 +555,7 @@ def optimize_units():
     for i, unit in enumerate(units):
         for field in required_fields:
             if field not in unit:
+                _emit_timing("invalid_units", {"error": f"Unit {i+1} missing required field: {field}"})
                 return jsonify({"error": f"Unit {i+1} missing required field: {field}"}), 400
 
     # Extract utilities (with defaults)
@@ -549,6 +605,7 @@ def optimize_units():
                 mih_max_band_percent=mih_max_band_percent,
             )
         except ValueError as e:
+            _emit_timing("config_error", {"error": str(e)})
             return jsonify({
                 "success": False,
                 "error": str(e),
@@ -556,6 +613,12 @@ def optimize_units():
             }), 200
 
         program_norm = str(program or 'UAP').strip().upper()
+
+        timing["program"] = program_norm
+        timing["unit_count"] = int(len(df_units))
+        timing["parse_validation_ms"] = int(round((time.perf_counter() - request_start) * 1000))
+
+        solver_start = time.perf_counter()
 
         # Run the strict solver (optionally with project overrides for premium weights / unit rules).
         solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
@@ -605,7 +668,10 @@ def optimize_units():
             except Exception:
                 pass
 
+        timing["find_optimal_scenarios_ms"] = int(round((time.perf_counter() - solver_start) * 1000))
+
         if not scenarios or not scenarios.get('absolute_best'):
+            _emit_timing("no_solution", {"notes_count": int(len(notes or []))})
             return jsonify({
                 "success": False,
                 "error": "No optimal solution found",
@@ -652,13 +718,17 @@ def optimize_units():
             pass
 
         # Load rent schedule and apply rent calculations
+        rent_load_start = time.perf_counter()
         rent_schedule = None
+        rent_schedule_cache_hit = False
         rent_calc_path = _get_active_rent_calculator_path()
         if rent_calc_path:
             try:
-                rent_schedule = load_rent_schedule(rent_calc_path)
+                rent_schedule, rent_schedule_cache_hit = _load_rent_schedule_cached(rent_calc_path)
             except Exception as e:
                 notes.append(f"Warning: Could not load rent calculator: {str(e)}")
+        timing["rent_schedule_load_ms"] = int(round((time.perf_counter() - rent_load_start) * 1000))
+        timing["rent_schedule_cache_hit"] = bool(rent_schedule_cache_hit)
 
         def _apply_rents_to_scenarios(scenarios_dict: dict) -> None:
             if not rent_schedule:
@@ -675,17 +745,20 @@ def optimize_units():
 
         # Apply rent calculations to each scenario
         if rent_schedule:
+            rent_apply_start = time.perf_counter()
             _apply_rents_to_scenarios(scenarios)
             if strict_scenarios_full:
                 _apply_rents_to_scenarios(strict_scenarios_full)
             if baseline_scenarios:
                 _apply_rents_to_scenarios(baseline_scenarios)
+            timing["rent_apply_ms"] = int(round((time.perf_counter() - rent_apply_start) * 1000))
 
             # --- Edge / relaxed scenarios (UAP + MIH) ---
             # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
             # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH
             # we keep share rules fixed and only relax the WAAMI floor (down to 58%).
             if program_norm in ('UAP', 'MIH'):
+                edge_start = time.perf_counter()
                 try:
                     strict_config = copy.deepcopy(config)
                     strict_rules = strict_config.get('optimization_rules', {}) or {}
@@ -717,7 +790,7 @@ def optimize_units():
 
                     # Target total scenarios (strict + edge) returned to Excel.
                     # Excel can handle ~6 without becoming sluggish, and this matches the UI expectation.
-                    target_total_count = 6
+                    target_total_count = max(1, _get_int_env("AMI_OPTIX_TARGET_TOTAL_SCENARIOS", 6))
                     target_edge_count = max(0, min(5, int(target_total_count - len(scenarios or {}))))
                     edge_keys_added: list[str] = []
 
@@ -894,6 +967,7 @@ def optimize_units():
                                 existing_canons.add(ck)
                 except Exception as e:
                     notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
+                timing["edge_scenarios_ms"] = int(round((time.perf_counter() - edge_start) * 1000))
 
         learning_info = None
         if compare_baseline and baseline_scenarios and scenarios:
@@ -938,9 +1012,11 @@ def optimize_units():
             }
 
         # Build response
+        response_start = time.perf_counter()
+        safe_scenarios = _sanitize_for_json(scenarios)
         response = {
             "success": True,
-            "scenarios": _sanitize_for_json(scenarios),
+            "scenarios": safe_scenarios,
             "notes": notes,
             "project_summary": {
                 "total_units": len(df_units),
@@ -955,9 +1031,12 @@ def optimize_units():
         if learning_info:
             response["learning"] = _sanitize_for_json(learning_info)
 
+        timing["response_sanitize_ms"] = int(round((time.perf_counter() - response_start) * 1000))
+        _emit_timing("ok", {"scenario_count": int(len(scenarios or {}))})
         return jsonify(response)
 
     except Exception as e:
+        _emit_timing("exception", {"error": str(e)})
         app.logger.exception("optimize_units failed: %s", e)
         return jsonify({"error": f"Optimization failed: {str(e)}"}), 500
 
@@ -1045,7 +1124,7 @@ def evaluate_assignment():
         rent_schedule = None
         rent_calc_path = _get_active_rent_calculator_path()
         if rent_calc_path:
-            rent_schedule = load_rent_schedule(rent_calc_path)
+            rent_schedule, _cache_hit = _load_rent_schedule_cached(rent_calc_path)
 
         assignments = df_units.to_dict(orient='records')
         # Normalize assigned_ami to the 0-2 range (support 60/120 inputs as well as 0.6/1.2).
@@ -1160,7 +1239,7 @@ def manual_calculate_assignment():
         rent_schedule = None
         rent_calc_path = _get_active_rent_calculator_path()
         if rent_calc_path:
-            rent_schedule = load_rent_schedule(rent_calc_path)
+            rent_schedule, _cache_hit = _load_rent_schedule_cached(rent_calc_path)
 
         rent_totals = None
         if rent_schedule:

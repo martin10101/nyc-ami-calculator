@@ -2,6 +2,7 @@
 import pandas as pd
 from main import main as run_ami_optix_analysis
 from ami_optix.solver import calculate_premium_scores, find_optimal_scenarios
+import copy
 
 @pytest.fixture
 def sample_config():
@@ -142,6 +143,69 @@ def test_deep_affordability_cap_widening(tmp_path, monkeypatch):
     assert scenario, 'Expected a scenario after widening the cap.'
     assert abs(scenario['metrics']['low_band_share'] - 0.25) < 1e-9
     assert any('share cap widened' in note for note in analysis.get('analysis_notes', []))
+
+
+def test_solver_respects_caps_and_share_thresholds(sample_config):
+    # --- UAP-like deep affordability bounds ---
+    uap_config = copy.deepcopy(sample_config)
+    uap_config['optimization_rules']['waami_cap_percent'] = 80.0
+    uap_config['optimization_rules']['max_bands_per_scenario'] = 2
+    uap_config['optimization_rules']['potential_bands'] = [40, 80]
+    uap_config['optimization_rules']['deep_affordability_min_share'] = 0.2
+    uap_config['optimization_rules']['deep_affordability_max_share'] = 0.2
+    uap_config['optimization_rules']['low_band_band_threshold'] = 40
+    uap_config['optimization_rules']['max_band_combo_checks'] = 4
+    uap_config['optimization_rules']['max_unique_scenarios'] = 4
+
+    df_uap = pd.DataFrame({
+        'unit_id': [f'U{i}' for i in range(5)],
+        'bedrooms': [1] * 5,
+        'net_sf': [100.0] * 5,
+        'floor': [1, 2, 3, 4, 5],
+        'balcony': [0] * 5,
+        'client_ami': [1.0] * 5
+    })
+
+    uap_results = find_optimal_scenarios(df_uap, uap_config)
+    uap_abs_best = (uap_results.get("scenarios") or {}).get("absolute_best")
+    assert uap_abs_best, "Expected a feasible UAP scenario."
+
+    uap_assignments = uap_abs_best['assignments']
+    uap_total_sf = sum(float(u['net_sf']) for u in uap_assignments)
+    uap_low_sf = sum(float(u['net_sf']) for u in uap_assignments if float(u['assigned_ami']) <= 0.40)
+    uap_low_share = (uap_low_sf / uap_total_sf) if uap_total_sf else 0.0
+    assert abs(uap_low_share - 0.2) < 1e-9
+    assert float(uap_abs_best['waami']) <= 0.80 + 1e-9
+
+    # --- MIH-like share threshold with residential denominator ---
+    mih_config = copy.deepcopy(sample_config)
+    mih_config['optimization_rules']['waami_cap_percent'] = 80.0
+    mih_config['optimization_rules']['max_bands_per_scenario'] = 2
+    mih_config['optimization_rules']['potential_bands'] = [40, 80]
+    mih_config['optimization_rules']['residential_sf'] = 1000.0
+    mih_config['optimization_rules']['share_thresholds'] = [
+        {'band_threshold': 40, 'min_share': 0.2, 'denominator': 'residential'},
+    ]
+    mih_config['optimization_rules']['max_band_combo_checks'] = 4
+    mih_config['optimization_rules']['max_unique_scenarios'] = 4
+
+    df_mih = pd.DataFrame({
+        'unit_id': [f'M{i}' for i in range(4)],
+        'bedrooms': [1] * 4,
+        'net_sf': [100.0] * 4,
+        'floor': [1, 2, 3, 4],
+        'balcony': [0] * 4,
+        'client_ami': [1.0] * 4
+    })
+
+    mih_results = find_optimal_scenarios(df_mih, mih_config)
+    mih_abs_best = (mih_results.get("scenarios") or {}).get("absolute_best")
+    assert mih_abs_best, "Expected a feasible MIH scenario."
+
+    mih_assignments = mih_abs_best['assignments']
+    mih_low_sf = sum(float(u['net_sf']) for u in mih_assignments if float(u['assigned_ami']) <= 0.40)
+    assert mih_low_sf >= (0.2 * 1000.0) - 1e-9
+    assert float(mih_abs_best['waami']) <= 0.80 + 1e-9
 
 
 def test_lexicographical_tie_breaking_with_premium_score(sample_config):
