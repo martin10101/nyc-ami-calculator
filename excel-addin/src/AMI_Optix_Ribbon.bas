@@ -180,8 +180,14 @@ End Sub
 ' RIBBON CALLBACKS - MANUAL GROUP
 '-------------------------------------------------------------------------------
 
-Public Sub Ribbon_GetLiveSync(control As IRibbonControl, ByRef returnedVal As Boolean)
-    returnedVal = GetLiveSyncEnabled()
+Public Sub Ribbon_GetLiveSync(control As IRibbonControl, ByRef returnedVal)
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant; keep it untyped to avoid "Type mismatch".
+    On Error GoTo Fail
+    returnedVal = CBool(GetLiveSyncEnabled())
+    Exit Sub
+
+Fail:
+    returnedVal = False
 End Sub
 
 Public Sub Ribbon_ToggleLiveSync(control As IRibbonControl, pressed As Boolean)
@@ -713,7 +719,6 @@ Private Sub RefreshRentRollList()
     Dim sheetCount As Long
     Dim preferredNames As Variant
     Dim i As Long
-    Dim isPreferred As Boolean
 
     If ActiveWorkbook Is Nothing Then
         m_RentRollCount = 1
@@ -723,9 +728,15 @@ Private Sub RefreshRentRollList()
     End If
 
     sheetCount = 0
-    ReDim tempSheets(0 To 50)  ' Max 50 sheets
+    ReDim tempSheets(0 To Application.Max(0, ActiveWorkbook.Worksheets.Count - 1))
 
-    preferredNames = Array("UAP", "PROJECT WORKSHEET", "RentRoll", "Rent Roll", "Units", "Unit Schedule", "Sheet1", "Data")
+    ' IMPORTANT: Do NOT scan sheet cell contents here.
+    ' Some client workbooks contain formulas that reference VBA UDFs, and those UDFs can fail to compile
+    ' (e.g., missing "Microsoft Scripting Runtime" reference). Reading lots of cell values on ribbon-load
+    ' can trigger that compile and show a confusing error unrelated to AMI Optix.
+    '
+    ' We therefore build this list using SHEET NAMES ONLY.
+    preferredNames = Array("UAP", "MIH", "PROJECT WORKSHEET", "RentRoll", "Rent Roll", "Units", "Unit Schedule", "Sheet1", "Data")
 
     ' First add preferred sheets in order
     For i = LBound(preferredNames) To UBound(preferredNames)
@@ -734,23 +745,29 @@ Private Sub RefreshRentRollList()
         On Error GoTo 0
 
         If Not ws Is Nothing Then
-            If SheetHasUnitData(ws) Then
-                tempSheets(sheetCount) = ws.Name
-                sheetCount = sheetCount + 1
-            End If
+            tempSheets(sheetCount) = ws.Name
+            sheetCount = sheetCount + 1
             Set ws = Nothing
         End If
     Next i
 
-    ' Then add any other sheets with unit data
+    ' Then add other likely sheets by NAME pattern.
     For Each ws In ActiveWorkbook.Worksheets
         If Not IsSheetInArray(ws.Name, tempSheets, sheetCount) Then
-            If SheetHasUnitData(ws) Then
+            If IsLikelyRentRollSheetName(ws.Name) Then
                 tempSheets(sheetCount) = ws.Name
                 sheetCount = sheetCount + 1
             End If
         End If
     Next ws
+
+    ' Fallback: if nothing matched, include all sheets (still name-only).
+    If sheetCount = 0 Then
+        For Each ws In ActiveWorkbook.Worksheets
+            tempSheets(sheetCount) = ws.Name
+            sheetCount = sheetCount + 1
+        Next ws
+    End If
 
     ' Store results
     m_RentRollCount = sheetCount
@@ -765,6 +782,22 @@ Private Sub RefreshRentRollList()
         m_RentRollCount = 1
     End If
 End Sub
+
+Private Function IsLikelyRentRollSheetName(sheetName As String) As Boolean
+    Dim s As String
+    s = UCase$(Trim$(sheetName))
+
+    ' Never include our output sheets in the rent roll picker.
+    If s = "AMI SCENARIOS" Or s = "AMI OPTIX DIAGNOSTICS" Then Exit Function
+
+    ' Prefer "data-like" sheet names.
+    If InStr(1, s, "RENT", vbTextCompare) > 0 Then IsLikelyRentRollSheetName = True: Exit Function
+    If InStr(1, s, "ROLL", vbTextCompare) > 0 Then IsLikelyRentRollSheetName = True: Exit Function
+    If InStr(1, s, "UNIT", vbTextCompare) > 0 Then IsLikelyRentRollSheetName = True: Exit Function
+    If InStr(1, s, "SCHEDULE", vbTextCompare) > 0 Then IsLikelyRentRollSheetName = True: Exit Function
+    If InStr(1, s, "PROJECT", vbTextCompare) > 0 Then IsLikelyRentRollSheetName = True: Exit Function
+    If s = "UAP" Or s = "MIH" Then IsLikelyRentRollSheetName = True: Exit Function
+End Function
 
 Private Function SheetHasUnitData(ws As Worksheet) As Boolean
     ' Check if sheet has recognizable unit data columns

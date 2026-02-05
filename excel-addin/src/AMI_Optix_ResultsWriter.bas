@@ -261,17 +261,20 @@ Public Sub CreateScenariosSheet(result As Object)
         ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
         ws.Cells(row, 1).Font.Bold = True
         ws.Cells(row, 1).Font.Size = 14
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = ScenarioHeaderColor(CStr(scenarioKey))
+        ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = ScenarioHeaderColor(CStr(scenarioKey))
         row = row + 1
 
         row = WriteScenarioSummaryAndTable(ws, row, scenario)
         row = row + 1
 
-        ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(240, 240, 240)
+        ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(240, 240, 240)
         row = row + 1
         scenarioNum = scenarioNum + 1
 
     Next scenarioKey
+
+    ' Client formatting: keep text in column A aligned consistently.
+    ws.Columns("A:A").HorizontalAlignment = xlLeft
 
     ' Auto-fit columns
     ws.Columns("A:K").AutoFit
@@ -808,11 +811,26 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     ws.Cells(row, 1).Font.Size = 16
     row = row + 2
 
-    row = WriteUtilitySettings(ws, row)
-    row = row + 1
-
     Dim scenarioKey As String
     scenarioKey = GetBestScenarioKey(result)
+
+    Dim scenarios As Object
+    Set scenarios = Nothing
+    On Error Resume Next
+    Set scenarios = result("scenarios")
+    On Error GoTo 0
+
+    Dim scenario As Object
+    Set scenario = Nothing
+    If Not scenarios Is Nothing Then
+        On Error Resume Next
+        If Trim$(scenarioKey) <> "" Then Set scenario = scenarios(scenarioKey)
+        On Error GoTo 0
+    End If
+
+    row = WriteUtilitySettings(ws, row)
+    row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
+    row = row + 1
 
     Dim headerLabel As String
     headerLabel = "SCENARIO MANUAL (LIVE SYNC)"
@@ -830,19 +848,14 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
         Exit Function
     End If
 
-    Dim scenarios As Object
-    Set scenarios = result("scenarios")
     If scenarios Is Nothing Then
         WriteManualScenarioBlockFromResult = row
         Exit Function
     End If
-    If Not scenarios.Exists(scenarioKey) Then
+    If scenario Is Nothing Then
         WriteManualScenarioBlockFromResult = row
         Exit Function
     End If
-
-    Dim scenario As Object
-    Set scenario = scenarios(scenarioKey)
 
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
     WriteManualScenarioBlockFromResult = row
@@ -858,15 +871,6 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 16
     row = row + 2
-
-    row = WriteUtilitySettings(ws, row)
-    row = row + 1
-
-    ws.Cells(row, 1).Value = headerLabel
-    ws.Cells(row, 1).Font.Bold = True
-    ws.Cells(row, 1).Font.Size = 14
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
-    row = row + 1
 
     ' Build a minimal scenario-shaped object from /api/evaluate response.
     Dim scenario As Object
@@ -913,6 +917,16 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
         End If
     End If
 
+    row = WriteUtilitySettings(ws, row)
+    row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
+    row = row + 1
+
+    ws.Cells(row, 1).Value = headerLabel
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 14
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
+    row = row + 1
+
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
     WriteManualScenarioBlockFromEvaluate = row
 End Function
@@ -948,6 +962,7 @@ Public Sub RefreshManualScenarioFromScenario(scenarioKey As String, scenario As 
     row = row + 2
 
     row = WriteUtilitySettings(ws, row)
+    row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
     row = row + 1
 
     ws.Cells(row, 1).Value = "SCENARIO MANUAL (LIVE SYNC) - CURRENT: " & UCase$(FormatScenarioName(CStr(scenarioKey)))
@@ -1150,40 +1165,23 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ' Show net totals only (gross/total allowances removed per client request)
             If rentTotals.Exists("net_monthly") Then
                 ws.Cells(row, 1).Value = "Total Monthly Rent:"
-                ws.Cells(row, 2).Value = Format(rentTotals("net_monthly"), "$#,##0.00")
+                If IsNumeric(rentTotals("net_monthly")) Then
+                    ws.Cells(row, 2).Value = CDbl(rentTotals("net_monthly"))
+                    ws.Cells(row, 2).NumberFormat = "$#,##0"
+                Else
+                    ws.Cells(row, 2).Value = rentTotals("net_monthly")
+                End If
                 row = row + 1
             End If
             If rentTotals.Exists("net_annual") Then
                 ws.Cells(row, 1).Value = "Total Annual Rent:"
-                ws.Cells(row, 2).Value = Format(rentTotals("net_annual"), "$#,##0.00")
+                If IsNumeric(rentTotals("net_annual")) Then
+                    ws.Cells(row, 2).Value = CDbl(rentTotals("net_annual"))
+                    ws.Cells(row, 2).NumberFormat = "$#,##0"
+                Else
+                    ws.Cells(row, 2).Value = rentTotals("net_annual")
+                End If
                 row = row + 1
-            End If
-
-            ' Allowance breakdown (per utility)
-            Dim ab As Object
-            Set ab = Nothing
-            On Error Resume Next
-            Set ab = rentTotals("allowances_breakdown")
-            On Error GoTo 0
-
-            If Not ab Is Nothing Then
-                row = row + 1
-                ws.Cells(row, 1).Value = "Utility Allowances (Monthly):"
-                ws.Cells(row, 1).Font.Bold = True
-                row = row + 1
-
-                Dim key As Variant
-                For Each key In ab.Keys
-                    Dim entry As Object
-                    Set entry = ab(key)
-                    ws.Cells(row, 1).Value = UCase(CStr(key))
-                    If Not entry Is Nothing Then
-                        If entry.Exists("monthly") Then
-                            ws.Cells(row, 2).Value = Format(entry("monthly"), "$#,##0.00")
-                        End If
-                    End If
-                    row = row + 1
-                Next key
             End If
         End If
     End If
@@ -1194,15 +1192,13 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     ws.Cells(row, 1).Value = "Unit"
     ws.Cells(row, 2).Value = "Bedrooms"
     ws.Cells(row, 3).Value = "Net SF"
-    ws.Cells(row, 4).Value = "Floor"
-    ws.Cells(row, 5).Value = "Balcony"
-    ws.Cells(row, 6).Value = "AMI"
-    ws.Cells(row, 7).Value = "Gross Rent"
-    ws.Cells(row, 8).Value = "Allowances"
-    ws.Cells(row, 9).Value = "Net Rent"
-    ws.Cells(row, 10).Value = "Annual Rent"
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Font.Bold = True
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 10)).Interior.Color = RGB(230, 230, 230)
+    ws.Cells(row, 4).Value = "Balcony"
+    ws.Cells(row, 5).Value = "AMI"
+    ws.Cells(row, 6).Value = "Gross Rent"
+    ws.Cells(row, 7).Value = "Net Rent"
+    ws.Cells(row, 8).Value = "Annual Rent"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(230, 230, 230)
     row = row + 1
 
     If scenario.Exists("assignments") Then
@@ -1216,33 +1212,26 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ws.Cells(row, 1).Value = assignment("unit_id")
             If assignment.Exists("bedrooms") Then ws.Cells(row, 2).Value = assignment("bedrooms")
             If assignment.Exists("net_sf") Then ws.Cells(row, 3).Value = assignment("net_sf")
-            If assignment.Exists("floor") Then ws.Cells(row, 4).Value = assignment("floor")
-            If assignment.Exists("balcony") Then ws.Cells(row, 5).Value = IIf(assignment("balcony"), "Y", "")
+            If assignment.Exists("balcony") Then ws.Cells(row, 4).Value = IIf(assignment("balcony"), "Y", "")
             Dim assignedAmi As Double
             assignedAmi = CDbl(assignment("assigned_ami"))
             If assignedAmi > 2# Then assignedAmi = assignedAmi / 100#
-            ws.Cells(row, 6).Value = Format(assignedAmi, "0%")
+            ws.Cells(row, 5).Value = assignedAmi
+            ws.Cells(row, 5).NumberFormat = "0%"
 
             If assignment.Exists("gross_rent") Then
-                ws.Cells(row, 7).Value = assignment("gross_rent")
-                ws.Cells(row, 7).NumberFormat = "$#,##0.00"
-            End If
-
-            If assignment.Exists("allowances") Then
-                ws.Cells(row, 8).Value = BuildAllowanceBreakdown(assignment("allowances"))
-            ElseIf assignment.Exists("allowance_total") Then
-                ws.Cells(row, 8).Value = assignment("allowance_total")
-                ws.Cells(row, 8).NumberFormat = "$#,##0.00"
+                ws.Cells(row, 6).Value = assignment("gross_rent")
+                ws.Cells(row, 6).NumberFormat = "$#,##0"
             End If
 
             If assignment.Exists("monthly_rent") Then
-                ws.Cells(row, 9).Value = assignment("monthly_rent")
-                ws.Cells(row, 9).NumberFormat = "$#,##0.00"
+                ws.Cells(row, 7).Value = assignment("monthly_rent")
+                ws.Cells(row, 7).NumberFormat = "$#,##0"
             End If
 
             If assignment.Exists("annual_rent") Then
-                ws.Cells(row, 10).Value = assignment("annual_rent")
-                ws.Cells(row, 10).NumberFormat = "$#,##0.00"
+                ws.Cells(row, 8).Value = assignment("annual_rent")
+                ws.Cells(row, 8).NumberFormat = "$#,##0"
             End If
 
             row = row + 1
@@ -1370,7 +1359,7 @@ Private Function WriteUtilitySettings(ws As Worksheet, startRow As Long) As Long
     row = startRow
 
     ' Header
-    ws.Cells(row, 1).Value = "TENANT-PAID UTILITIES (Affects Rent Allowances)"
+    ws.Cells(row, 1).Value = "TENANT-PAID UTILITIES - Affects Rent Allowances"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 12
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(255, 230, 200)
@@ -1444,6 +1433,145 @@ Private Function WriteUtilitySettings(ws As Worksheet, startRow As Long) As Long
     row = row + 1
 
     WriteUtilitySettings = row
+End Function
+
+Private Function SumAllowanceAmounts(allowancesValue As Variant) As Double
+    ' Best-effort sum of allowance amounts from the API payload.
+    ' Expected shapes:
+    ' - Collection of objects: [{amount, category, label}, ...]
+    ' - Dictionary keyed by category with numeric values
+    On Error GoTo Fail
+
+    SumAllowanceAmounts = 0#
+    If Not IsObject(allowancesValue) Then Exit Function
+
+    Select Case TypeName(allowancesValue)
+        Case "Collection"
+            Dim allowancesArr As Collection
+            Set allowancesArr = allowancesValue
+
+            Dim i As Long
+            For i = 1 To allowancesArr.Count
+                Dim item As Object
+                Set item = allowancesArr(i)
+                If Not item Is Nothing Then
+                    If item.Exists("amount") Then
+                        If IsNumeric(item("amount")) Then
+                            SumAllowanceAmounts = SumAllowanceAmounts + CDbl(item("amount"))
+                        End If
+                    End If
+                End If
+            Next i
+
+        Case "Dictionary", "Scripting.Dictionary"
+            Dim d As Object
+            Set d = allowancesValue
+
+            Dim key As Variant
+            For Each key In d.Keys
+                Dim v As Variant
+                v = d(key)
+                If IsNumeric(v) Then
+                    SumAllowanceAmounts = SumAllowanceAmounts + CDbl(v)
+                ElseIf IsObject(v) Then
+                    On Error Resume Next
+                    If v.Exists("amount") Then
+                        If IsNumeric(v("amount")) Then
+                            SumAllowanceAmounts = SumAllowanceAmounts + CDbl(v("amount"))
+                        End If
+                    End If
+                    On Error GoTo Fail
+                End If
+            Next key
+    End Select
+    Exit Function
+
+Fail:
+    SumAllowanceAmounts = 0#
+End Function
+
+Private Function WriteUtilityDeductionTotalsByBedroom(ws As Worksheet, startRow As Long, scenario As Object) As Long
+    ' Writes per-bedroom utility deduction totals (monthly) under the utilities block.
+    On Error GoTo Fail
+
+    Dim row As Long
+    row = startRow
+
+    If scenario Is Nothing Then GoTo SafeExit
+    If Not scenario.Exists("assignments") Then GoTo SafeExit
+
+    Dim assignments As Object
+    Set assignments = Nothing
+    On Error Resume Next
+    Set assignments = scenario("assignments")
+    On Error GoTo Fail
+    If assignments Is Nothing Then GoTo SafeExit
+
+    Dim byBr As Object
+    Set byBr = CreateObject("Scripting.Dictionary") ' bedrooms -> allowance_total
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextAssignment
+
+        Dim br As Long
+        br = 0
+        On Error Resume Next
+        If a.Exists("bedrooms") Then br = CLng(a("bedrooms"))
+        On Error GoTo Fail
+
+        Dim allowance As Double
+        allowance = 0#
+
+        If a.Exists("allowance_total") Then
+            If IsNumeric(a("allowance_total")) Then allowance = CDbl(a("allowance_total"))
+        ElseIf a.Exists("allowances") Then
+            allowance = SumAllowanceAmounts(a("allowances"))
+        End If
+
+        If allowance > 0# Then
+            Dim k As String
+            k = CStr(br)
+            If Not byBr.Exists(k) Then
+                byBr(k) = allowance
+            End If
+        End If
+
+NextAssignment:
+    Next i
+
+    If byBr.Count = 0 Then GoTo SafeExit
+
+    ws.Cells(row, 1).Value = "TOTAL UTILITY DEDUCTION (Monthly)"
+    ws.Cells(row, 1).Font.Bold = True
+    row = row + 1
+
+    ws.Cells(row, 1).Value = "Bedroom Type"
+    ws.Cells(row, 2).Value = "Utility Deduction (Monthly)"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2)).Interior.Color = RGB(230, 230, 230)
+    row = row + 1
+
+    Dim brIdx As Long
+    For brIdx = 0 To 10
+        Dim brKey As String
+        brKey = CStr(brIdx)
+        If byBr.Exists(brKey) Then
+            ws.Cells(row, 1).Value = IIf(brIdx <= 0, "Studio", CStr(brIdx) & " BR")
+            ws.Cells(row, 2).Value = CDbl(byBr(brKey))
+            ws.Cells(row, 2).NumberFormat = "$#,##0"
+            row = row + 1
+        End If
+    Next brIdx
+
+SafeExit:
+    WriteUtilityDeductionTotalsByBedroom = row
+    Exit Function
+
+Fail:
+    WriteUtilityDeductionTotalsByBedroom = startRow
 End Function
 
 Private Function FormatUtilityType(value As String) As String
