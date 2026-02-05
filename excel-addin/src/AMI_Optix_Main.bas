@@ -21,6 +21,88 @@ Private Const API_KEY_REGISTRY_KEY As String = "APIKey"
 Public g_LastScenarios As Object  ' Stores last API response for viewing
 
 '-------------------------------------------------------------------------------
+' DEBUG LOGGING (optional)
+'-------------------------------------------------------------------------------
+
+Private Const DEBUG_REG_SECTION As String = "Debug"
+Private Const DEBUG_REG_KEY_ENABLED As String = "Enabled"
+
+Public Function GetDebugLoggingEnabled() As Boolean
+    ' Enables lightweight logging for troubleshooting without requiring the VBE.
+    ' Priority:
+    ' 1) Environment variable AMI_OPTIX_DEBUG=1/true/yes/on
+    ' 2) Registry setting AMI_Optix\Debug\Enabled = "1"
+    On Error GoTo Fail
+
+    Dim env As String
+    env = LCase$(Trim$(Environ$("AMI_OPTIX_DEBUG")))
+    If env <> "" Then
+        GetDebugLoggingEnabled = (env = "1" Or env = "true" Or env = "yes" Or env = "on")
+        Exit Function
+    End If
+
+    GetDebugLoggingEnabled = (GetSetting(API_KEY_REGISTRY_PATH, DEBUG_REG_SECTION, DEBUG_REG_KEY_ENABLED, "0") = "1")
+    Exit Function
+
+Fail:
+    GetDebugLoggingEnabled = False
+End Function
+
+Public Sub SetDebugLoggingEnabled(enabled As Boolean)
+    On Error Resume Next
+    SaveSetting API_KEY_REGISTRY_PATH, DEBUG_REG_SECTION, DEBUG_REG_KEY_ENABLED, IIf(enabled, "1", "0")
+End Sub
+
+Public Function GetDebugLogPath() As String
+    On Error GoTo Fail
+
+    Dim tempPath As String
+    tempPath = Trim$(Environ$("TEMP"))
+    If tempPath = "" Then tempPath = Trim$(Environ$("TMP"))
+    If tempPath = "" Then tempPath = CurDir$
+
+    GetDebugLogPath = tempPath & "\AMI_Optix_Debug.log"
+    Exit Function
+
+Fail:
+    GetDebugLogPath = "AMI_Optix_Debug.log"
+End Function
+
+Public Sub DebugLog(message As String, Optional force As Boolean = False)
+    ' Appends a single line to the debug log file + prints to Immediate window.
+    ' Use force:=True for error logging even when debug is disabled.
+    On Error Resume Next
+
+    If Not force Then
+        If Not GetDebugLoggingEnabled() Then Exit Sub
+    End If
+
+    Dim path As String
+    path = GetDebugLogPath()
+
+    Dim f As Integer
+    f = FreeFile
+
+    Open path For Append As #f
+    Print #f, Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & message
+    Close #f
+
+    Debug.Print "AMI Optix | " & message
+End Sub
+
+Public Sub DebugLogError(context As String)
+    DebugLog context & " | ERROR " & Err.Number & ": " & Err.Description, True
+End Sub
+
+Public Function ElapsedSeconds(startSeconds As Double) As Double
+    ' Timer() wraps at midnight; handle that.
+    Dim nowSeconds As Double
+    nowSeconds = Timer
+    If nowSeconds < startSeconds Then nowSeconds = nowSeconds + 86400#
+    ElapsedSeconds = nowSeconds - startSeconds
+End Function
+
+'-------------------------------------------------------------------------------
 ' API KEY MANAGEMENT
 '-------------------------------------------------------------------------------
 
@@ -186,15 +268,23 @@ Public Sub RunOptimizationForProgram(program As String)
     Dim mihOption As String
     Dim mihResidentialSF As Double
     Dim mihMaxBandPercent As Long
+    Dim runStart As Double
 
     On Error GoTo ErrorHandler
 
     programNorm = UCase(Trim(program))
     If programNorm = "" Then programNorm = "UAP"
 
+    runStart = Timer
+    Dim wbName As String
+    wbName = "(none)"
+    If Not ActiveWorkbook Is Nothing Then wbName = ActiveWorkbook.Name
+    DebugLog "RunOptimizationForProgram: start program=" & programNorm & ", workbook=" & wbName, True
+
     ' Guard rails: prevent running the wrong program on the wrong workbook.
     detectedMihOption = ""
     workbookKind = DetectWorkbookKind(detectedMihOption)
+    DebugLog "GuardRails: workbookKind=" & workbookKind & IIf(detectedMihOption <> "", ", mihOption=" & detectedMihOption, ""), True
     If programNorm = "UAP" Then
         If workbookKind = "MIH" Then
             MsgBox "This workbook is an MIH file (" & detectedMihOption & ")." & vbCrLf & vbCrLf & _
@@ -225,6 +315,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 0: Check API key is configured
     If Not HasAPIKey() Then
+        DebugLog "API key missing; prompting user", True
         Dim setupNow As VbMsgBoxResult
         setupNow = MsgBox("API key is not configured." & vbCrLf & vbCrLf & _
                           "You need an API key to use the optimization service." & vbCrLf & _
@@ -241,6 +332,7 @@ Public Sub RunOptimizationForProgram(program As String)
     ' Step 1: Show progress
     Application.StatusBar = "AMI Optix: Reading unit data..."
     Application.ScreenUpdating = False
+    DebugLog "Step 1: Reading unit data...", True
 
     ' Step 2: Read unit data from the program sheet (do not rely on the active sheet).
     Dim prevSheet As Worksheet
@@ -270,6 +362,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     If units Is Nothing Then GoTo NoUnitsFound
     If units.Count = 0 Then GoTo NoUnitsFound
+    DebugLog "ReadUnitData: units.Count=" & units.Count & " (elapsed " & Format$(ElapsedSeconds(runStart), "0.00") & "s)", True
 
     ' DEBUG: Show unit count - warn if very few
     Debug.Print "=== UNITS FOUND ==="
@@ -288,6 +381,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 3: Get utility selections
     Application.StatusBar = "AMI Optix: Loading utility settings..."
+    DebugLog "Step 3: Loading utility settings...", True
     Set utilities = GetUtilitySelectionsForProgram(programNorm)
 
     ' Step 3B: MIH inputs
@@ -317,7 +411,9 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."
+    DebugLog "Step 4: Building request payload...", True
     payload = BuildAPIPayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, projectOverridesJson, compareBaseline)
+    DebugLog "Payload built: len=" & Len(payload) & " (elapsed " & Format$(ElapsedSeconds(runStart), "0.00") & "s)", True
 
     ' DEBUG: Print payload being sent
     Debug.Print "=== UNITS READ FROM WORKBOOK ==="
@@ -336,7 +432,11 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 5: Call API
     Application.StatusBar = "AMI Optix: Calling optimization API (this may take a few minutes)..."
+    DebugLog "Step 5: Calling optimization API...", True
+    Dim apiStart As Double
+    apiStart = Timer
     response = CallOptimizeAPI(payload)
+    DebugLog "API returned: len=" & Len(response) & ", elapsed=" & Format$(ElapsedSeconds(apiStart), "0.00") & "s (total " & Format$(ElapsedSeconds(runStart), "0.00") & "s)", True
 
     If response = "" Then
         MsgBox "Failed to connect to the optimization server." & vbCrLf & vbCrLf & _
@@ -349,6 +449,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 6: Parse response
     Application.StatusBar = "AMI Optix: Processing results..."
+    DebugLog "Step 6: Parsing JSON...", True
 
     ' DEBUG: Print raw response to Immediate window
     Debug.Print "=== RAW API RESPONSE (length: " & Len(response) & ") ==="
@@ -358,6 +459,7 @@ Public Sub RunOptimizationForProgram(program As String)
     Set result = ParseJSON(response)
 
     If result Is Nothing Then
+        DebugLog "ParseJSON failed (response len=" & Len(response) & ")", True
         MsgBox "Invalid response from server." & vbCrLf & vbCrLf & _
                "Raw response (" & Len(response) & " chars):" & vbCrLf & _
                Left(response, 500), vbCritical, "AMI Optix"
@@ -366,6 +468,22 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Store for later viewing
     Set g_LastScenarios = result
+
+    ' Optional: log server timing payload if enabled on the API side.
+    On Error Resume Next
+    If result.Exists("timing") Then
+        Dim t As Object
+        Set t = result("timing")
+        If Not t Is Nothing Then
+            DebugLog "Server timing: parse_validation_ms=" & t("parse_validation_ms") & _
+                     ", find_optimal_scenarios_ms=" & t("find_optimal_scenarios_ms") & _
+                     ", rent_schedule_load_ms=" & t("rent_schedule_load_ms") & _
+                     ", rent_apply_ms=" & t("rent_apply_ms") & _
+                     ", edge_scenarios_ms=" & t("edge_scenarios_ms") & _
+                     ", response_sanitize_ms=" & t("response_sanitize_ms"), True
+        End If
+    End If
+    On Error GoTo ErrorHandler
 
     ' Best-effort learning audit log
     On Error Resume Next
@@ -420,6 +538,7 @@ Public Sub RunOptimizationForProgram(program As String)
 
     ' Step 8: Write results
     Application.StatusBar = "AMI Optix: Writing results..."
+    DebugLog "Step 8: Writing results...", True
 
     Dim appliedScenarioLabel As String
     appliedScenarioLabel = "best scenario"
@@ -435,6 +554,7 @@ Public Sub RunOptimizationForProgram(program As String)
     ' Done
     Application.StatusBar = False
     Application.ScreenUpdating = True
+    DebugLog "RunOptimizationForProgram: done (total " & Format$(ElapsedSeconds(runStart), "0.00") & "s)", True
 
     MsgBox "Optimization complete!" & vbCrLf & vbCrLf & _
            "- " & appliedScenarioLabel & " applied to your data" & vbCrLf & _
@@ -474,6 +594,7 @@ ErrorHandler:
     Application.StatusBar = False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
+    DebugLogError "RunOptimizationForProgram"
     MsgBox "Optimization failed: " & Err.Description & vbCrLf & vbCrLf & _
            "Try the web dashboard as backup: " & API_BASE_URL, _
            vbCritical, "AMI Optix"

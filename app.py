@@ -1032,6 +1032,9 @@ def optimize_units():
             response["learning"] = _sanitize_for_json(learning_info)
 
         timing["response_sanitize_ms"] = int(round((time.perf_counter() - response_start) * 1000))
+        timing["total_elapsed_ms"] = int(round((time.perf_counter() - request_start) * 1000))
+        if timing_enabled:
+            response["timing"] = timing
         _emit_timing("ok", {"scenario_count": int(len(scenarios or {}))})
         return jsonify(response)
 

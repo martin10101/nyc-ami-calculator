@@ -273,8 +273,7 @@ Public Sub CreateScenariosSheet(result As Object)
 
     Next scenarioKey
 
-    ' Client formatting: keep text in column A aligned consistently.
-    ws.Columns("A:A").HorizontalAlignment = xlLeft
+    ' Client formatting: alignment is handled per-table (Unit/AMI columns are explicitly aligned when written).
 
     ' Auto-fit columns
     ws.Columns("A:K").AutoFit
@@ -1006,6 +1005,7 @@ End Function
 Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long, scenario As Object) As Long
     Dim row As Long
     row = startRow
+    Dim tableHeaderRow As Long
 
     If scenario Is Nothing Then
         WriteScenarioSummaryAndTable = row
@@ -1189,6 +1189,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     row = row + 1
 
     ' Assignment table
+    tableHeaderRow = row
     ws.Cells(row, 1).Value = "Unit"
     ws.Cells(row, 2).Value = "Bedrooms"
     ws.Cells(row, 3).Value = "Net SF"
@@ -1236,6 +1237,16 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
 
             row = row + 1
         Next a
+    End If
+
+    ' Alignment: keep Unit and AMI columns consistent regardless of text/numeric formatting.
+    Dim firstDataRow As Long
+    Dim lastDataRow As Long
+    firstDataRow = tableHeaderRow + 1
+    lastDataRow = row - 1
+    If lastDataRow >= firstDataRow Then
+        ws.Range(ws.Cells(firstDataRow, 1), ws.Cells(lastDataRow, 1)).HorizontalAlignment = xlRight
+        ws.Range(ws.Cells(firstDataRow, 5), ws.Cells(lastDataRow, 5)).HorizontalAlignment = xlRight
     End If
 
     WriteScenarioSummaryAndTable = row

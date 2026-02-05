@@ -807,6 +807,32 @@ def find_optimal_scenarios(
     two_band_results = [r for r in sorted_results if len(r['bands']) == 2]
     multi_band_results = [r for r in sorted_results if len(r['bands']) >= 2]
 
+    # Best 2-band selection preference:
+    # When a program has a minimum low-band share requirement (commonly >=10% at <=40% AMI),
+    # many equally-good 2-band solutions exist. Clients typically prefer a solution that is
+    # as close to the minimum as possible (to avoid over-allocating 40% band SF).
+    best_2_target_low_share = None
+    try:
+        for threshold in (optimization_rules.get('share_thresholds') or []):
+            if not isinstance(threshold, dict):
+                continue
+            band_threshold = threshold.get('band_threshold')
+            min_share = threshold.get('min_share')
+            if band_threshold is None or min_share is None:
+                continue
+            if int(band_threshold) <= 40:
+                best_2_target_low_share = float(min_share)
+                break
+    except Exception:
+        best_2_target_low_share = None
+
+    if best_2_target_low_share is None:
+        try:
+            if optimization_rules.get('deep_affordability_min_share') is not None:
+                best_2_target_low_share = float(optimization_rules.get('deep_affordability_min_share'))
+        except Exception:
+            best_2_target_low_share = None
+
     def _register(name: str, scenario: Dict[str, Any]):
         if scenario:
             scenarios[name] = scenario
@@ -820,6 +846,43 @@ def find_optimal_scenarios(
                 continue
             return candidate
         return None
+
+    def _pick_best_2_band(candidates: List[Dict[str, Any]]):
+        if best_2_target_low_share is None:
+            return _pick_from_list(candidates)
+
+        best = None
+        best_key = None
+        for candidate in candidates:
+            if candidate['canonical_assignments'] in selected_assignments:
+                continue
+
+            metrics = candidate.get('metrics') or {}
+            try:
+                low_share = float(metrics.get('low_band_share') or 0.0)
+            except Exception:
+                low_share = 0.0
+
+            diff = abs(low_share - float(best_2_target_low_share))
+            try:
+                waami = float(candidate.get('waami') or 0.0)
+            except Exception:
+                waami = 0.0
+            try:
+                revenue = float(metrics.get('revenue_score') or 0.0)
+            except Exception:
+                revenue = 0.0
+            try:
+                premium = float(candidate.get('premium_score') or 0.0)
+            except Exception:
+                premium = 0.0
+
+            key = (diff, -waami, -revenue, -premium)
+            if best_key is None or key < best_key:
+                best = candidate
+                best_key = key
+
+        return best
 
     absolute_best = _pick_from_list(three_band_results)
     if not absolute_best:
@@ -838,8 +901,16 @@ def find_optimal_scenarios(
     else:
         notes.append("No viable 3-band scenario distinct from the absolute best could be found.")
 
-    best_2_band = _pick_from_list(two_band_results)
+    best_2_band = _pick_best_2_band(two_band_results)
     if best_2_band:
+        if best_2_target_low_share is not None:
+            try:
+                actual = float((best_2_band.get('metrics') or {}).get('low_band_share') or 0.0)
+                notes.append(
+                    f"Best 2-band targets {best_2_target_low_share*100:.1f}% at <=40% AMI; selected {actual*100:.1f}%."
+                )
+            except Exception:
+                pass
         _register('best_2_band', best_2_band)
     else:
         notes.append("No viable 2-band solution met the WAAMI floor.")

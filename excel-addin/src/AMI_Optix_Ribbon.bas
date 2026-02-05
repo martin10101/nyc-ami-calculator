@@ -183,10 +183,16 @@ End Sub
 Public Sub Ribbon_GetLiveSync(control As IRibbonControl, ByRef returnedVal)
     ' NOTE: RibbonX passes returnedVal ByRef as a Variant; keep it untyped to avoid "Type mismatch".
     On Error GoTo Fail
+    Static didLog As Boolean
+    If Not didLog Then
+        DebugLog "Ribbon_GetLiveSync: first call", True
+        didLog = True
+    End If
     returnedVal = CBool(GetLiveSyncEnabled())
     Exit Sub
 
 Fail:
+    DebugLogError "Ribbon_GetLiveSync"
     returnedVal = False
 End Sub
 
@@ -720,10 +726,16 @@ Private Sub RefreshRentRollList()
     Dim preferredNames As Variant
     Dim i As Long
 
+    Dim wbName As String
+    wbName = "(none)"
+    If Not ActiveWorkbook Is Nothing Then wbName = ActiveWorkbook.Name
+    DebugLog "RefreshRentRollList: start workbook=" & wbName, True
+
     If ActiveWorkbook Is Nothing Then
         m_RentRollCount = 1
         ReDim m_RentRollSheets(0 To 0)
         m_RentRollSheets(0) = "(No workbook open)"
+        DebugLog "RefreshRentRollList: no workbook", True
         Exit Sub
     End If
 
@@ -781,6 +793,8 @@ Private Sub RefreshRentRollList()
         m_RentRollSheets(0) = "(No rent rolls found)"
         m_RentRollCount = 1
     End If
+
+    DebugLog "RefreshRentRollList: done count=" & m_RentRollCount, True
 End Sub
 
 Private Function IsLikelyRentRollSheetName(sheetName As String) As Boolean

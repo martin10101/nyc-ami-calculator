@@ -20,10 +20,12 @@ Public Function CallOptimizeAPI(payload As String) As String
     Dim http As Object
     Dim url As String
     Dim apiKey As String
+    Dim t0 As Double
 
     On Error GoTo ErrorHandler
 
     url = API_BASE_URL & "/api/optimize"
+    t0 = Timer
 
     ' Get API key from registry
     apiKey = GetAPIKey()
@@ -45,8 +47,12 @@ Public Function CallOptimizeAPI(payload As String) As String
         http.setRequestHeader "X-API-Key", apiKey
     End If
 
+    DebugLog "HTTP POST /api/optimize: payload_len=" & Len(payload), True
+
     ' Send request
     http.send payload
+
+    DebugLog "HTTP /api/optimize: status=" & http.Status & ", elapsed=" & Format$(ElapsedSeconds(t0), "0.00") & "s, resp_len=" & Len(http.responseText), True
 
     ' Check response
     If http.Status = 200 Then
@@ -74,6 +80,7 @@ Public Function CallOptimizeAPI(payload As String) As String
     Exit Function
 
 ErrorHandler:
+    DebugLogError "CallOptimizeAPI"
     Debug.Print "HTTP Error: " & Err.Description
     MsgBox "Connection error: " & Err.Description & vbCrLf & vbCrLf & _
            "The server may be starting up. Please wait 30 seconds and try again.", _
