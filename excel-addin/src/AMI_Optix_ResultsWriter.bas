@@ -254,8 +254,27 @@ Public Sub CreateScenariosSheet(result As Object)
     Dim scenarioNum As Long
     scenarioNum = 1
 
-    For Each scenarioKey In scenarios.Keys
+    ' Stable ordering + dedupe (client reported duplicates like "Scenario 4" and "Scenario 5" matching exactly).
+    Dim orderedKeys As Collection
+    Set orderedKeys = BuildScenarioKeyOrder(scenarios)
+
+    Dim seenCanons As Object
+    Set seenCanons = CreateObject("Scripting.Dictionary") ' canonical string -> True
+
+    Dim k As Variant
+    For Each k In orderedKeys
+        scenarioKey = CStr(k)
         Set scenario = scenarios(scenarioKey)
+
+        Dim canonKey As String
+        canonKey = ScenarioCanonicalKey(scenario)
+        If canonKey <> "" Then
+            If seenCanons.Exists(canonKey) Then
+                DebugLog "CreateScenariosSheet: skipping duplicate scenario '" & scenarioKey & "'", True
+                GoTo NextScenarioKey
+            End If
+            seenCanons(canonKey) = True
+        End If
 
         ' Scenario header
         ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
@@ -271,12 +290,16 @@ Public Sub CreateScenariosSheet(result As Object)
         row = row + 1
         scenarioNum = scenarioNum + 1
 
-    Next scenarioKey
+NextScenarioKey:
+    Next k
 
     ' Client formatting: alignment is handled per-table (Unit/AMI columns are explicitly aligned when written).
 
-    ' Auto-fit columns
-    ws.Columns("A:K").AutoFit
+    ' Column sizing:
+    ' - Keep column A compact (client requested) so the utilities block and tables don't look like huge boxes.
+    ' - AutoFit the numeric columns so rents/SF are still readable.
+    ws.Columns("B:K").AutoFit
+    ws.Columns("A:A").ColumnWidth = 22
 
     ' Freeze the top row and jump to the scenarios so users immediately see the scenario list.
     On Error Resume Next
@@ -302,6 +325,125 @@ Cleanup:
         MsgBox "Failed to build 'AMI Scenarios' sheet: " & errMsg, vbExclamation, "AMI Optix"
     End If
 End Sub
+
+Private Function BuildScenarioKeyOrder(scenarios As Object) As Collection
+    ' Builds a stable display order for scenario keys:
+    ' strict keys first, then max_revenue, then any remaining edge keys sorted A→Z.
+    Dim ordered As New Collection
+
+    On Error GoTo Fail
+    If scenarios Is Nothing Then
+        Set BuildScenarioKeyOrder = ordered
+        Exit Function
+    End If
+
+    Dim preferred As Variant
+    preferred = Array("absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented", "max_revenue")
+
+    Dim i As Long
+    For i = LBound(preferred) To UBound(preferred)
+        If scenarios.Exists(CStr(preferred(i))) Then
+            ordered.Add CStr(preferred(i))
+        End If
+    Next i
+
+    Dim otherKeys() As String
+    Dim otherCount As Long
+    otherCount = 0
+    ReDim otherKeys(0 To Application.Max(0, scenarios.Count - 1))
+
+    Dim k As Variant
+    For Each k In scenarios.Keys
+        Dim keyStr As String
+        keyStr = CStr(k)
+        If Not StringInVariantArray(keyStr, preferred) Then
+            otherKeys(otherCount) = keyStr
+            otherCount = otherCount + 1
+        End If
+    Next k
+
+    If otherCount > 0 Then
+        ReDim Preserve otherKeys(0 To otherCount - 1)
+        SortStringArray otherKeys
+        For i = LBound(otherKeys) To UBound(otherKeys)
+            ordered.Add otherKeys(i)
+        Next i
+    End If
+
+    Set BuildScenarioKeyOrder = ordered
+    Exit Function
+
+Fail:
+    Set BuildScenarioKeyOrder = ordered
+End Function
+
+Private Function StringInVariantArray(value As String, arr As Variant) As Boolean
+    On Error GoTo Fail
+    Dim i As Long
+    For i = LBound(arr) To UBound(arr)
+        If LCase$(CStr(arr(i))) = LCase$(CStr(value)) Then
+            StringInVariantArray = True
+            Exit Function
+        End If
+    Next i
+    Exit Function
+Fail:
+    StringInVariantArray = False
+End Function
+
+Private Sub SortStringArray(ByRef arr() As String)
+    ' Simple in-place sort (A→Z). Scenario key lists are small.
+    On Error GoTo Fail
+    Dim i As Long, j As Long
+    For i = LBound(arr) To UBound(arr) - 1
+        For j = i + 1 To UBound(arr)
+            If UCase$(arr(j)) < UCase$(arr(i)) Then
+                Dim tmp As String
+                tmp = arr(i)
+                arr(i) = arr(j)
+                arr(j) = tmp
+            End If
+        Next j
+    Next i
+    Exit Sub
+Fail:
+End Sub
+
+Private Function ScenarioCanonicalKey(scenario As Object) As String
+    ' Returns a stable canonical string for dedupe, e.g. "202:60|204:40|...".
+    On Error GoTo Fail
+    ScenarioCanonicalKey = ""
+    If scenario Is Nothing Then Exit Function
+    If Not scenario.Exists("canonical_assignments") Then Exit Function
+
+    Dim canon As Object
+    Set canon = Nothing
+    On Error Resume Next
+    Set canon = scenario("canonical_assignments")
+    On Error GoTo Fail
+    If canon Is Nothing Then Exit Function
+    If TypeName(canon) <> "Collection" Then Exit Function
+
+    Dim i As Long
+    Dim s As String
+    s = ""
+    For i = 1 To canon.Count
+        Dim pair As Object
+        Set pair = canon(i)
+        If pair Is Nothing Then GoTo NextPair
+        If TypeName(pair) <> "Collection" Then GoTo NextPair
+        If pair.Count < 2 Then GoTo NextPair
+        If s <> "" Then s = s & "|"
+        s = s & CStr(pair(1)) & ":" & CStr(pair(2))
+NextPair:
+    Next i
+
+    ScenarioCanonicalKey = s
+    Exit Function
+
+Fail:
+    ScenarioCanonicalKey = ""
+End Function
 
 Private Function ScenarioHeaderColor(scenarioKey As String) As Long
     Dim key As String
@@ -1131,6 +1273,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ws.Cells(row, 4).Value = "Share of SF"
             ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Font.Bold = True
             ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 230, 230)
+            ws.Cells(row, 1).HorizontalAlignment = xlRight
             row = row + 1
 
             Dim bmIdx As Long
@@ -1138,7 +1281,15 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
                 Dim bm As Object
                 Set bm = bandMix(bmIdx)
                 If Not bm Is Nothing Then
-                    If bm.Exists("band") Then ws.Cells(row, 1).Value = CStr(bm("band")) & "%"
+                    If bm.Exists("band") Then
+                        If IsNumeric(bm("band")) Then
+                            ws.Cells(row, 1).Value = CDbl(bm("band")) / 100#
+                            ws.Cells(row, 1).NumberFormat = "0%"
+                        Else
+                            ws.Cells(row, 1).Value = CStr(bm("band")) & "%"
+                        End If
+                        ws.Cells(row, 1).HorizontalAlignment = xlRight
+                    End If
                     If bm.Exists("units") Then ws.Cells(row, 2).Value = bm("units")
                     If bm.Exists("net_sf") Then
                         ws.Cells(row, 3).Value = bm("net_sf")
@@ -1200,6 +1351,8 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     ws.Cells(row, 8).Value = "Annual Rent"
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Font.Bold = True
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(230, 230, 230)
+    ws.Cells(row, 1).HorizontalAlignment = xlRight
+    ws.Cells(row, 5).HorizontalAlignment = xlRight
     row = row + 1
 
     If scenario.Exists("assignments") Then
@@ -1211,6 +1364,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             Set assignment = assignments(a)
 
             ws.Cells(row, 1).Value = assignment("unit_id")
+            ws.Cells(row, 1).HorizontalAlignment = xlRight
             If assignment.Exists("bedrooms") Then ws.Cells(row, 2).Value = assignment("bedrooms")
             If assignment.Exists("net_sf") Then ws.Cells(row, 3).Value = assignment("net_sf")
             If assignment.Exists("balcony") Then ws.Cells(row, 4).Value = IIf(assignment("balcony"), "Y", "")
@@ -1219,6 +1373,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             If assignedAmi > 2# Then assignedAmi = assignedAmi / 100#
             ws.Cells(row, 5).Value = assignedAmi
             ws.Cells(row, 5).NumberFormat = "0%"
+            ws.Cells(row, 5).HorizontalAlignment = xlRight
 
             If assignment.Exists("gross_rent") Then
                 ws.Cells(row, 6).Value = assignment("gross_rent")
@@ -1503,6 +1658,7 @@ End Function
 
 Private Function WriteUtilityDeductionTotalsByBedroom(ws As Worksheet, startRow As Long, scenario As Object) As Long
     ' Writes per-bedroom utility deduction totals (monthly) under the utilities block.
+    ' Client request: show the per-utility breakdown (Electricity/Cooking/Heat/Hot Water) once at the top.
     On Error GoTo Fail
 
     Dim row As Long
@@ -1519,7 +1675,7 @@ Private Function WriteUtilityDeductionTotalsByBedroom(ws As Worksheet, startRow 
     If assignments Is Nothing Then GoTo SafeExit
 
     Dim byBr As Object
-    Set byBr = CreateObject("Scripting.Dictionary") ' bedrooms -> allowance_total
+    Set byBr = CreateObject("Scripting.Dictionary") ' bedrooms -> dict(electricity,cooking,heat,hot_water,total)
 
     Dim i As Long
     For i = 1 To assignments.Count
@@ -1533,22 +1689,80 @@ Private Function WriteUtilityDeductionTotalsByBedroom(ws As Worksheet, startRow 
         If a.Exists("bedrooms") Then br = CLng(a("bedrooms"))
         On Error GoTo Fail
 
-        Dim allowance As Double
-        allowance = 0#
+        Dim k As String
+        k = CStr(br)
+        If byBr.Exists(k) Then GoTo NextAssignment ' already captured a representative row for this bedroom type
 
-        If a.Exists("allowance_total") Then
-            If IsNumeric(a("allowance_total")) Then allowance = CDbl(a("allowance_total"))
-        ElseIf a.Exists("allowances") Then
-            allowance = SumAllowanceAmounts(a("allowances"))
-        End If
+        Dim elecAmt As Double, cookAmt As Double, heatAmt As Double, hwAmt As Double
+        elecAmt = 0#: cookAmt = 0#: heatAmt = 0#: hwAmt = 0#
 
-        If allowance > 0# Then
-            Dim k As String
-            k = CStr(br)
-            If Not byBr.Exists(k) Then
-                byBr(k) = allowance
+        If a.Exists("allowances") Then
+            Dim allowancesValue As Variant
+            allowancesValue = a("allowances")
+
+            If IsObject(allowancesValue) Then
+                Select Case TypeName(allowancesValue)
+                    Case "Collection"
+                        Dim allowancesArr As Collection
+                        Set allowancesArr = allowancesValue
+
+                        Dim j As Long
+                        For j = 1 To allowancesArr.Count
+                            Dim item As Object
+                            Set item = allowancesArr(j)
+                            If item Is Nothing Then GoTo NextItem
+
+                            Dim cat As String
+                            cat = ""
+                            On Error Resume Next
+                            If item.Exists("category") Then cat = LCase$(Trim$(CStr(item("category"))))
+                            On Error GoTo Fail
+
+                            Dim amt As Double
+                            amt = 0#
+                            On Error Resume Next
+                            If item.Exists("amount") Then
+                                If IsNumeric(item("amount")) Then amt = CDbl(item("amount"))
+                            End If
+                            On Error GoTo Fail
+
+                            Select Case cat
+                                Case "electricity": elecAmt = amt
+                                Case "cooking": cookAmt = amt
+                                Case "heat": heatAmt = amt
+                                Case "hot_water": hwAmt = amt
+                            End Select
+
+NextItem:
+                        Next j
+
+                    Case "Dictionary", "Scripting.Dictionary"
+                        ' Legacy shape: {"electricity": 123, ...} or {"electricity": {amount:123}, ...}
+                        Dim d As Object
+                        Set d = allowancesValue
+
+                        elecAmt = AllowanceAmountFromDict(d, "electricity")
+                        cookAmt = AllowanceAmountFromDict(d, "cooking")
+                        heatAmt = AllowanceAmountFromDict(d, "heat")
+                        hwAmt = AllowanceAmountFromDict(d, "hot_water")
+                End Select
             End If
         End If
+
+        Dim totalAmt As Double
+        totalAmt = elecAmt + cookAmt + heatAmt + hwAmt
+        If a.Exists("allowance_total") Then
+            If IsNumeric(a("allowance_total")) Then totalAmt = CDbl(a("allowance_total"))
+        End If
+
+        Dim detail As Object
+        Set detail = CreateObject("Scripting.Dictionary")
+        detail("electricity") = elecAmt
+        detail("cooking") = cookAmt
+        detail("heat") = heatAmt
+        detail("hot_water") = hwAmt
+        detail("total") = totalAmt
+        byBr(k) = detail
 
 NextAssignment:
     Next i
@@ -1560,9 +1774,13 @@ NextAssignment:
     row = row + 1
 
     ws.Cells(row, 1).Value = "Bedroom Type"
-    ws.Cells(row, 2).Value = "Utility Deduction (Monthly)"
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2)).Font.Bold = True
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2)).Interior.Color = RGB(230, 230, 230)
+    ws.Cells(row, 2).Value = "Electricity"
+    ws.Cells(row, 3).Value = "Cooking"
+    ws.Cells(row, 4).Value = "Heat"
+    ws.Cells(row, 5).Value = "Hot Water"
+    ws.Cells(row, 6).Value = "Total"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Interior.Color = RGB(230, 230, 230)
     row = row + 1
 
     Dim brIdx As Long
@@ -1571,8 +1789,17 @@ NextAssignment:
         brKey = CStr(brIdx)
         If byBr.Exists(brKey) Then
             ws.Cells(row, 1).Value = IIf(brIdx <= 0, "Studio", CStr(brIdx) & " BR")
-            ws.Cells(row, 2).Value = CDbl(byBr(brKey))
-            ws.Cells(row, 2).NumberFormat = "$#,##0"
+            Dim d2 As Object
+            Set d2 = byBr(brKey)
+
+            ws.Cells(row, 2).Value = CDbl(d2("electricity"))
+            ws.Cells(row, 3).Value = CDbl(d2("cooking"))
+            ws.Cells(row, 4).Value = CDbl(d2("heat"))
+            ws.Cells(row, 5).Value = CDbl(d2("hot_water"))
+            ws.Cells(row, 6).Value = CDbl(d2("total"))
+
+            ws.Range(ws.Cells(row, 2), ws.Cells(row, 6)).NumberFormat = "$#,##0"
+            ws.Range(ws.Cells(row, 2), ws.Cells(row, 6)).HorizontalAlignment = xlRight
             row = row + 1
         End If
     Next brIdx
@@ -1583,6 +1810,34 @@ SafeExit:
 
 Fail:
     WriteUtilityDeductionTotalsByBedroom = startRow
+End Function
+
+Private Function AllowanceAmountFromDict(d As Object, key As String) As Double
+    On Error GoTo Fail
+    AllowanceAmountFromDict = 0#
+    If d Is Nothing Then Exit Function
+    If Not d.Exists(key) Then Exit Function
+
+    Dim v As Variant
+    v = d(key)
+    If IsNumeric(v) Then
+        AllowanceAmountFromDict = CDbl(v)
+        Exit Function
+    End If
+
+    If IsObject(v) Then
+        On Error Resume Next
+        If v.Exists("amount") Then
+            If IsNumeric(v("amount")) Then
+                AllowanceAmountFromDict = CDbl(v("amount"))
+            End If
+        End If
+        On Error GoTo Fail
+    End If
+    Exit Function
+
+Fail:
+    AllowanceAmountFromDict = 0#
 End Function
 
 Private Function FormatUtilityType(value As String) As String
