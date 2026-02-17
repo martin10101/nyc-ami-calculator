@@ -146,8 +146,7 @@ End Function
 Private Function IsPreferredSheetName(sheetName As String) As Boolean
     Dim s As String
     s = UCase$(Trim$(sheetName))
-    IsPreferredSheetName = (s = "UAP" Or s = "MIH" Or s = "PROJECT WORKSHEET" Or s = "RENTROLL" Or s = "RENT ROLL" Or _
-                            s = "UNITS" Or s = "UNIT SCHEDULE" Or s = "SHEET1" Or s = "DATA")
+    IsPreferredSheetName = (s = "UAP" Or s = "MIH" Or s = "PROJECT WORKSHEET" Or s = "RENTROLL" Or s = "RENT ROLL")
 End Function
 
 Private Function HasUnitDataHeaders(ws As Worksheet) As Boolean
