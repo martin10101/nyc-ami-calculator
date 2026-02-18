@@ -28,7 +28,7 @@
 
 \- \[x] Fix-01 DataReader stability + remove ribbon sheet activation (prevents wrong-sheet/AMI-col bugs)
 
-\- \[ ] Fix-04 Ribbon stays active (no collapsing; no modal MsgBox in dropdown callbacks)
+\- \[x] Fix-04 Ribbon stays active (no collapsing; no modal MsgBox in dropdown callbacks)
 
 \- \[ ] Fix-03 Rent roll YEAR selector + Manage uploads + mismatch warning (MIH + UAP)
 
@@ -111,6 +111,46 @@
 &nbsp; - Workbooks with multiple unit-like tables may resolve to the first matching template-named sheet when the active sheet is not a known program sheet.
 
 \- Next: Fix-04
+
+
+
+\### 2026-02-18 Fix-04 Ribbon stays active (no collapsing)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/04-ribbon-stays-active
+
+\- Commit: f6792738125956226d4088d90239eba42cbfc8ff
+
+\- PR: \#9 https://github.com/martin10101/nyc-ami-calculator/pull/9
+
+\- Files changed:
+
+&nbsp; - docs/TASKCARD\_Fix-04\_Ribbon\_stays\_active.md
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Ribbon.bas
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+\- Summary:
+
+&nbsp; - Ribbon XML: add onLoad hook so VBA can capture `IRibbonUI`.
+
+&nbsp; - Ribbon callbacks: best-effort re-activate `tabAMIOptix` after `onAction` handlers so the AMI Optix tab remains selected after actions.
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = f6792738125956226d4088d90239eba42cbfc8ff
+
+\- Notes / risks:
+
+&nbsp; - PR \#9 is stacked on PR \#8; merge PR \#8 first to reduce diff.
+
+\- Next: Fix-03
 
 
 
