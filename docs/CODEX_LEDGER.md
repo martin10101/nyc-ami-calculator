@@ -38,6 +38,8 @@
 
 \- \[x] Fix-05 Manual working-copy always-on + two-way sync to MIH/UAP + rent roll + year (requires event modules / sheet code)
 
+\- \[x] Fix-06 Local rent calculation for Manual Working Copy (Z:\ shared + AppData fallback)
+
 
 
 \## Work Log
@@ -336,5 +338,44 @@
 &nbsp; - Live refresh uses the Manual Calculate path; it temporarily activates AMI Scenarios internally but restores the user’s active sheet/selection with events disabled to avoid macro side effects.
 
 \- Next: (stop; queue complete)
+
+
+\### 2026-02-18 Fix-06 Local rent calculation for Manual Working Copy (Z:\ + AppData fallback)
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: fix/06-local-manual-rent-calc
+
+\- Commit: bc75a5307007ddeb038efb9b21b138231bc957d5
+
+\- PR: \#1 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/1 (draft)
+
+\- Files changed:
+
+&nbsp; - docs/TASKCARD\_Fix-06\_Local\_manual\_rent\_calc.md
+
+&nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_AppEvents.cls
+
+\- Summary:
+
+&nbsp; - Manual Working Copy refresh (on AMI edits) now computes rents/totals locally from the selected year's rent workbook (Z:\ first; %APPDATA% fallback) and caches the opened workbook.
+
+&nbsp; - Manual edits no longer call `/api/manual_calculate` (no per-edit API calls); solver scenario grid/output remains API-provided and unchanged.
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings); edge optimize sanity: status 200, scenarios=4
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = bc75a5307007ddeb038efb9b21b138231bc957d5
+
+\- Notes / risks:
+
+&nbsp; - If the year workbook is missing/unreadable, the manual block will still refresh but rents may be blank/0 and a warning is shown in Tradeoffs.
+
+&nbsp; - Constraint-validity tradeoffs from `/api/manual_calculate` are no longer computed per edit; this fix focuses on local rent/totals refresh.
+
+\- Next: (stop; Fix-06 complete)
 
 
