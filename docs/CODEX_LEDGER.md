@@ -30,7 +30,7 @@
 
 \- \[x] Fix-04 Ribbon stays active (no collapsing; no modal MsgBox in dropdown callbacks)
 
-\- \[ ] Fix-03 Rent roll YEAR selector + Manage uploads + mismatch warning (MIH + UAP)
+\- \[x] Fix-03 Rent roll YEAR selector + Manage uploads + mismatch warning (MIH + UAP)
 
 \- \[ ] Fix-01b Utilities variant breakdown (top-of-sheet; do not collapse variant labels)
 
@@ -151,6 +151,60 @@
 &nbsp; - PR \#9 is stacked on PR \#8; merge PR \#8 first to reduce diff.
 
 \- Next: Fix-03
+
+
+
+\### 2026-02-18 Fix-03 Rent roll YEAR selector + Manage uploads + mismatch warning (MIH + UAP)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/03-rent-roll-year-selector
+
+\- Commit: e07ecb0ecb0623622d7311996e56911c8baba379
+
+\- PR: \#10 https://github.com/martin10101/nyc-ami-calculator/pull/10
+
+\- Files changed:
+
+&nbsp; - CODEX.md
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/FIX\_REQUIREMENTS.md
+
+&nbsp; - docs/TASKCARD\_Fix-03\_RentRoll\_YEAR\_selector.md
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Ribbon.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_API.bas
+
+\- Summary:
+
+&nbsp; - Ribbon: add **Rent Roll Year** dropdown (2022â€“2026, default 2025) + **Manage Rent Roll Yearsâ€¦** upload/replace action.
+
+&nbsp; - Local persistence: store selected year calculators under `%APPDATA%\\AMI_Optix\\RentRollYears\\<year>\\`.
+
+&nbsp; - API storage: upload selected year calculator to `/api/rent-calculators/upload` and activate via `/api/rent-calculators/activate`.
+
+&nbsp; - Enforcement: API calls (optimize/evaluate/manual\_calculate) ensure the selected year is active before running.
+
+&nbsp; - Warning: best-effort mismatch warning if workbook appears to declare a different year than the selection (OK continues; not blocking).
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = e07ecb0ecb0623622d7311996e56911c8baba379
+
+\- Notes / risks:
+
+&nbsp; - Rent calculator activation is server-global; switching years affects other clients using the same API service.
+
+&nbsp; - Declared-year detection is best-effort; some templates may not yield a detectable year (no warning shown).
+
+\- Next: Fix-01b
 
 
 
