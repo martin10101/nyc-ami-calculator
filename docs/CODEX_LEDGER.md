@@ -420,3 +420,64 @@
 \- Next: (stop; Fix-06b complete)
 
 
+\### 2026-02-18 Fix-06c Table-driven local rent calc + per-user rent tables cache (CSV)
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: fix/06c-table-driven-rent-tables
+
+\- Commit: 076c3edea32ed8cc6c6e6564f0774b2b1d4132ab
+
+\- PR: \#2 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/2 (draft)
+
+\- Files changed:
+
+&nbsp; - docs/RENT\_TABLES\_PLAN.md
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Ribbon.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_RentCalcTables.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_RentTables.bas
+
+\- Summary:
+
+&nbsp; - Manual Working Copy local rent refresh now uses normalized, table-driven lookups from per-user CSV cache (not runtime workbook scraping).
+
+&nbsp; - Cache source resolution: prefer Z:\ year workbook; fallback to %APPDATA% year workbook; per-user cache stored in %APPDATA%\\AMI\_Optix\\RentTablesCache\\<YEAR>\\.
+
+&nbsp; - Added Ribbon action to force-refresh cache for selected year (and log diagnostics); missing data still hard-fails and blocks rent writes (no silent 0).
+
+&nbsp; - Solver scenario rents remain API-provided and unchanged (this only affects manual local refresh).
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
+
+\- Manual test checklist (Excel):
+
+&nbsp; - PENDING: Manual edit changes rents immediately with NO /api/manual\_calculate calls.
+
+&nbsp; - PENDING: Switch year 2024 <-> 2025 and confirm rent changes where expected.
+
+&nbsp; - PENDING: Flip a utility variant and confirm allowance + net rent changes.
+
+&nbsp; - PENDING: Force Z: unavailable -> AppData year workbook used -> cache still builds/loads.
+
+&nbsp; - PENDING: Deliberately break workbook layout -> cache build fails fast; rents not written.
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 076c3edea32ed8cc6c6e6564f0774b2b1d4132ab
+
+\- Notes / risks:
+
+&nbsp; - PR \#1 was auto-closed when the branch was renamed; PR \#2 supersedes it.
+
+&nbsp; - Cache import falls back to the existing "AMI & Rent" scraper only when named tables are absent; runtime calculation never falls back to scraping.
+
+\- Next: (stop; Fix-06c pending manual validation)
+
+
