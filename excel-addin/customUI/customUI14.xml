@@ -24,6 +24,21 @@
                   supertip="View and apply different optimization scenarios from the last solver run."/>
         </group>
         <group id="grpRentRoll" label="Rent Roll">
+          <dropDown id="ddRentRollYear"
+                    label="Rent Roll Year"
+                    showLabel="true"
+                    onAction="Ribbon_SelectRentRollYear"
+                    getItemCount="Ribbon_GetRentRollYearCount"
+                    getItemLabel="Ribbon_GetRentRollYearLabel"
+                    getItemID="Ribbon_GetRentRollYearID"
+                    getSelectedItemIndex="Ribbon_GetRentRollYearSelectedIndex"
+                    supertip="Select which rent calculator year to use for MIH/UAP calculations (default 2025)."/>
+          <button id="btnManageRentRollYears"
+                  label="Manage Rent Roll Years..."
+                  size="normal"
+                  imageMso="FileOpen"
+                  onAction="Ribbon_ManageRentRollYears"
+                  supertip="Upload/replace the rent calculator for the selected year and activate it on the API."/>
           <dropDown id="ddRentRoll"
                     label="Select Rent Roll"
                     showLabel="true"
