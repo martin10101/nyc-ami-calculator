@@ -486,4 +486,52 @@
 
 \- Next: (stop; Fix-06c pending manual validation)
 
+\### 2026-02-18 Fix-06d Verify Manual Rents (API) via stateless /api/evaluate
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: fix/06c-table-driven-rent-tables
+
+\- Commit: 8a5d49096bf3b1c40e0b849e8e0073226cda683a
+
+\- PR: \#2 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/2 (draft)
+
+\- Files changed:
+
+&nbsp; - app.py
+
+&nbsp; - tests/test_api_evaluate.py
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_API.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Diagnostics.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Ribbon.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_VerifyManualRents.bas
+
+\- Summary:
+
+&nbsp; - /api/evaluate now accepts rent_roll_year and/or calculator_id to select the rent schedule per request (stateless) and echoes back year_used/calculator_filename metadata for reproducible verification.
+
+&nbsp; - Added a Ribbon button “Verify Manual Rents (API)” that calls /api/evaluate exactly once on demand, compares per-unit net rents + totals to the local Fix-06c cache computation with a $1 tolerance, shows a single MATCH/MISMATCH summary, and records full details in Diagnostics.
+
+&nbsp; - Diagnostics now includes a “Verify Manual Rents (API)” panel with last verify timestamp + result and a full mismatch table (unit_id + local vs API + delta).
+
+\- Tests run + results: python -m pytest -q (52 passed, 13 warnings)
+
+\- Manual test checklist (Excel):
+
+&nbsp; - PENDING: Click Verify with a normal manual state: expected MATCH; Diagnostics logs year, cache source path, and API year/calculator used.
+
+&nbsp; - PENDING: Deliberately create a mismatch (e.g., modify local cache or select a year missing on server): expected MISMATCH; summary shows top 5 mismatched unit_ids; full list in Diagnostics.
+
+&nbsp; - PENDING: Confirm no /api/manual\_calculate calls occur during edits (only /api/evaluate when the Verify button is clicked).
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 8a5d49096bf3b1c40e0b849e8e0073226cda683a
+
 
