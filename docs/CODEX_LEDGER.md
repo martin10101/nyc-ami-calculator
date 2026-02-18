@@ -40,6 +40,8 @@
 
 \- \[x] Fix-06 Local rent calculation for Manual Working Copy (Z:\ shared + AppData fallback)
 
+\- \[x] Fix-06b Harden local manual rent calc (fingerprint + fail-fast errors)
+
 
 
 \## Work Log
@@ -377,5 +379,44 @@
 &nbsp; - Constraint-validity tradeoffs from `/api/manual_calculate` are no longer computed per edit; this fix focuses on local rent/totals refresh.
 
 \- Next: (stop; Fix-06 complete)
+
+
+\### 2026-02-18 Fix-06b Harden local manual rent calc (fingerprint + fail-fast errors)
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: fix/06-local-manual-rent-calc
+
+\- Commit: fdd2cbcb6edb75524dffe30b3ae0f478026ad393
+
+\- PR: \#1 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/1 (draft)
+
+\- Files changed:
+
+&nbsp; - docs/TASKCARD\_Fix-06b\_Local\_rent\_calc\_hardening.md
+
+&nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+\- Summary:
+
+&nbsp; - Added a rent workbook layout fingerprint check (anchors on "AMI & Rent" headers + "of AMI" markers) and fail-fast behavior when the workbook layout is unexpected.
+
+&nbsp; - Missing gross rent / utility allowance lookups now raise a hard error with unit_id + key + workbook path; manual rents/totals are not written on failure (prevents silent 0 / partial results).
+
+&nbsp; - Solver scenario rents remain API-provided and unchanged (this only affects manual local refresh).
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings); edge optimize sanity: status 200, scenarios=4
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = fdd2cbcb6edb75524dffe30b3ae0f478026ad393
+
+\- Notes / risks:
+
+&nbsp; - Local manual refresh will now show a blocking error if the year workbook layout/labels drift; update the year workbook to match the expected "AMI & Rent" structure and option labels.
+
+\- Next: (stop; Fix-06b complete)
 
 
