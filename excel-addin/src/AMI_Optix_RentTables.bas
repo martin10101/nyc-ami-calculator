@@ -154,17 +154,24 @@ Public Function EnsureRentTablesCache(year As Long, Optional forceRefresh As Boo
 
     Dim stale As Boolean
     stale = forceRefresh
+    Dim staleReason As String
+    staleReason = IIf(forceRefresh, "force_refresh", "ok")
 
     If Not stale Then
-        If Dir$(rentLimitsCsv) = "" Or Dir$(utilityCsv) = "" Or Dir$(metaPath) = "" Then
+        If Dir$(rentLimitsCsv) = "" Or Dir$(utilityCsv) = "" Then
             stale = True
+            staleReason = "missing_cache_files"
+        ElseIf Dir$(metaPath) = "" Then
+            stale = True
+            staleReason = "missing_cache_meta"
         ElseIf Not CacheMetaMatches(metaPath, sourcePath, fingerprint) Then
             stale = True
+            staleReason = "meta_mismatch"
         End If
     End If
 
     If stale Then
-        BuildRentTablesCache year, sourcePath, fingerprint, cacheFolder
+        BuildRentTablesCache year, sourcePath, fingerprint, cacheFolder, sourceLabel, staleReason
     End If
 
     ' Verify outputs exist after build/reuse.
@@ -194,7 +201,7 @@ Public Function EnsureRentTablesCache(year As Long, Optional forceRefresh As Boo
 
     ' Diagnostics (no MsgBox on success).
     On Error Resume Next
-    LogRentTablesDiagnostics year, sourcePath, cacheFolder, fingerprint, stale, sourceLabel
+    LogRentTablesDiagnostics year, sourcePath, cacheFolder, fingerprint, stale, staleReason, sourceLabel
     On Error GoTo 0
 
     Application.ScreenUpdating = prevScreenUpdating
@@ -215,7 +222,7 @@ End Function
 ' CACHE BUILD
 '-------------------------------------------------------------------------------
 
-Private Sub BuildRentTablesCache(year As Long, sourcePath As String, fingerprint As String, cacheFolder As String)
+Private Sub BuildRentTablesCache(year As Long, sourcePath As String, fingerprint As String, cacheFolder As String, sourceLabel As String, buildReason As String)
     On Error GoTo Fail
 
     Dim rentWb As Workbook
@@ -223,8 +230,47 @@ Private Sub BuildRentTablesCache(year As Long, sourcePath As String, fingerprint
     openedHere = False
 
     Set rentWb = FindOpenWorkbookByPath(sourcePath)
-    If rentWb Is Nothing Then
+    If Not rentWb Is Nothing Then
+        If Not rentWb.ReadOnly Then
+            Err.Raise RENT_TABLES_ERR_IMPORT, "AMI_Optix_RentTables.BuildRentTablesCache", _
+                      "Rent tables source workbook is already open and is not ReadOnly." & vbCrLf & vbCrLf & _
+                      "Close it (or reopen it read-only) and retry refresh." & vbCrLf & vbCrLf & _
+                      "Workbook: " & sourcePath
+        End If
+        If Not rentWb.Saved Then
+            Err.Raise RENT_TABLES_ERR_IMPORT, "AMI_Optix_RentTables.BuildRentTablesCache", _
+                      "Rent tables source workbook is already open with unsaved changes." & vbCrLf & vbCrLf & _
+                      "Close it without saving (or save it and ensure the file timestamp updates) and retry refresh." & vbCrLf & vbCrLf & _
+                      "Workbook: " & sourcePath
+        End If
+    Else
+        Dim prevAlerts As Boolean
+        prevAlerts = Application.DisplayAlerts
+        Application.DisplayAlerts = False
+
+        Dim openErrNum As Long
+        Dim openErrDesc As String
+        openErrNum = 0
+        openErrDesc = ""
+
+        On Error Resume Next
         Set rentWb = Workbooks.Open(sourcePath, UpdateLinks:=0, ReadOnly:=True, AddToMru:=False, Notify:=False)
+        openErrNum = Err.Number
+        openErrDesc = Err.Description
+        Err.Clear
+        On Error GoTo Fail
+
+        Application.DisplayAlerts = prevAlerts
+
+        If rentWb Is Nothing Or openErrNum <> 0 Then
+            Err.Raise RENT_TABLES_ERR_IMPORT, "AMI_Optix_RentTables.BuildRentTablesCache", _
+                      "Could not open rent tables source workbook read-only." & vbCrLf & vbCrLf & _
+                      "This can happen if the network path is unavailable (Z: offline), or the file is locked/unreachable." & vbCrLf & _
+                      "Try opening the workbook manually from the same path to confirm access." & vbCrLf & vbCrLf & _
+                      "Workbook: " & sourcePath & vbCrLf & _
+                      "Error: " & CStr(openErrNum) & " - " & openErrDesc
+        End If
+
         openedHere = True
         On Error Resume Next
         rentWb.Windows(1).Visible = False
@@ -243,7 +289,7 @@ Private Sub BuildRentTablesCache(year As Long, sourcePath As String, fingerprint
     WriteRentLimitsCsv cacheFolder & "\" & RENT_LIMITS_CSV_NAME, rentRows
     WriteUtilityAllowancesCsv cacheFolder & "\" & UTILITY_ALLOWANCES_CSV_NAME, utilRows
 
-    WriteCacheMeta cacheFolder & "\" & CACHE_META_NAME, year, sourcePath, fingerprint
+    WriteCacheMeta cacheFolder & "\" & CACHE_META_NAME, year, sourcePath, fingerprint, sourceLabel, buildReason, rentRows.Count, utilRows.Count
 
     If openedHere Then
         rentWb.Close SaveChanges:=False
@@ -653,15 +699,20 @@ End Function
 ' CACHE META
 '-------------------------------------------------------------------------------
 
-Private Sub WriteCacheMeta(path As String, year As Long, sourcePath As String, fingerprint As String)
+Private Sub WriteCacheMeta(path As String, year As Long, sourcePath As String, fingerprint As String, sourceLabel As String, buildReason As String, rentLimitsRowCount As Long, utilityRowCount As Long)
     On Error GoTo Fail
 
     Dim f As Integer
     f = FreeFile
     Open path For Output As #f
+    Print #f, "cache_version=1"
     Print #f, "year=" & CStr(year)
+    Print #f, "source_label=" & sourceLabel
     Print #f, "source_path=" & sourcePath
     Print #f, "source_fingerprint=" & fingerprint
+    Print #f, "rent_limits_rows=" & CStr(rentLimitsRowCount)
+    Print #f, "utility_allowances_rows=" & CStr(utilityRowCount)
+    Print #f, "build_reason=" & buildReason
     Print #f, "generated_at=" & Format$(Now, "yyyy-mm-dd hh:nn:ss")
     Close #f
     Exit Sub
@@ -922,11 +973,11 @@ End Sub
 ' DIAGNOSTICS
 '-------------------------------------------------------------------------------
 
-Private Sub LogRentTablesDiagnostics(year As Long, sourcePath As String, cacheFolder As String, fingerprint As String, rebuilt As Boolean, sourceLabel As String)
+Private Sub LogRentTablesDiagnostics(year As Long, sourcePath As String, cacheFolder As String, fingerprint As String, rebuilt As Boolean, reason As String, sourceLabel As String)
     On Error Resume Next
 
     ' Lightweight always-on breadcrumb in debug log.
-    DebugLog "RentTablesCache " & IIf(rebuilt, "REFRESH", "OK") & " | year=" & CStr(year) & _
+    DebugLog "RentTablesCache " & IIf(rebuilt, "REBUILD", "OK") & " | reason=" & reason & " | year=" & CStr(year) & _
              " | src=" & sourceLabel & " | wb=" & sourcePath & " | cache=" & cacheFolder & _
              " | fp=" & fingerprint, True
 
@@ -938,6 +989,7 @@ Private Sub LogRentTablesDiagnostics(year As Long, sourcePath As String, cacheFo
     payload = payload & """cache_folder"":""" & EscapeJsonString(cacheFolder) & ""","
     payload = payload & """source_fingerprint"":""" & EscapeJsonString(fingerprint) & ""","
     payload = payload & """rebuilt"":" & IIf(rebuilt, "true", "false") & ","
+    payload = payload & """reason"":""" & EscapeJsonString(reason) & ""","
     payload = payload & """source_label"":""" & EscapeJsonString(sourceLabel) & """"
     payload = payload & "}"
 
@@ -1148,4 +1200,190 @@ Private Function NormalizeOptionLabel(optionLabel As String) As String
         s = Replace(s, "  ", " ")
     Loop
     NormalizeOptionLabel = LCase$(s)
+End Function
+
+'-------------------------------------------------------------------------------
+' STATUS (UI / DIAGNOSTICS)
+'-------------------------------------------------------------------------------
+
+Public Function TryReadRentTablesCacheMeta(year As Long, ByRef metaOut As Object) As Boolean
+    ' Reads cache_meta.txt into a Dictionary (lowercased keys). Returns False if missing/unreadable.
+    On Error GoTo Fail
+
+    TryReadRentTablesCacheMeta = False
+    Set metaOut = Nothing
+
+    Dim cacheFolder As String
+    cacheFolder = GetRentTablesCacheFolder(year)
+
+    Dim metaPath As String
+    metaPath = cacheFolder & "\" & CACHE_META_NAME
+
+    If Dir$(metaPath) = "" Then Exit Function
+
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary")
+
+    Dim f As Integer
+    f = FreeFile
+    Open metaPath For Input As #f
+
+    Dim line As String
+    Do While Not EOF(f)
+        Line Input #f, line
+        Dim p As Long
+        p = InStr(1, line, "=", vbBinaryCompare)
+        If p > 0 Then
+            Dim k As String
+            Dim v As String
+            k = LCase$(Trim$(Left$(line, p - 1)))
+            v = Mid$(line, p + 1)
+            If k <> "" Then d(k) = v
+        End If
+    Loop
+
+    Close #f
+
+    Set metaOut = d
+    TryReadRentTablesCacheMeta = True
+    Exit Function
+
+Fail:
+    On Error Resume Next
+    If f <> 0 Then Close #f
+    Set metaOut = Nothing
+    TryReadRentTablesCacheMeta = False
+End Function
+
+Public Function GetRentTablesStatus(year As Long) As Object
+    ' Returns a Dictionary suitable for rendering a "Rent Tables Status" panel.
+    ' NOTE: This function does NOT rebuild the cache.
+    On Error GoTo Fail
+
+    Dim s As Object
+    Set s = CreateObject("Scripting.Dictionary")
+
+    Dim cacheFolder As String
+    cacheFolder = GetRentTablesCacheFolder(year)
+
+    Dim rentLimitsPath As String
+    rentLimitsPath = cacheFolder & "\" & RENT_LIMITS_CSV_NAME
+
+    Dim utilPath As String
+    utilPath = cacheFolder & "\" & UTILITY_ALLOWANCES_CSV_NAME
+
+    Dim metaPath As String
+    metaPath = cacheFolder & "\" & CACHE_META_NAME
+
+    s("year") = CLng(year)
+    s("cache_folder") = cacheFolder
+    s("rent_limits_csv") = rentLimitsPath
+    s("utility_allowances_csv") = utilPath
+    s("cache_meta") = metaPath
+    s("rent_limits_exists") = (Dir$(rentLimitsPath) <> "")
+    s("utility_allowances_exists") = (Dir$(utilPath) <> "")
+    s("meta_exists") = (Dir$(metaPath) <> "")
+
+    Dim meta As Object
+    Set meta = Nothing
+    If TryReadRentTablesCacheMeta(year, meta) Then
+        s("cache_source_label") = DictGet(meta, "source_label", InferSourceLabel(DictGet(meta, "source_path", "")))
+        s("cache_source_path") = DictGet(meta, "source_path", "")
+        s("cache_source_fingerprint") = DictGet(meta, "source_fingerprint", "")
+        s("cache_generated_at") = DictGet(meta, "generated_at", "")
+        s("cache_build_reason") = DictGet(meta, "build_reason", "")
+        s("cache_rent_limits_rows") = DictGet(meta, "rent_limits_rows", "")
+        s("cache_utility_allowances_rows") = DictGet(meta, "utility_allowances_rows", "")
+    Else
+        s("cache_source_label") = ""
+        s("cache_source_path") = ""
+        s("cache_source_fingerprint") = ""
+        s("cache_generated_at") = ""
+        s("cache_build_reason") = ""
+        s("cache_rent_limits_rows") = ""
+        s("cache_utility_allowances_rows") = ""
+    End If
+
+    Dim resolvedLabel As String
+    resolvedLabel = ""
+    Dim resolvedPath As String
+    resolvedPath = ResolveYearWorkbookPath(year, resolvedLabel)
+    s("resolved_source_label") = resolvedLabel
+    s("resolved_source_path") = resolvedPath
+
+    Dim resolvedFp As String
+    resolvedFp = ""
+    Dim resolvedMtime As String
+    resolvedMtime = ""
+    Dim resolvedSize As String
+    resolvedSize = ""
+    Dim resolvedErr As String
+    resolvedErr = ""
+
+    If Trim$(resolvedPath) <> "" Then
+        On Error Resume Next
+        resolvedMtime = Format$(FileDateTime(resolvedPath), "yyyy-mm-dd hh:nn:ss")
+        resolvedSize = CStr(FileLen(resolvedPath))
+        resolvedFp = GetYearWorkbookFingerprint(resolvedPath)
+        If Err.Number <> 0 Then resolvedErr = Err.Description
+        Err.Clear
+        On Error GoTo Fail
+    End If
+
+    s("resolved_source_last_modified") = resolvedMtime
+    s("resolved_source_size_bytes") = resolvedSize
+    s("resolved_fingerprint") = resolvedFp
+    s("resolved_source_error") = resolvedErr
+
+    Dim cacheStatus As String
+    cacheStatus = "UNKNOWN"
+
+    If Not CBool(s("rent_limits_exists")) Or Not CBool(s("utility_allowances_exists")) Then
+        cacheStatus = "MISSING_CACHE_FILES"
+    ElseIf Not CBool(s("meta_exists")) Then
+        cacheStatus = "MISSING_CACHE_META"
+    ElseIf Trim$(CStr(s("cache_source_path"))) = "" Or Trim$(CStr(s("cache_source_fingerprint"))) = "" Then
+        cacheStatus = "CACHE_META_INCOMPLETE"
+    ElseIf Trim$(resolvedPath) = "" Then
+        cacheStatus = "SOURCE_NOT_FOUND"
+    ElseIf resolvedErr <> "" Then
+        cacheStatus = "SOURCE_UNAVAILABLE"
+    Else
+        If UCase$(Trim$(CStr(s("cache_source_path")))) = UCase$(Trim$(resolvedPath)) And _
+           Trim$(CStr(s("cache_source_fingerprint"))) = Trim$(resolvedFp) Then
+            cacheStatus = "OK"
+        Else
+            cacheStatus = "STALE"
+        End If
+    End If
+
+    s("cache_status") = cacheStatus
+
+    Set GetRentTablesStatus = s
+    Exit Function
+
+Fail:
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Function
+
+Private Function DictGet(d As Object, key As String, Optional defaultValue As String = "") As String
+    On Error GoTo SafeExit
+    DictGet = defaultValue
+    If d Is Nothing Then Exit Function
+    If d.Exists(LCase$(Trim$(key))) Then DictGet = CStr(d(LCase$(Trim$(key))))
+    Exit Function
+SafeExit:
+    DictGet = defaultValue
+End Function
+
+Private Function InferSourceLabel(path As String) As String
+    Dim p As String
+    p = UCase$(Trim$(CStr(path)))
+    If Left$(p, 3) = "Z:\" Then
+        InferSourceLabel = "Z:"
+    ElseIf InStr(1, p, "\APPDATA\", vbTextCompare) > 0 Then
+        InferSourceLabel = "AppData"
+    Else
+        InferSourceLabel = ""
+    End If
 End Function

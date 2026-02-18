@@ -39,6 +39,14 @@
                   imageMso="Refresh"
                   onAction="Ribbon_RefreshRentTablesCache"
                   supertip="Rebuild the local per-user rent tables cache (CSV) for the selected year from the authoritative year workbook (Z:\\ first; %APPDATA% fallback)."/>
+          <labelControl id="lblRentTablesStatus"
+                        getLabel="Ribbon_GetRentTablesStatusLabel"/>
+          <button id="btnRentTablesStatus"
+                  label="Rent Tables Status"
+                  size="normal"
+                  imageMso="WatchWindow"
+                  onAction="Ribbon_ShowRentTablesStatus"
+                  supertip="Show Rent Tables status on the Diagnostics sheet (selected year, cache source file, timestamps)."/>
           <button id="btnManageRentRollYears"
                   label="Manage Rent Roll Years..."
                   size="normal"

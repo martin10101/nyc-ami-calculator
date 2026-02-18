@@ -42,6 +42,53 @@ Public Sub ShowAMIOptixDiagnostics()
     WriteKV ws, r, "API Base URL", API_BASE_URL
     r = r + 1
 
+    ' -----------------------------------------------------------------------
+    ' Rent Tables Status (Fix-06c)
+    ' -----------------------------------------------------------------------
+
+    ws.Cells(r, 1).Value = "Rent Tables Status"
+    ws.Cells(r, 1).Font.Bold = True
+    r = r + 1
+
+    Dim year As Long
+    year = 0
+    On Error Resume Next
+    year = CLng(GetSetting("AMI_Optix", "RentRollYears", "SelectedYear", "2025"))
+    On Error GoTo 0
+    If year <= 0 Then year = 2025
+
+    WriteKV ws, r, "Selected Year", CStr(year)
+
+    Dim rentStatus As Object
+    Set rentStatus = Nothing
+    Dim rentStatusErr As String
+    rentStatusErr = ""
+
+    On Error Resume Next
+    Set rentStatus = GetRentTablesStatus(year)
+    If Err.Number <> 0 Then rentStatusErr = Err.Description
+    Err.Clear
+    On Error GoTo 0
+
+    If rentStatus Is Nothing Or rentStatusErr <> "" Then
+        WriteKV ws, r, "Status", "ERROR: " & rentStatusErr
+    Else
+        WriteKV ws, r, "Cache Status", CStr(rentStatus("cache_status"))
+        WriteKV ws, r, "Cache Folder", CStr(rentStatus("cache_folder"))
+        WriteKV ws, r, "Cache Built At", CStr(rentStatus("cache_generated_at"))
+        WriteKV ws, r, "Cache Built From", CStr(rentStatus("cache_source_label")) & " | " & CStr(rentStatus("cache_source_path"))
+        WriteKV ws, r, "Cache Fingerprint", CStr(rentStatus("cache_source_fingerprint"))
+        WriteKV ws, r, "Cache Build Reason", CStr(rentStatus("cache_build_reason"))
+        WriteKV ws, r, "Source (Resolved Now)", CStr(rentStatus("resolved_source_label")) & " | " & CStr(rentStatus("resolved_source_path"))
+        WriteKV ws, r, "Source Last Modified", CStr(rentStatus("resolved_source_last_modified"))
+        WriteKV ws, r, "Source Fingerprint (Now)", CStr(rentStatus("resolved_fingerprint"))
+        If CStr(rentStatus("resolved_source_error")) <> "" Then
+            WriteKV ws, r, "Source Access Error", CStr(rentStatus("resolved_source_error"))
+        End If
+    End If
+
+    r = r + 1
+
     ws.Cells(r, 1).Value = "Run Log"
     ws.Cells(r, 1).Font.Bold = True
     r = r + 1
@@ -227,4 +274,3 @@ Fail:
     ws.Cells(r, 1).Value = "(could not enumerate notes)"
     WriteNotesList = r + 1
 End Function
-

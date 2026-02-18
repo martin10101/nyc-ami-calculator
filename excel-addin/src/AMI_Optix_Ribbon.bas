@@ -26,6 +26,40 @@ Private Sub EnsureAMIOptixTabActive()
     On Error GoTo 0
 End Sub
 
+Private Sub InvalidateRibbonControl(controlId As String)
+    On Error Resume Next
+    If Not m_RibbonUI Is Nothing Then
+        m_RibbonUI.InvalidateControl controlId
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Function GetDictString(d As Object, key As String, Optional defaultValue As String = "") As String
+    On Error GoTo SafeExit
+    GetDictString = defaultValue
+    If d Is Nothing Then Exit Function
+    Dim k As String
+    k = LCase$(Trim$(CStr(key)))
+    If k = "" Then Exit Function
+    If d.Exists(k) Then GetDictString = CStr(d(k))
+    Exit Function
+SafeExit:
+    GetDictString = defaultValue
+End Function
+
+Private Function InferSourceLabelFromPath(path As String) As String
+    Dim p As String
+    p = UCase$(Trim$(CStr(path)))
+    If p = "" Then Exit Function
+    If Left$(p, 3) = "Z:\" Then
+        InferSourceLabelFromPath = "Z:"
+    ElseIf InStr(1, p, "\AMI_OPTIX\RENTROLLYEARS\", vbTextCompare) > 0 Then
+        InferSourceLabelFromPath = "AppData"
+    Else
+        InferSourceLabelFromPath = ""
+    End If
+End Function
+
 ' Rent roll year selector (server-side rent calculator)
 Private Const AMI_OPTIX_REGISTRY_PATH As String = "AMI_Optix"
 Private Const RENTROLL_YEAR_MIN As Long = 2022
@@ -721,6 +755,9 @@ Public Sub Ribbon_SelectRentRollYear(control As IRibbonControl, id As String, in
     Call EnsureSelectedRentRollYearActive(True)
 
     Call MaybeWarnRentRollYearMismatch(year)
+
+    ' Update the "Rent Tables Status" label to reflect the selected year.
+    Call InvalidateRibbonControl("lblRentTablesStatus")
 End Sub
 
 Public Sub Ribbon_GetRentRollYearCount(control As IRibbonControl, ByRef returnedVal)
@@ -754,6 +791,42 @@ Public Sub Ribbon_GetRentRollYearSelectedIndex(control As IRibbonControl, ByRef 
         idx = CLng(RENTROLL_YEAR_DEFAULT - RENTROLL_YEAR_MIN)
     End If
     returnedVal = idx
+End Sub
+
+Public Sub Ribbon_GetRentTablesStatusLabel(control As IRibbonControl, ByRef returnedVal)
+    ' Non-invasive: show what the per-user cache was last built from (meta-only; no network calls).
+    On Error GoTo SafeExit
+
+    InitRentRollYearState
+
+    Dim year As Long
+    year = m_SelectedRentRollYear
+
+    Dim meta As Object
+    Set meta = Nothing
+
+    Dim label As String
+    label = "Rent Tables: " & CStr(year) & " | cache: (missing)"
+
+    If TryReadRentTablesCacheMeta(year, meta) Then
+        Dim sourceLabel As String
+        sourceLabel = GetDictString(meta, "source_label", "")
+        If sourceLabel = "" Then sourceLabel = InferSourceLabelFromPath(GetDictString(meta, "source_path", ""))
+
+        Dim builtAt As String
+        builtAt = GetDictString(meta, "generated_at", "")
+
+        If sourceLabel = "" Then sourceLabel = "?"
+        If builtAt = "" Then builtAt = "?"
+
+        label = "Rent Tables: " & CStr(year) & " | " & sourceLabel & " | built " & builtAt
+    End If
+
+    returnedVal = label
+    Exit Sub
+
+SafeExit:
+    returnedVal = "Rent Tables: (status unavailable)"
 End Sub
 
 Public Sub Ribbon_ManageRentRollYears(control As IRibbonControl)
@@ -819,6 +892,38 @@ Fail:
     MsgBox "Manage Rent Roll Years failed: " & Err.Description, vbExclamation, "AMI Optix"
 End Sub
 
+Public Sub Ribbon_ShowRentTablesStatus(control As IRibbonControl)
+    ' Shows the Rent Tables section in Diagnostics (non-modal; no MsgBox on success).
+    On Error GoTo Fail
+
+    Call ShowAMIOptixDiagnostics
+
+    If Not ActiveWorkbook Is Nothing Then
+        Dim ws As Worksheet
+        Set ws = Nothing
+        On Error Resume Next
+        Set ws = ActiveWorkbook.Worksheets("AMI Optix Diagnostics")
+        On Error GoTo Fail
+
+        If Not ws Is Nothing Then
+            Dim found As Range
+            Set found = ws.Columns(1).Find(What:="Rent Tables Status", After:=ws.Cells(1, 1), LookIn:=xlValues, LookAt:=xlWhole, _
+                                           SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+            If Not found Is Nothing Then
+                ws.Activate
+                found.Select
+            End If
+        End If
+    End If
+
+    EnsureAMIOptixTabActive
+    Exit Sub
+
+Fail:
+    MsgBox "Rent Tables Status failed: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
 Public Sub Ribbon_RefreshRentTablesCache(control As IRibbonControl)
     ' Fix-06c: Force-refresh the per-user normalized rent tables cache (CSV) for the selected year.
     On Error GoTo Fail
@@ -838,6 +943,7 @@ Public Sub Ribbon_RefreshRentTablesCache(control As IRibbonControl)
     Call EnsureRentTablesCache(year, True, sourcePath, cacheFolder, fingerprint)
 
     MsgBox "Rent tables cache refreshed for " & CStr(year) & " from " & sourcePath & " -> " & cacheFolder, vbInformation, "AMI Optix"
+    Call InvalidateRibbonControl("lblRentTablesStatus")
     Exit Sub
 
 Fail:
