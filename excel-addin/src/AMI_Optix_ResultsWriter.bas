@@ -14,6 +14,27 @@ Public g_AMIOptixLastManualScenarioInvalid As Boolean
 Public g_AMIOptixLastScenariosSheetBuildError As String
 
 '-------------------------------------------------------------------------------
+' LOCAL RENT CALC CACHE (Fix-06)
+'-------------------------------------------------------------------------------
+
+Private Const RENTROLL_YEAR_REG_SECTION As String = "RentRollYears"
+Private Const RENTROLL_YEAR_REG_KEY_SELECTED As String = "SelectedYear"
+Private Const RENTROLL_YEAR_MIN As Long = 2022
+Private Const RENTROLL_YEAR_MAX As Long = 2026
+Private Const RENTROLL_YEAR_DEFAULT As Long = 2025
+
+Private Const RENTROLL_SHARED_BASE As String = "Z:\AMI_Optix\RentRollYears"
+Private Const RENTROLL_LOCAL_SUBPATH As String = "\AMI_Optix\RentRollYears"
+Private Const RENTROLL_LOCAL_FILENAME_PREFIX As String = "RentCalculator_"
+Private Const RENTROLL_LOCAL_FILENAME_SUFFIX As String = ".xlsx"
+
+Private m_LocalRentYear As Long
+Private m_LocalRentPath As String
+Private m_LocalRentWb As Workbook
+Private m_LocalGrossRents As Object ' Scripting.Dictionary (key: "<amiKey>|<bedLabel>" -> gross)
+Private m_LocalAllowances As Object ' Scripting.Dictionary (category -> optionLabel -> bedLabel -> amount)
+
+'-------------------------------------------------------------------------------
 ' APPLY BEST SCENARIO
 '-------------------------------------------------------------------------------
 
@@ -902,6 +923,828 @@ ErrorHandler:
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     ManualCalculateScenario = False
+End Function
+
+Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As String = "", Optional headerLabel As String = "SCENARIO MANUAL (WORKING COPY)") As Boolean
+    ' Fix-06: Rebuild the Scenario Manual block and compute rents/totals locally from the selected year's rent workbook.
+    ' IMPORTANT: This function must NOT call /api/manual_calculate.
+    On Error GoTo ErrorHandler
+
+    RefreshManualWorkingCopyLocalRents = False
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim programNorm As String
+    programNorm = UCase$(Trim$(programOverride))
+    If programNorm <> "UAP" And programNorm <> "MIH" Then
+        programNorm = DetectProgramFromWorkbook()
+    End If
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    ' Read units from the program sheet (prefer template sheet by name).
+    Dim dataWs As Worksheet
+    Set dataWs = Nothing
+    On Error Resume Next
+    If programNorm = "MIH" Then
+        ' Prefer MIH sheet first.
+        Set dataWs = ActiveWorkbook.Worksheets("MIH")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("RentRoll")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("UAP")
+        If dataWs Is Nothing Then Set dataWs = ActiveWorkbook.Worksheets("PROJECT WORKSHEET")
+    Else
+        Set dataWs = ActiveWorkbook.Worksheets("UAP")
+    End If
+    On Error GoTo ErrorHandler
+    If dataWs Is Nothing Then Exit Function
+
+    dataWs.Activate
+    Dim units As Collection
+    Set units = ReadUnitData()
+    prevSheet.Activate
+
+    If units Is Nothing Or units.Count = 0 Then Exit Function
+
+    Dim utilities As Object
+    Set utilities = GetUtilitySelectionsForProgram(programNorm)
+
+    Dim tradeoffs As Collection
+    Set tradeoffs = New Collection
+
+    Dim assignments As Collection
+    Set assignments = BuildAssignmentsFromUnits(units)
+
+    Dim rentTotals As Object
+    Set rentTotals = CreateObject("Scripting.Dictionary")
+
+    Dim scheduleOk As Boolean
+    scheduleOk = EnsureLocalRentScheduleReady(tradeoffs)
+    If scheduleOk Then
+        Set rentTotals = EnrichAssignmentsWithLocalRents(assignments, utilities, tradeoffs)
+    Else
+        ' Keep shape consistent so the manual block still renders.
+        rentTotals("net_monthly") = 0#
+        rentTotals("net_annual") = 0#
+    End If
+
+    Dim waami As Double
+    waami = ComputeWaami(assignments)
+
+    Dim bands As Collection
+    Set bands = ComputeBandsUsed(assignments)
+
+    Dim metrics As Object
+    Set metrics = CreateObject("Scripting.Dictionary")
+    metrics("band_mix") = BuildBandMix(assignments)
+
+    Dim scenario As Object
+    Set scenario = CreateObject("Scripting.Dictionary")
+    scenario("waami") = waami
+    scenario("bands") = bands
+    scenario("metrics") = metrics
+    scenario("tradeoffs") = tradeoffs
+    scenario("assignments") = assignments
+    scenario("rent_totals") = rentTotals
+
+    Dim ws As Worksheet
+    Set ws = GetOrCreateScenariosSheet()
+
+    Dim prevEnableEvents As Boolean
+    Dim prevScreenUpdating As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevScreenUpdating = Application.ScreenUpdating
+
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    ClearManualBlock ws
+
+    Dim row As Long
+    row = MANUAL_BLOCK_START_ROW
+
+    ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 16
+    row = row + 2
+
+    row = WriteUtilitySettings(ws, row)
+    row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
+    row = row + 1
+
+    ws.Cells(row, 1).Value = headerLabel
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 14
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 13)).Interior.Color = RGB(220, 240, 220)
+    row = row + 1
+
+    row = WriteScenarioSummaryAndTable(ws, row, scenario)
+
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.EnableEvents = prevEnableEvents
+
+    RefreshManualWorkingCopyLocalRents = True
+    Exit Function
+
+ErrorHandler:
+    On Error Resume Next
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    RefreshManualWorkingCopyLocalRents = False
+End Function
+
+Private Function BuildAssignmentsFromUnits(units As Collection) As Collection
+    Dim assignments As Collection
+    Set assignments = New Collection
+
+    Dim i As Long
+    For i = 1 To units.Count
+        Dim u As Object
+        Set u = units(i)
+        If u Is Nothing Then GoTo NextUnit
+
+        Dim a As Object
+        Set a = CreateObject("Scripting.Dictionary")
+
+        If u.Exists("unit_id") Then a("unit_id") = CStr(u("unit_id"))
+        If u.Exists("bedrooms") Then a("bedrooms") = u("bedrooms")
+        If u.Exists("net_sf") Then a("net_sf") = u("net_sf")
+        If u.Exists("floor") Then a("floor") = u("floor")
+        If u.Exists("balcony") Then a("balcony") = u("balcony")
+
+        Dim ami As Double
+        ami = 0#
+        On Error Resume Next
+        If u.Exists("client_ami") Then
+            If IsNumeric(u("client_ami")) Then ami = CDbl(u("client_ami"))
+        End If
+        On Error GoTo 0
+        If ami > 2# Then ami = ami / 100#
+        a("assigned_ami") = ami
+
+        assignments.Add a
+
+NextUnit:
+    Next i
+
+    Set BuildAssignmentsFromUnits = assignments
+End Function
+
+Private Function GetSelectedRentRollYearLocal() As Long
+    Dim raw As String
+    raw = GetSetting("AMI_Optix", RENTROLL_YEAR_REG_SECTION, RENTROLL_YEAR_REG_KEY_SELECTED, CStr(RENTROLL_YEAR_DEFAULT))
+
+    Dim y As Long
+    y = RENTROLL_YEAR_DEFAULT
+    On Error Resume Next
+    y = CLng(raw)
+    On Error GoTo 0
+
+    If y < RENTROLL_YEAR_MIN Or y > RENTROLL_YEAR_MAX Then y = RENTROLL_YEAR_DEFAULT
+    GetSelectedRentRollYearLocal = y
+End Function
+
+Private Function FirstWorkbookInFolder(folderPath As String) As String
+    ' Returns the first *.xlsx or *.xlsm found in a folder (alphabetical by Dir enumeration).
+    On Error GoTo SafeExit
+
+    If Trim$(folderPath) = "" Then GoTo SafeExit
+
+    Dim f As String
+    f = Dir(folderPath & "\*.xlsx")
+    If Trim$(f) <> "" Then
+        FirstWorkbookInFolder = folderPath & "\" & f
+        Exit Function
+    End If
+
+    f = Dir(folderPath & "\*.xlsm")
+    If Trim$(f) <> "" Then
+        FirstWorkbookInFolder = folderPath & "\" & f
+        Exit Function
+    End If
+
+SafeExit:
+    FirstWorkbookInFolder = ""
+End Function
+
+Private Function ResolveRentWorkbookPath(year As Long, ByRef sourceLabel As String) As String
+    ' Fix-06: Prefer shared Z:\ location, fallback to per-user %APPDATA% cache.
+    Dim preferredName As String
+    preferredName = RENTROLL_LOCAL_FILENAME_PREFIX & CStr(year) & RENTROLL_LOCAL_FILENAME_SUFFIX
+
+    Dim sharedFolder As String
+    sharedFolder = RENTROLL_SHARED_BASE & "\" & CStr(year)
+
+    Dim sharedPreferred As String
+    sharedPreferred = sharedFolder & "\" & preferredName
+    If Dir(sharedPreferred) <> "" Then
+        sourceLabel = "Z:"
+        ResolveRentWorkbookPath = sharedPreferred
+        Exit Function
+    End If
+
+    Dim sharedAny As String
+    sharedAny = FirstWorkbookInFolder(sharedFolder)
+    If Trim$(sharedAny) <> "" Then
+        sourceLabel = "Z:"
+        ResolveRentWorkbookPath = sharedAny
+        Exit Function
+    End If
+
+    Dim appDataBase As String
+    appDataBase = Environ$("APPDATA") & RENTROLL_LOCAL_SUBPATH & "\" & CStr(year)
+
+    Dim localPreferred As String
+    localPreferred = appDataBase & "\" & preferredName
+    If Dir(localPreferred) <> "" Then
+        sourceLabel = "AppData"
+        ResolveRentWorkbookPath = localPreferred
+        Exit Function
+    End If
+
+    Dim localAny As String
+    localAny = FirstWorkbookInFolder(appDataBase)
+    If Trim$(localAny) <> "" Then
+        sourceLabel = "AppData"
+        ResolveRentWorkbookPath = localAny
+        Exit Function
+    End If
+
+    sourceLabel = ""
+    ResolveRentWorkbookPath = ""
+End Function
+
+Private Sub CloseLocalRentCache()
+    On Error Resume Next
+
+    If Not m_LocalRentWb Is Nothing Then
+        m_LocalRentWb.Close SaveChanges:=False
+    End If
+
+    Set m_LocalRentWb = Nothing
+    Set m_LocalGrossRents = Nothing
+    Set m_LocalAllowances = Nothing
+    m_LocalRentYear = 0
+    m_LocalRentPath = ""
+End Sub
+
+Private Function EnsureLocalRentScheduleReady(ByRef tradeoffs As Collection) As Boolean
+    On Error GoTo Fail
+
+    Dim year As Long
+    year = GetSelectedRentRollYearLocal()
+
+    Dim sourceLabel As String
+    Dim path As String
+    sourceLabel = ""
+    path = ResolveRentWorkbookPath(year, sourceLabel)
+
+    If Trim$(path) = "" Then
+        tradeoffs.Add "Local rent calc: rent workbook not found for year " & CStr(year) & " (checked Z:\\ and %APPDATA%)."
+        Call CloseLocalRentCache
+        EnsureLocalRentScheduleReady = False
+        Exit Function
+    End If
+
+    If Not m_LocalRentWb Is Nothing Then
+        If m_LocalRentYear = year And UCase$(m_LocalRentPath) = UCase$(path) Then
+            EnsureLocalRentScheduleReady = True
+            Exit Function
+        End If
+        Call CloseLocalRentCache
+    End If
+
+    Dim prevSheet As Worksheet
+    Set prevSheet = ActiveSheet
+
+    Set m_LocalRentWb = Workbooks.Open(path, UpdateLinks:=0, ReadOnly:=True, AddToMru:=False, Notify:=False)
+    m_LocalRentYear = year
+    m_LocalRentPath = path
+
+    ' Hide the rent workbook so it doesn't distract the user.
+    On Error Resume Next
+    m_LocalRentWb.Windows(1).Visible = False
+    On Error GoTo Fail
+
+    If Not prevSheet Is Nothing Then prevSheet.Activate
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    Set ws = m_LocalRentWb.Worksheets("AMI & Rent")
+    On Error GoTo Fail
+
+    If ws Is Nothing Then
+        tradeoffs.Add "Local rent calc: sheet 'AMI & Rent' not found in " & path
+        Call CloseLocalRentCache
+        EnsureLocalRentScheduleReady = False
+        Exit Function
+    End If
+
+    If Not LoadLocalRentLookups(ws, tradeoffs) Then
+        Call CloseLocalRentCache
+        EnsureLocalRentScheduleReady = False
+        Exit Function
+    End If
+
+    tradeoffs.Add "Local rent calc: using " & sourceLabel & " rent workbook (" & CStr(year) & ")."
+    EnsureLocalRentScheduleReady = True
+    Exit Function
+
+Fail:
+    tradeoffs.Add "Local rent calc failed: " & Err.Description
+    Call CloseLocalRentCache
+    EnsureLocalRentScheduleReady = False
+End Function
+
+Private Function CanonAmiKey(ami As Double) As String
+    CanonAmiKey = Format$(Round(CDbl(ami), 4), "0.0000")
+End Function
+
+Private Function BedroomLabelFromCount(bedrooms As Variant) As String
+    Dim n As Long
+    n = 0
+    On Error Resume Next
+    If IsNumeric(bedrooms) Then n = CLng(Round(CDbl(bedrooms), 0))
+    On Error GoTo 0
+
+    If n <= 0 Then
+        BedroomLabelFromCount = "studio"
+    ElseIf n >= 5 Then
+        BedroomLabelFromCount = "5 BR"
+    Else
+        BedroomLabelFromCount = CStr(n) & " BR"
+    End If
+End Function
+
+Private Function BedroomLabelFromSheetLabel(label As String) As String
+    Dim v As String
+    v = LCase$(Trim$(CStr(label)))
+
+    Select Case v
+        Case "studio": BedroomLabelFromSheetLabel = "studio"
+        Case "1 br": BedroomLabelFromSheetLabel = "1 BR"
+        Case "2 br": BedroomLabelFromSheetLabel = "2 BR"
+        Case "3 br": BedroomLabelFromSheetLabel = "3 BR"
+        Case "4 br": BedroomLabelFromSheetLabel = "4 BR"
+        Case "5 br": BedroomLabelFromSheetLabel = "5 BR"
+        Case Else: BedroomLabelFromSheetLabel = ""
+    End Select
+End Function
+
+Private Function UtilityCategoryFromHeaderValue(headerValue As String) As String
+    Dim h As String
+    h = LCase$(Trim$(CStr(headerValue)))
+
+    Select Case h
+        Case "apartment electricity only": UtilityCategoryFromHeaderValue = "electricity"
+        Case "cooking": UtilityCategoryFromHeaderValue = "cooking"
+        Case "heat": UtilityCategoryFromHeaderValue = "heat"
+        Case "hot water": UtilityCategoryFromHeaderValue = "hot_water"
+        Case Else: UtilityCategoryFromHeaderValue = UtilityCategoryFromOptionLabel(headerValue)
+    End Select
+End Function
+
+Private Function UtilityCategoryFromOptionLabel(optionLabel As String) As String
+    Dim v As String
+    v = Trim$(CStr(optionLabel))
+
+    Select Case v
+        Case "Tenant Pays": UtilityCategoryFromOptionLabel = "electricity"
+        Case "Electric Stove", "Gas Stove": UtilityCategoryFromOptionLabel = "cooking"
+        Case "Electric Heat - Cold Climate Air Source Heat Pump (ccASHP)1", "Electric Heat - Other2", "Gas Heat", "Oil Heat": UtilityCategoryFromOptionLabel = "heat"
+        Case "Electric Hot Water - Heat Pump", "Electric Hot Water - Other", "Gas Hot Water", "Oil Hot Water": UtilityCategoryFromOptionLabel = "hot_water"
+        Case Else: UtilityCategoryFromOptionLabel = "" ' N/A label is ambiguous; rely on current category from header.
+    End Select
+End Function
+
+Private Function LoadLocalRentLookups(rentWs As Worksheet, ByRef tradeoffs As Collection) As Boolean
+    ' Parses the "AMI & Rent" sheet similarly to ami_optix/rent_calculator.py.
+    On Error GoTo Fail
+
+    Set m_LocalGrossRents = CreateObject("Scripting.Dictionary")
+    Set m_LocalAllowances = CreateObject("Scripting.Dictionary")
+
+    ' --- Gross rent table ---
+    Dim lastRow As Long
+    lastRow = rentWs.Cells(rentWs.Rows.Count, 3).End(xlUp).row ' col C
+    If lastRow < 1 Then lastRow = 1
+
+    Dim currentAmi As Double
+    currentAmi = -1#
+
+    Dim r As Long
+    For r = 1 To Application.Min(lastRow, 5000)
+        Dim cVal As Variant
+        cVal = rentWs.Cells(r, 3).Value
+
+        Dim marker As String
+        marker = LCase$(Trim$(CStr(rentWs.Cells(r, 4).Value)))
+
+        If IsNumeric(cVal) And marker = "of ami" Then
+            currentAmi = CDbl(cVal)
+        ElseIf currentAmi >= 0# Then
+            Dim bedLabel As String
+            bedLabel = BedroomLabelFromSheetLabel(CStr(cVal))
+            If bedLabel <> "" Then
+                Dim grossVal As Variant
+                grossVal = rentWs.Cells(r, 7).Value ' col G
+                If IsNumeric(grossVal) Then
+                    m_LocalGrossRents(CanonAmiKey(currentAmi) & "|" & bedLabel) = CDbl(grossVal)
+                End If
+            End If
+        End If
+    Next r
+
+    ' --- Allowances table ---
+    Dim currentCat As String
+    currentCat = ""
+
+    Dim lastCol As Long
+    lastCol = rentWs.Cells(15, rentWs.Columns.Count).End(xlToLeft).Column
+    If lastCol < 1 Then lastCol = 1
+
+    Dim col As Long
+    For col = 1 To Application.Min(lastCol, 200)
+        Dim headerVal As String
+        headerVal = Trim$(CStr(rentWs.Cells(15, col).Value))
+
+        Dim headerCat As String
+        headerCat = UtilityCategoryFromHeaderValue(headerVal)
+        If headerCat <> "" Then currentCat = headerCat
+
+        Dim optionVal As Variant
+        optionVal = rentWs.Cells(16, col).Value
+        If Trim$(CStr(optionVal)) = "" Then optionVal = rentWs.Cells(17, col).Value
+
+        Dim optionLabel As String
+        optionLabel = Trim$(CStr(optionVal))
+        If optionLabel = "" Then GoTo NextCol
+        If LCase$(optionLabel) = "select -->>" Then GoTo NextCol
+
+        Dim optionCat As String
+        optionCat = UtilityCategoryFromOptionLabel(optionLabel)
+        If optionCat = "" Then optionCat = currentCat
+        If optionCat = "" Then GoTo NextCol
+
+        Dim catDict As Object
+        Set catDict = Nothing
+        If m_LocalAllowances.Exists(optionCat) Then
+            Set catDict = m_LocalAllowances(optionCat)
+        Else
+            Set catDict = CreateObject("Scripting.Dictionary")
+            m_LocalAllowances(optionCat) = catDict
+        End If
+
+        Dim bedDict As Object
+        Set bedDict = CreateObject("Scripting.Dictionary")
+
+        Dim bedLabels As Variant
+        bedLabels = Array("studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR")
+
+        Dim i As Long
+        For i = LBound(bedLabels) To UBound(bedLabels)
+            Dim amtVal As Variant
+            amtVal = rentWs.Cells(18 + i, col).Value ' rows 18..23
+
+            Dim amt As Double
+            amt = 0#
+            If IsNumeric(amtVal) Then
+                amt = CDbl(amtVal)
+            ElseIf Len(Trim$(CStr(amtVal))) > 0 Then
+                On Error Resume Next
+                amt = CDbl(amtVal)
+                On Error GoTo Fail
+            End If
+            bedDict(CStr(bedLabels(i))) = amt
+        Next i
+
+        catDict(optionLabel) = bedDict
+
+NextCol:
+    Next col
+
+    LoadLocalRentLookups = (Not m_LocalGrossRents Is Nothing And m_LocalGrossRents.Count > 0)
+    If Not LoadLocalRentLookups Then
+        tradeoffs.Add "Local rent calc: could not parse gross rent table from 'AMI & Rent'."
+    End If
+    Exit Function
+
+Fail:
+    tradeoffs.Add "Local rent parse failed: " & Err.Description
+    LoadLocalRentLookups = False
+End Function
+
+Private Function LookupLocalGrossRent(ami As Double, bedroomLabel As String, ByRef gross As Double) As Boolean
+    gross = 0#
+    LookupLocalGrossRent = False
+
+    If m_LocalGrossRents Is Nothing Then Exit Function
+
+    Dim key As String
+    key = CanonAmiKey(ami) & "|" & bedroomLabel
+
+    If m_LocalGrossRents.Exists(key) Then
+        gross = CDbl(m_LocalGrossRents(key))
+        LookupLocalGrossRent = True
+    End If
+End Function
+
+Private Function LookupLocalAllowance(category As String, optionLabel As String, bedroomLabel As String) As Double
+    On Error GoTo SafeExit
+
+    LookupLocalAllowance = 0#
+
+    If m_LocalAllowances Is Nothing Then Exit Function
+    If Not m_LocalAllowances.Exists(category) Then Exit Function
+
+    Dim catDict As Object
+    Set catDict = m_LocalAllowances(category)
+    If catDict Is Nothing Then Exit Function
+    If Not catDict.Exists(optionLabel) Then Exit Function
+
+    Dim bedDict As Object
+    Set bedDict = catDict(optionLabel)
+    If bedDict Is Nothing Then Exit Function
+    If Not bedDict.Exists(bedroomLabel) Then Exit Function
+
+    LookupLocalAllowance = CDbl(bedDict(bedroomLabel))
+    Exit Function
+
+SafeExit:
+    LookupLocalAllowance = 0#
+End Function
+
+Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, utilities As Object, ByRef tradeoffs As Collection) As Object
+    ' Returns rent_totals dict (net_monthly/net_annual).
+    On Error GoTo Fail
+
+    Dim totals As Object
+    Set totals = CreateObject("Scripting.Dictionary")
+
+    Dim totalNet As Double
+    totalNet = 0#
+
+    Dim categories As Variant
+    categories = Array("electricity", "cooking", "heat", "hot_water")
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextAssignment
+
+        Dim ami As Double
+        ami = 0#
+        If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+        If ami > 2# Then ami = ami / 100#
+        a("assigned_ami") = ami
+
+        Dim bedLabel As String
+        bedLabel = BedroomLabelFromCount(a("bedrooms"))
+
+        Dim gross As Double
+        gross = 0#
+        If Not LookupLocalGrossRent(ami, bedLabel, gross) Then
+            tradeoffs.Add "Local rent calc: missing gross rent for " & Format$(ami, "0%") & " / " & bedLabel
+        End If
+
+        Dim allowancesArr As Collection
+        Set allowancesArr = New Collection
+
+        Dim totalAllowance As Double
+        totalAllowance = 0#
+
+        Dim c As Long
+        For c = LBound(categories) To UBound(categories)
+            Dim cat As String
+            cat = CStr(categories(c))
+
+            Dim selectionKey As String
+            selectionKey = "na"
+            On Error Resume Next
+            If Not utilities Is Nothing Then
+                If utilities.Exists(cat) Then selectionKey = CStr(utilities(cat))
+            End If
+            On Error GoTo Fail
+
+            Dim optionLabel As String
+            optionLabel = FormatUtilityType(selectionKey, cat)
+
+            Dim amt As Double
+            amt = LookupLocalAllowance(cat, optionLabel, bedLabel)
+
+            Dim item As Object
+            Set item = CreateObject("Scripting.Dictionary")
+            item("category") = cat
+            item("label") = optionLabel
+            item("amount") = Round(amt, 2)
+            allowancesArr.Add item
+
+            totalAllowance = totalAllowance + amt
+        Next c
+
+        Dim net As Double
+        net = gross - totalAllowance
+        If net < 0# Then net = 0#
+
+        a("gross_rent") = Round(gross, 2)
+        a("monthly_rent") = Round(net, 2)
+        a("annual_rent") = Round(net * 12#, 2)
+        a("allowance_total") = Round(totalAllowance, 2)
+        a("allowances") = allowancesArr
+
+        totalNet = totalNet + net
+
+NextAssignment:
+    Next i
+
+    totals("net_monthly") = Round(totalNet, 2)
+    totals("net_annual") = Round(totalNet * 12#, 2)
+
+    Set EnrichAssignmentsWithLocalRents = totals
+    Exit Function
+
+Fail:
+    tradeoffs.Add "Local rent calc failed: " & Err.Description
+    Set EnrichAssignmentsWithLocalRents = CreateObject("Scripting.Dictionary")
+End Function
+
+Private Function ComputeWaami(assignments As Collection) As Double
+    On Error GoTo SafeExit
+
+    Dim totalSf As Double
+    Dim weighted As Double
+    totalSf = 0#: weighted = 0#
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextA
+
+        Dim sf As Double
+        sf = 0#
+        If a.Exists("net_sf") Then
+            If IsNumeric(a("net_sf")) Then sf = CDbl(a("net_sf"))
+        End If
+
+        Dim ami As Double
+        ami = 0#
+        If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+        If ami > 2# Then ami = ami / 100#
+
+        totalSf = totalSf + sf
+        weighted = weighted + (sf * ami)
+
+NextA:
+    Next i
+
+    If totalSf <= 0# Then
+        ComputeWaami = 0#
+    Else
+        ComputeWaami = weighted / totalSf
+    End If
+    Exit Function
+
+SafeExit:
+    ComputeWaami = 0#
+End Function
+
+Private Function ComputeBandsUsed(assignments As Collection) As Collection
+    Dim uniq As Object
+    Set uniq = CreateObject("Scripting.Dictionary") ' band (as long percent) -> True
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextA
+
+        Dim ami As Double
+        ami = 0#
+        If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+        If ami > 2# Then ami = ami / 100#
+
+        Dim band As Long
+        band = CLng(Application.Round(ami * 100#, 0))
+        uniq(CStr(band)) = True
+
+NextA:
+    Next i
+
+    Dim keys As Variant
+    keys = uniq.keys
+
+    ' Sort numeric ascending (simple bubble sort; small N)
+    Dim j As Long, k As Long
+    For j = LBound(keys) To UBound(keys) - 1
+        For k = j + 1 To UBound(keys)
+            If CLng(keys(k)) < CLng(keys(j)) Then
+                Dim tmp As Variant
+                tmp = keys(j)
+                keys(j) = keys(k)
+                keys(k) = tmp
+            End If
+        Next k
+    Next j
+
+    Dim bands As Collection
+    Set bands = New Collection
+
+    For j = LBound(keys) To UBound(keys)
+        If Len(Trim$(CStr(keys(j)))) > 0 Then
+            bands.Add CLng(keys(j))
+        End If
+    Next j
+
+    Set ComputeBandsUsed = bands
+End Function
+
+Private Function BuildBandMix(assignments As Collection) As Collection
+    Dim totalSf As Double
+    totalSf = 0#
+
+    Dim bandAgg As Object
+    Set bandAgg = CreateObject("Scripting.Dictionary") ' band -> dict(units, net_sf)
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextA
+
+        Dim sf As Double
+        sf = 0#
+        If a.Exists("net_sf") Then
+            If IsNumeric(a("net_sf")) Then sf = CDbl(a("net_sf"))
+        End If
+
+        Dim ami As Double
+        ami = 0#
+        If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+        If ami > 2# Then ami = ami / 100#
+
+        Dim band As Long
+        band = CLng(Application.Round(ami * 100#, 0))
+
+        Dim key As String
+        key = CStr(band)
+
+        Dim agg As Object
+        If bandAgg.Exists(key) Then
+            Set agg = bandAgg(key)
+        Else
+            Set agg = CreateObject("Scripting.Dictionary")
+            agg("units") = 0
+            agg("net_sf") = 0#
+            bandAgg(key) = agg
+        End If
+
+        agg("units") = CLng(agg("units")) + 1
+        agg("net_sf") = CDbl(agg("net_sf")) + sf
+        totalSf = totalSf + sf
+
+NextA:
+    Next i
+
+    Dim keys As Variant
+    keys = bandAgg.keys
+
+    ' Sort numeric ascending
+    Dim j As Long, k As Long
+    For j = LBound(keys) To UBound(keys) - 1
+        For k = j + 1 To UBound(keys)
+            If CLng(keys(k)) < CLng(keys(j)) Then
+                Dim tmp As Variant
+                tmp = keys(j)
+                keys(j) = keys(k)
+                keys(k) = tmp
+            End If
+        Next k
+    Next j
+
+    Dim mix As Collection
+    Set mix = New Collection
+
+    For j = LBound(keys) To UBound(keys)
+        Dim agg2 As Object
+        Set agg2 = bandAgg(CStr(keys(j)))
+
+        Dim bm As Object
+        Set bm = CreateObject("Scripting.Dictionary")
+        bm("band") = CLng(keys(j))
+        bm("units") = CLng(agg2("units"))
+        bm("net_sf") = CDbl(agg2("net_sf"))
+        If totalSf > 0# Then
+            bm("share_of_sf") = CDbl(agg2("net_sf")) / totalSf
+        Else
+            bm("share_of_sf") = 0#
+        End If
+        mix.Add bm
+    Next j
+
+    Set BuildBandMix = mix
 End Function
 
 Private Sub ClearManualBlock(ws As Worksheet)

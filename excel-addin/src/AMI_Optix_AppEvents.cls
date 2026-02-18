@@ -113,8 +113,8 @@ Private Function DetectProgramFromWorkbook() As String
 End Function
 
 Private Sub RefreshManualWorkingCopyFromProgramInputs(programNorm As String, contextSheet As Worksheet, contextTarget As Range)
-    ' Fix-05: "Manual Working Copy" is always present and should refresh after any AMI edit,
-    ' even if the current assignment violates rules (warn via tradeoffs; do not revert).
+    ' Fix-06: "Manual Working Copy" is always present and should refresh after any AMI edit,
+    ' but rents/totals are computed locally from the selected year's rent workbook (no per-edit API calls).
     Dim prevEnableEvents As Boolean
     Dim prevScreenUpdating As Boolean
     Dim prevSuppress As Boolean
@@ -124,16 +124,15 @@ Private Sub RefreshManualWorkingCopyFromProgramInputs(programNorm As String, con
 
     On Error GoTo SafeExit
 
-    If Not HasAPIKey() Then GoTo SafeExit
     If ActiveWorkbook Is Nothing Then GoTo SafeExit
 
     g_AMIOptixSuppressEvents = True
     Application.EnableEvents = False
     Application.ScreenUpdating = False
 
-    Call ManualCalculateScenario(programNorm)
+    Call RefreshManualWorkingCopyLocalRents(programNorm)
 
-    ' ManualCalculateScenario activates AMI Scenarios at the end; restore user context.
+    ' Best-effort restore user context (avoid disrupting selection/focus).
     If Not contextSheet Is Nothing Then
         contextSheet.Activate
         If Not contextTarget Is Nothing Then
@@ -161,7 +160,6 @@ Private Sub ApplyManualAmiChangesAndRefresh(programNorm As String, changes As Ob
 
     If changes Is Nothing Then GoTo SafeExit
     If changes.Count = 0 Then GoTo SafeExit
-    If Not HasAPIKey() Then GoTo SafeExit
     If ActiveWorkbook Is Nothing Then GoTo SafeExit
 
     g_AMIOptixSuppressEvents = True
@@ -178,9 +176,9 @@ Private Sub ApplyManualAmiChangesAndRefresh(programNorm As String, changes As Ob
         Next key
     End If
 
-    Call ManualCalculateScenario(programNorm)
+    Call RefreshManualWorkingCopyLocalRents(programNorm)
 
-    ' ManualCalculateScenario activates AMI Scenarios at the end; restore user context.
+    ' Best-effort restore user context (avoid disrupting selection/focus).
     If Not contextSheet Is Nothing Then
         contextSheet.Activate
         If Not contextTarget Is Nothing Then
