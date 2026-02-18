@@ -32,11 +32,11 @@
 
 \- \[x] Fix-03 Rent roll YEAR selector + Manage uploads + mismatch warning (MIH + UAP)
 
-\- \[ ] Fix-01b Utilities variant breakdown (top-of-sheet; do not collapse variant labels)
+\- \[x] Fix-01b Utilities variant breakdown (top-of-sheet; do not collapse variant labels)
 
-\- \[ ] Fix-02 Solver dedupe identical outcomes + placement tie-break (Python solver)
+\- \[x] Fix-02 Solver dedupe identical outcomes + placement tie-break (Python solver)
 
-\- \[ ] Fix-05 Manual working-copy always-on + two-way sync to MIH/UAP + rent roll + year (requires event modules / sheet code)
+\- \[x] Fix-05 Manual working-copy always-on + two-way sync to MIH/UAP + rent roll + year (requires event modules / sheet code)
 
 
 
@@ -206,5 +206,135 @@
 
 \- Next: Fix-01b
 
+
+\### 2026-02-18 Fix-01b Utilities variant breakdown (top-of-sheet; do not collapse variant labels)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/01b-utilities-variant-breakdown
+
+\- Commit: 954abcfd0b957258089f54b4d5e1f7bbfc2fd73a
+
+\- PR: \#11 https://github.com/martin10101/nyc-ami-calculator/pull/11
+
+\- Files changed:
+
+&nbsp; - CODEX.md
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/FIX\_REQUIREMENTS.md
+
+&nbsp; - docs/TASKCARD\_Fix-01b\_Utilities\_variant\_breakdown.md
+
+&nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+\- Summary:
+
+&nbsp; - AMI Scenarios (top-of-sheet): utilities block now shows the exact rent roll guideline variant labels per category (no collapsed 'Gas/Oil/Electric' labels).
+
+&nbsp; - No scenario grid/per-scenario column changes.
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 954abcfd0b957258089f54b4d5e1f7bbfc2fd73a
+
+\- Notes / risks:
+
+&nbsp; - Heat labels include guideline footnote markers ('...ccASHP)1', 'Other2'), matching the rent calculator workbook.
+
+\- Next: Fix-02
+
+
+\### 2026-02-18 Fix-02 Solver dedupe identical outcomes + placement tie-break (Python)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/02-solver-outcome-dedupe
+
+\- Commit: acac3a76ca5760f5f3ca8fdf09cb3fd54bbfcbb8
+
+\- PR: \#12 https://github.com/martin10101/nyc-ami-calculator/pull/12
+
+\- Files changed:
+
+&nbsp; - CODEX.md
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/FIX\_REQUIREMENTS.md
+
+&nbsp; - docs/TASKCARD\_Fix-02\_Solver\_outcome\_dedupe.md
+
+&nbsp; - app.py
+
+\- Summary:
+
+&nbsp; - API (/api/optimize): post-process returned scenarios to remove outcome-identical duplicates (same band mix + same net rent totals), keeping the best floor placement (40% lower floors; higher AMI/rent higher floors).
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = acac3a76ca5760f5f3ca8fdf09cb3fd54bbfcbb8
+
+\- Notes / risks:
+
+&nbsp; - Dedupe is conservative and only runs when rent totals are available (rent calculator loaded).
+
+&nbsp; - Edge check: Test.xlsx optimize returned 5 scenarios and reported 1 duplicate removed (Fix-02 note).
+
+\- Next: Fix-05
+
+
+\### 2026-02-18 Fix-05 Manual working-copy always-on + 2-way sync (MIH/UAP + rent roll)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/05-manual-working-copy-sync
+
+\- Commit: 77f9b75e7d2aa6dcf7b0cb2b281373094101aa26
+
+\- PR: \#13 https://github.com/martin10101/nyc-ami-calculator/pull/13 (draft)
+
+\- Files changed:
+
+&nbsp; - CODEX.md
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/FIX\_REQUIREMENTS.md
+
+&nbsp; - docs/TASKCARD\_Fix-05\_Manual\_working\_copy\_sync.md
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_AppEvents.cls
+
+&nbsp; - excel-addin/src/AMI\_Optix\_EventHooks.bas
+
+\- Summary:
+
+&nbsp; - Ribbon: removed the Manual “Live Sync” toggle; Manual Working Copy is always-on.
+
+&nbsp; - Live sync: on any AMI edit (Manual Working Copy or MIH/UAP AMI column), refresh the manual block via `/api/manual_calculate` so invalid mixes are allowed (tradeoffs shown) and rent roll calcs update.
+
+&nbsp; - Eventing: added stronger suppression to prevent re-entrant SheetChange loops; no auto-revert of edits.
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings); edge optimize sanity: status 200, scenarios=4
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 77f9b75e7d2aa6dcf7b0cb2b281373094101aa26
+
+\- Notes / risks:
+
+&nbsp; - Manual edits now persist even when invalid by program rules (intentional); tradeoffs are shown in the manual block.
+
+&nbsp; - Live refresh uses the Manual Calculate path; it temporarily activates AMI Scenarios internally but restores the user’s active sheet/selection with events disabled to avoid macro side effects.
+
+\- Next: (stop; queue complete)
 
 
