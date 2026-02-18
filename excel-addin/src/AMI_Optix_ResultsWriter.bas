@@ -1525,7 +1525,7 @@ Private Function WriteUtilitySettings(ws As Worksheet, startRow As Long) As Long
     row = startRow
 
     ' Header
-    ws.Cells(row, 1).Value = "TENANT-PAID UTILITIES - Affects Rent Allowances"
+    ws.Cells(row, 1).Value = "UTILITIES - Selected Variants (Affects Rent Allowances)"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 12
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(255, 230, 200)
@@ -1548,53 +1548,49 @@ Private Function WriteUtilitySettings(ws As Worksheet, startRow As Long) As Long
 
     ' Electricity
     ws.Cells(row, 1).Value = "Electricity"
+    ws.Cells(row, 3).Value = FormatUtilityType(elec, "electricity")
     If elec = "tenant_pays" Then
         ws.Cells(row, 2).Value = "YES"
         ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
-        ws.Cells(row, 3).Value = "Standard"
     Else
         ws.Cells(row, 2).Value = "NO"
         ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(row, 3).Value = "Owner Pays"
     End If
     row = row + 1
 
     ' Cooking
     ws.Cells(row, 1).Value = "Cooking"
+    ws.Cells(row, 3).Value = FormatUtilityType(cook, "cooking")
     If cook <> "na" Then
         ws.Cells(row, 2).Value = "YES"
         ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
-        ws.Cells(row, 3).Value = FormatUtilityType(cook)
     Else
         ws.Cells(row, 2).Value = "NO"
         ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(row, 3).Value = "Owner Pays"
     End If
     row = row + 1
 
     ' Heat
     ws.Cells(row, 1).Value = "Heat"
+    ws.Cells(row, 3).Value = FormatUtilityType(heat, "heat")
     If heat <> "na" Then
         ws.Cells(row, 2).Value = "YES"
         ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
-        ws.Cells(row, 3).Value = FormatUtilityType(heat)
     Else
         ws.Cells(row, 2).Value = "NO"
         ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(row, 3).Value = "Owner Pays"
     End If
     row = row + 1
 
     ' Hot Water
     ws.Cells(row, 1).Value = "Hot Water"
+    ws.Cells(row, 3).Value = FormatUtilityType(hw, "hot_water")
     If hw <> "na" Then
         ws.Cells(row, 2).Value = "YES"
         ws.Cells(row, 2).Font.Color = RGB(0, 128, 0)
-        ws.Cells(row, 3).Value = FormatUtilityType(hw)
     Else
         ws.Cells(row, 2).Value = "NO"
         ws.Cells(row, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(row, 3).Value = "Owner Pays"
     End If
     row = row + 1
 
@@ -1840,17 +1836,62 @@ Fail:
     AllowanceAmountFromDict = 0#
 End Function
 
-Private Function FormatUtilityType(value As String) As String
-    ' Formats utility type code to display name
-    Select Case value
-        Case "electric", "electric_stove": FormatUtilityType = "Electric"
+Private Function FormatUtilityType(value As String, Optional category As String = "") As String
+    ' Formats utility selection codes to the exact rent roll guideline labels (do not collapse variants).
+    Dim v As String
+    Dim c As String
+    v = LCase$(Trim$(CStr(value)))
+    c = LCase$(Trim$(CStr(category)))
+
+    Select Case c
+        Case "electricity"
+            If v = "tenant_pays" Then
+                FormatUtilityType = "Tenant Pays"
+            Else
+                FormatUtilityType = "N/A or owner pays"
+            End If
+            Exit Function
+
+        Case "cooking"
+            Select Case v
+                Case "electric", "electric_stove": FormatUtilityType = "Electric Stove"
+                Case "gas": FormatUtilityType = "Gas Stove"
+                Case Else: FormatUtilityType = "N/A or owner pays"
+            End Select
+            Exit Function
+
+        Case "heat"
+            Select Case v
+                Case "electric_ccashp": FormatUtilityType = "Electric Heat - Cold Climate Air Source Heat Pump (ccASHP)1"
+                Case "electric_other": FormatUtilityType = "Electric Heat - Other2"
+                Case "gas": FormatUtilityType = "Gas Heat"
+                Case "oil": FormatUtilityType = "Oil Heat"
+                Case Else: FormatUtilityType = "N/A or owner pays"
+            End Select
+            Exit Function
+
+        Case "hot_water"
+            Select Case v
+                Case "electric_heat_pump": FormatUtilityType = "Electric Hot Water - Heat Pump"
+                Case "electric_other": FormatUtilityType = "Electric Hot Water - Other"
+                Case "gas": FormatUtilityType = "Gas Hot Water"
+                Case "oil": FormatUtilityType = "Oil Hot Water"
+                Case Else: FormatUtilityType = "N/A or owner pays"
+            End Select
+            Exit Function
+    End Select
+
+    ' Backward-compatible fallback (should not be used when category is provided).
+    Select Case v
+        Case "electric", "electric_stove": FormatUtilityType = "Electric Stove"
         Case "gas": FormatUtilityType = "Gas"
         Case "oil": FormatUtilityType = "Oil"
         Case "electric_ccashp": FormatUtilityType = "Electric (ccASHP)"
         Case "electric_other": FormatUtilityType = "Electric (Other)"
         Case "electric_heat_pump": FormatUtilityType = "Electric (Heat Pump)"
-        Case "tenant_pays": FormatUtilityType = "Standard"
-        Case Else: FormatUtilityType = value
+        Case "tenant_pays": FormatUtilityType = "Tenant Pays"
+        Case "na", "": FormatUtilityType = "N/A or owner pays"
+        Case Else: FormatUtilityType = CStr(value)
     End Select
 End Function
 
