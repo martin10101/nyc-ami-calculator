@@ -6,7 +6,7 @@ You are working in an existing production repository. Your job is to implement s
 - Repo: martin10101/nyc-ami-calculator
 - Base branch for all fixes: perf/api-optimize-speed-2026-02-05
 
-“Codex must consult docs/FIX_REQUIREMENTS.md for acceptance criteria.
+- Codex must consult docs/FIX_REQUIREMENTS.md for acceptance criteria.
 
 ## Golden Rules
 1) One fix per iteration. Do not combine fixes.
