@@ -36,7 +36,7 @@
 
 \- \[x] Fix-02 Solver dedupe identical outcomes + placement tie-break (Python solver)
 
-\- \[ ] Fix-05 Manual working-copy always-on + two-way sync to MIH/UAP + rent roll + year (requires event modules / sheet code)
+\- \[x] Fix-05 Manual working-copy always-on + two-way sync to MIH/UAP + rent roll + year (requires event modules / sheet code)
 
 
 
@@ -288,5 +288,53 @@
 
 \- Next: Fix-05
 
+
+\### 2026-02-18 Fix-05 Manual working-copy always-on + 2-way sync (MIH/UAP + rent roll)
+
+\- Repo: martin10101/nyc-ami-calculator
+
+\- Base branch: perf/api-optimize-speed-2026-02-05
+
+\- Work branch: fix/05-manual-working-copy-sync
+
+\- Commit: 77f9b75e7d2aa6dcf7b0cb2b281373094101aa26
+
+\- PR: \#13 https://github.com/martin10101/nyc-ami-calculator/pull/13 (draft)
+
+\- Files changed:
+
+&nbsp; - CODEX.md
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/FIX\_REQUIREMENTS.md
+
+&nbsp; - docs/TASKCARD\_Fix-05\_Manual\_working\_copy\_sync.md
+
+&nbsp; - excel-addin/customUI/customUI14.xml
+
+&nbsp; - excel-addin/src/AMI\_Optix\_AppEvents.cls
+
+&nbsp; - excel-addin/src/AMI\_Optix\_EventHooks.bas
+
+\- Summary:
+
+&nbsp; - Ribbon: removed the Manual “Live Sync” toggle; Manual Working Copy is always-on.
+
+&nbsp; - Live sync: on any AMI edit (Manual Working Copy or MIH/UAP AMI column), refresh the manual block via `/api/manual_calculate` so invalid mixes are allowed (tradeoffs shown) and rent roll calcs update.
+
+&nbsp; - Eventing: added stronger suppression to prevent re-entrant SheetChange loops; no auto-revert of edits.
+
+\- Tests run + results: python -m pytest -q (51 passed, 13 warnings); edge optimize sanity: status 200, scenarios=4
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 77f9b75e7d2aa6dcf7b0cb2b281373094101aa26
+
+\- Notes / risks:
+
+&nbsp; - Manual edits now persist even when invalid by program rules (intentional); tradeoffs are shown in the manual block.
+
+&nbsp; - Live refresh uses the Manual Calculate path; it temporarily activates AMI Scenarios internally but restores the user’s active sheet/selection with events disabled to avoid macro side effects.
+
+\- Next: (stop; queue complete)
 
 
