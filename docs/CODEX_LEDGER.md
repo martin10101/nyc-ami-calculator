@@ -428,7 +428,7 @@
 
 \- Work branch: fix/06c-table-driven-rent-tables
 
-\- Commit: 076c3edea32ed8cc6c6e6564f0774b2b1d4132ab
+\- Commit: 7b264fd205933d840afd18a11166fd1f630354a4
 
 \- PR: \#2 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/2 (draft)
 
@@ -439,6 +439,8 @@
 &nbsp; - excel-addin/customUI/customUI14.xml
 
 &nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_Diagnostics.bas
 
 &nbsp; - excel-addin/src/AMI\_Optix\_Ribbon.bas
 
@@ -453,6 +455,10 @@
 &nbsp; - Cache source resolution: prefer Z:\ year workbook; fallback to %APPDATA% year workbook; per-user cache stored in %APPDATA%\\AMI\_Optix\\RentTablesCache\\<YEAR>\\.
 
 &nbsp; - Added Ribbon action to force-refresh cache for selected year (and log diagnostics); missing data still hard-fails and blocks rent writes (no silent 0).
+
+&nbsp; - Added a visible "Rent Tables Status" panel on the Diagnostics sheet (selected year, cache source path/label, source last-modified, cache built timestamp) plus a Ribbon status label/button for at-a-glance visibility.
+
+&nbsp; - Hardened cache invalidation + concurrency safety: explicit rebuild reasons in diagnostics/logs and more robust read-only year workbook open/close behavior.
 
 &nbsp; - Solver scenario rents remain API-provided and unchanged (this only affects manual local refresh).
 
@@ -470,7 +476,7 @@
 
 &nbsp; - PENDING: Deliberately break workbook layout -> cache build fails fast; rents not written.
 
-\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 076c3edea32ed8cc6c6e6564f0774b2b1d4132ab
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 7b264fd205933d840afd18a11166fd1f630354a4
 
 \- Notes / risks:
 
