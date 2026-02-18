@@ -28,11 +28,18 @@ Private Const RENTROLL_LOCAL_SUBPATH As String = "\AMI_Optix\RentRollYears"
 Private Const RENTROLL_LOCAL_FILENAME_PREFIX As String = "RentCalculator_"
 Private Const RENTROLL_LOCAL_FILENAME_SUFFIX As String = ".xlsx"
 
+Private Const LOCAL_RENT_ERR_LAYOUT As Long = vbObjectError + 606
+Private Const LOCAL_RENT_ERR_GROSS As Long = vbObjectError + 607
+Private Const LOCAL_RENT_ERR_ALLOWANCE As Long = vbObjectError + 608
+Private Const LOCAL_RENT_ERR_UNEXPECTED As Long = vbObjectError + 609
+
 Private m_LocalRentYear As Long
 Private m_LocalRentPath As String
 Private m_LocalRentWb As Workbook
 Private m_LocalGrossRents As Object ' Scripting.Dictionary (key: "<amiKey>|<bedLabel>" -> gross)
 Private m_LocalAllowances As Object ' Scripting.Dictionary (category -> optionLabel -> bedLabel -> amount)
+Private m_LocalRentFingerprint As String
+Private m_LastLocalRentErrorSig As String
 
 '-------------------------------------------------------------------------------
 ' APPLY BEST SCENARIO
@@ -975,18 +982,40 @@ Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As S
     Dim assignments As Collection
     Set assignments = BuildAssignmentsFromUnits(units)
 
-    Dim rentTotals As Object
-    Set rentTotals = CreateObject("Scripting.Dictionary")
+    Dim rentOk As Boolean
+    rentOk = False
 
-    Dim scheduleOk As Boolean
-    scheduleOk = EnsureLocalRentScheduleReady(tradeoffs)
-    If scheduleOk Then
+    Dim rentTotals As Object
+    Set rentTotals = Nothing
+
+    Dim rentError As String
+    rentError = ""
+
+    On Error GoTo RentFail
+    If EnsureLocalRentScheduleReady(tradeoffs) Then
         Set rentTotals = EnrichAssignmentsWithLocalRents(assignments, utilities, tradeoffs)
-    Else
-        ' Keep shape consistent so the manual block still renders.
-        rentTotals("net_monthly") = 0#
-        rentTotals("net_annual") = 0#
+        rentOk = True
     End If
+    On Error GoTo ErrorHandler
+    GoTo AfterRent
+
+RentFail:
+    rentError = Err.Description
+    On Error GoTo ErrorHandler
+    rentOk = False
+    Call ClearLocalRentComputedFields(assignments, True)
+
+    Dim firstLine As String
+    firstLine = rentError
+    If InStr(firstLine, vbCrLf) > 0 Then firstLine = Left$(firstLine, InStr(firstLine, vbCrLf) - 1)
+    If Trim$(firstLine) <> "" Then
+        tradeoffs.Add firstLine & " (rents not updated)"
+    Else
+        tradeoffs.Add "Local rent calc ERROR (rents not updated)."
+    End If
+    Call ShowLocalRentCalcErrorOnce(rentError)
+
+AfterRent:
 
     Dim waami As Double
     waami = ComputeWaami(assignments)
@@ -1005,7 +1034,9 @@ Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As S
     scenario("metrics") = metrics
     scenario("tradeoffs") = tradeoffs
     scenario("assignments") = assignments
-    scenario("rent_totals") = rentTotals
+    If rentOk Then
+        scenario("rent_totals") = rentTotals
+    End If
 
     Dim ws As Worksheet
     Set ws = GetOrCreateScenariosSheet()
@@ -1052,6 +1083,29 @@ ErrorHandler:
     Application.EnableEvents = True
     RefreshManualWorkingCopyLocalRents = False
 End Function
+
+Private Sub ClearLocalRentComputedFields(assignments As Collection, Optional clearAllowances As Boolean = True)
+    ' Ensures we never write partial rent results to the Manual Working Copy table.
+    On Error Resume Next
+    If assignments Is Nothing Then Exit Sub
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextA
+
+        If a.Exists("gross_rent") Then a.Remove "gross_rent"
+        If a.Exists("monthly_rent") Then a.Remove "monthly_rent"
+        If a.Exists("annual_rent") Then a.Remove "annual_rent"
+        If a.Exists("allowance_total") Then a.Remove "allowance_total"
+        If clearAllowances Then
+            If a.Exists("allowances") Then a.Remove "allowances"
+        End If
+
+NextA:
+    Next i
+End Sub
 
 Private Function BuildAssignmentsFromUnits(units As Collection) As Collection
     Dim assignments As Collection
@@ -1186,6 +1240,7 @@ Private Sub CloseLocalRentCache()
     Set m_LocalAllowances = Nothing
     m_LocalRentYear = 0
     m_LocalRentPath = ""
+    m_LocalRentFingerprint = ""
 End Sub
 
 Private Function EnsureLocalRentScheduleReady(ByRef tradeoffs As Collection) As Boolean
@@ -1241,10 +1296,40 @@ Private Function EnsureLocalRentScheduleReady(ByRef tradeoffs As Collection) As 
         Exit Function
     End If
 
+    Dim layoutReason As String
+    Dim fingerprint As String
+    layoutReason = ""
+    fingerprint = ""
+    If Not ValidateLocalRentWorkbookLayout(ws, fingerprint, layoutReason) Then
+        m_LocalRentFingerprint = fingerprint
+        Call CloseLocalRentCache
+        Err.Raise LOCAL_RENT_ERR_LAYOUT, "AMI_Optix_ResultsWriter.LocalRentCalc", _
+                  "Local rent workbook layout not recognized." & vbCrLf & vbCrLf & _
+                  "Year: " & CStr(year) & vbCrLf & _
+                  "Workbook: " & path & vbCrLf & _
+                  "Sheet: AMI & Rent" & vbCrLf & _
+                  "Reason: " & layoutReason & vbCrLf & _
+                  "Fingerprint: " & fingerprint
+    End If
+    m_LocalRentFingerprint = fingerprint
+
     If Not LoadLocalRentLookups(ws, tradeoffs) Then
         Call CloseLocalRentCache
         EnsureLocalRentScheduleReady = False
         Exit Function
+    End If
+
+    Dim missing As String
+    missing = ""
+    If Not ValidateLocalRentLookupOptions(missing) Then
+        Call CloseLocalRentCache
+        Err.Raise LOCAL_RENT_ERR_LAYOUT, "AMI_Optix_ResultsWriter.LocalRentCalc", _
+                  "Local rent workbook is missing required allowance option labels." & vbCrLf & vbCrLf & _
+                  "Year: " & CStr(year) & vbCrLf & _
+                  "Workbook: " & path & vbCrLf & _
+                  "Sheet: AMI & Rent" & vbCrLf & _
+                  "Missing: " & missing & vbCrLf & _
+                  "Fingerprint: " & m_LocalRentFingerprint
     End If
 
     tradeoffs.Add "Local rent calc: using " & sourceLabel & " rent workbook (" & CStr(year) & ")."
@@ -1252,10 +1337,179 @@ Private Function EnsureLocalRentScheduleReady(ByRef tradeoffs As Collection) As 
     Exit Function
 
 Fail:
-    tradeoffs.Add "Local rent calc failed: " & Err.Description
+    Dim n As Long
+    Dim src As String
+    Dim desc As String
+    n = Err.Number
+    src = Err.Source
+    desc = Err.Description
+
+    tradeoffs.Add "Local rent calc failed: " & desc
     Call CloseLocalRentCache
     EnsureLocalRentScheduleReady = False
+    If n <> 0 Then Err.Raise n, src, desc
 End Function
+
+Private Function ValidateLocalRentWorkbookLayout(rentWs As Worksheet, ByRef fingerprint As String, ByRef reason As String) As Boolean
+    ' Fix-06b: Fail fast if the rent workbook no longer matches the expected "AMI & Rent" layout
+    ' used by the local lookup parser (layout-scraping).
+    On Error GoTo Fail
+
+    ValidateLocalRentWorkbookLayout = False
+    fingerprint = ""
+    reason = ""
+
+    If rentWs Is Nothing Then
+        reason = "Worksheet is missing."
+        Exit Function
+    End If
+
+    ' --- Allowance headers row 15 ---
+    Dim catCols As Object
+    Set catCols = CreateObject("Scripting.Dictionary") ' category -> first col index
+
+    Dim col As Long
+    For col = 1 To 200
+        Dim hv As String
+        hv = Trim$(CStr(rentWs.Cells(15, col).Value))
+        Dim cat As String
+        cat = UtilityCategoryFromHeaderValue(hv)
+        If cat <> "" Then
+            If Not catCols.Exists(cat) Then catCols(cat) = col
+        End If
+    Next col
+
+    Dim missingCats As String
+    missingCats = ""
+    If Not catCols.Exists("electricity") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "electricity"
+    If Not catCols.Exists("cooking") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "cooking"
+    If Not catCols.Exists("heat") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "heat"
+    If Not catCols.Exists("hot_water") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "hot_water"
+    If missingCats <> "" Then
+        reason = "Missing expected allowance headers in row 15: " & missingCats
+    End If
+
+    ' --- Gross table: find first "of AMI" marker in col D with numeric AMI in col C ---
+    Dim firstOfAmiRow As Long
+    firstOfAmiRow = 0
+    Dim r As Long
+    For r = 1 To 2000
+        Dim marker As String
+        marker = LCase$(Trim$(CStr(rentWs.Cells(r, 4).Value)))
+        Dim cVal As Variant
+        cVal = rentWs.Cells(r, 3).Value
+        If marker = "of ami" And IsNumeric(cVal) Then
+            firstOfAmiRow = r
+            Exit For
+        End If
+    Next r
+    If firstOfAmiRow = 0 Then
+        If reason <> "" Then reason = reason & " | "
+        reason = reason & "Could not find 'of AMI' marker in column D with numeric AMI in column C."
+    End If
+
+    ' Verify we can see bedroom labels soon after the marker.
+    Dim bedFound As Long
+    bedFound = 0
+    If firstOfAmiRow > 0 Then
+        For r = firstOfAmiRow To Application.Min(firstOfAmiRow + 60, 5000)
+            Dim bedLabel As String
+            bedLabel = BedroomLabelFromSheetLabel(CStr(rentWs.Cells(r, 3).Value))
+            If bedLabel <> "" Then
+                bedFound = bedFound + 1
+                If bedFound >= 2 Then Exit For
+            End If
+        Next r
+        If bedFound < 2 Then
+            If reason <> "" Then reason = reason & " | "
+            reason = reason & "Gross rent table did not show expected bedroom labels following the first 'of AMI' marker."
+        End If
+    End If
+
+    fingerprint = "sheet='AMI & Rent'; allowances_rows=15-23; gross_cols=C/D/G; " & _
+                  "cat_cols[electricity=" & IIf(catCols.Exists("electricity"), CStr(catCols("electricity")), "?") & _
+                  ", cooking=" & IIf(catCols.Exists("cooking"), CStr(catCols("cooking")), "?") & _
+                  ", heat=" & IIf(catCols.Exists("heat"), CStr(catCols("heat")), "?") & _
+                  ", hot_water=" & IIf(catCols.Exists("hot_water"), CStr(catCols("hot_water")), "?") & _
+                  "]; first_of_ami_row=" & IIf(firstOfAmiRow > 0, CStr(firstOfAmiRow), "?")
+
+    If reason <> "" Then Exit Function
+
+    ValidateLocalRentWorkbookLayout = True
+    Exit Function
+
+Fail:
+    fingerprint = "sheet='AMI & Rent'; fingerprint_failed"
+    reason = "Fingerprint check failed: " & Err.Description
+    ValidateLocalRentWorkbookLayout = False
+End Function
+
+Private Function ValidateLocalRentLookupOptions(ByRef missing As String) As Boolean
+    ' Validates that our utility variant label mappings exist in the parsed allowance table.
+    missing = ""
+    ValidateLocalRentLookupOptions = False
+
+    If m_LocalAllowances Is Nothing Then
+        missing = "allowances not parsed"
+        Exit Function
+    End If
+
+    Dim required As Object
+    Set required = CreateObject("Scripting.Dictionary") ' category -> array(optionLabel)
+    required("electricity") = Array("Tenant Pays")
+    required("cooking") = Array("Electric Stove", "Gas Stove")
+    required("heat") = Array("Electric Heat - Cold Climate Air Source Heat Pump (ccASHP)1", "Electric Heat - Other2", "Gas Heat", "Oil Heat")
+    required("hot_water") = Array("Electric Hot Water - Heat Pump", "Electric Hot Water - Other", "Gas Hot Water", "Oil Hot Water")
+
+    Dim catKey As Variant
+    For Each catKey In required.Keys
+        Dim cat As String
+        cat = CStr(catKey)
+
+        If Not m_LocalAllowances.Exists(cat) Then
+            missing = missing & IIf(missing <> "", "; ", "") & cat & ":<category missing>"
+            GoTo NextCat
+        End If
+
+        Dim catDict As Object
+        Set catDict = m_LocalAllowances(cat)
+        If catDict Is Nothing Then
+            missing = missing & IIf(missing <> "", "; ", "") & cat & ":<category missing>"
+            GoTo NextCat
+        End If
+
+        Dim opts As Variant
+        opts = required(cat)
+
+        Dim i As Long
+        For i = LBound(opts) To UBound(opts)
+            Dim opt As String
+            opt = CStr(opts(i))
+            If Not catDict.Exists(opt) Then
+                missing = missing & IIf(missing <> "", "; ", "") & cat & ":" & opt
+            End If
+        Next i
+
+NextCat:
+    Next catKey
+
+    ValidateLocalRentLookupOptions = (Trim$(missing) = "")
+End Function
+
+Private Sub ShowLocalRentCalcErrorOnce(message As String)
+    ' Avoid spamming a modal popup on every edit when the underlying error is the same.
+    On Error Resume Next
+
+    Dim sig As String
+    sig = Trim$(CStr(message))
+    If sig = "" Then Exit Sub
+    If Len(sig) > 500 Then sig = Left$(sig, 500)
+
+    If sig = m_LastLocalRentErrorSig Then Exit Sub
+    m_LastLocalRentErrorSig = sig
+
+    MsgBox message, vbCritical, "AMI Optix - Local Rent Calc"
+End Sub
 
 Private Function CanonAmiKey(ami As Double) As String
     CanonAmiKey = Format$(Round(CDbl(ami), 4), "0.0000")
@@ -1450,10 +1704,11 @@ Private Function LookupLocalGrossRent(ami As Double, bedroomLabel As String, ByR
     End If
 End Function
 
-Private Function LookupLocalAllowance(category As String, optionLabel As String, bedroomLabel As String) As Double
+Private Function TryLookupLocalAllowance(category As String, optionLabel As String, bedroomLabel As String, ByRef amount As Double) As Boolean
     On Error GoTo SafeExit
 
-    LookupLocalAllowance = 0#
+    amount = 0#
+    TryLookupLocalAllowance = False
 
     If m_LocalAllowances Is Nothing Then Exit Function
     If Not m_LocalAllowances.Exists(category) Then Exit Function
@@ -1468,11 +1723,13 @@ Private Function LookupLocalAllowance(category As String, optionLabel As String,
     If bedDict Is Nothing Then Exit Function
     If Not bedDict.Exists(bedroomLabel) Then Exit Function
 
-    LookupLocalAllowance = CDbl(bedDict(bedroomLabel))
+    amount = CDbl(bedDict(bedroomLabel))
+    TryLookupLocalAllowance = True
     Exit Function
 
 SafeExit:
-    LookupLocalAllowance = 0#
+    amount = 0#
+    TryLookupLocalAllowance = False
 End Function
 
 Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, utilities As Object, ByRef tradeoffs As Collection) As Object
@@ -1494,6 +1751,12 @@ Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, util
         Set a = assignments(i)
         If a Is Nothing Then GoTo NextAssignment
 
+        Dim unitId As String
+        unitId = ""
+        On Error Resume Next
+        If a.Exists("unit_id") Then unitId = CStr(a("unit_id"))
+        On Error GoTo Fail
+
         Dim ami As Double
         ami = 0#
         If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
@@ -1506,7 +1769,17 @@ Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, util
         Dim gross As Double
         gross = 0#
         If Not LookupLocalGrossRent(ami, bedLabel, gross) Then
-            tradeoffs.Add "Local rent calc: missing gross rent for " & Format$(ami, "0%") & " / " & bedLabel
+            Err.Raise LOCAL_RENT_ERR_GROSS, "AMI_Optix_ResultsWriter.LocalRentCalc", _
+                      "Local rent calc blocked (missing gross rent lookup)." & vbCrLf & vbCrLf & _
+                      "Year: " & CStr(m_LocalRentYear) & vbCrLf & _
+                      "Workbook: " & m_LocalRentPath & vbCrLf & _
+                      "Sheet: AMI & Rent" & vbCrLf & _
+                      "Unit: " & unitId & vbCrLf & _
+                      "AMI: " & Format$(ami, "0.00%") & " (" & CanonAmiKey(ami) & ")" & vbCrLf & _
+                      "Bedrooms: " & bedLabel & vbCrLf & _
+                      "Key: " & CanonAmiKey(ami) & "|" & bedLabel & vbCrLf & _
+                      "Lookup: gross table (col C labels, col D marker 'of AMI', col G gross)." & vbCrLf & _
+                      "Fingerprint: " & m_LocalRentFingerprint
         End If
 
         Dim allowancesArr As Collection
@@ -1532,7 +1805,23 @@ Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, util
             optionLabel = FormatUtilityType(selectionKey, cat)
 
             Dim amt As Double
-            amt = LookupLocalAllowance(cat, optionLabel, bedLabel)
+            amt = 0#
+            If LCase$(Trim$(optionLabel)) <> "n/a or owner pays" Then
+                If Not TryLookupLocalAllowance(cat, optionLabel, bedLabel, amt) Then
+                    Err.Raise LOCAL_RENT_ERR_ALLOWANCE, "AMI_Optix_ResultsWriter.LocalRentCalc", _
+                              "Local rent calc blocked (missing utility allowance lookup)." & vbCrLf & vbCrLf & _
+                              "Year: " & CStr(m_LocalRentYear) & vbCrLf & _
+                              "Workbook: " & m_LocalRentPath & vbCrLf & _
+                              "Sheet: AMI & Rent" & vbCrLf & _
+                              "Unit: " & unitId & vbCrLf & _
+                              "Category: " & cat & vbCrLf & _
+                              "Option: " & optionLabel & vbCrLf & _
+                              "Bedrooms: " & bedLabel & vbCrLf & _
+                              "Key: " & cat & " | " & optionLabel & " | " & bedLabel & vbCrLf & _
+                              "Lookup: allowances table (row 15 headers, row 16/17 options, rows 18-23 values)." & vbCrLf & _
+                              "Fingerprint: " & m_LocalRentFingerprint
+                End If
+            End If
 
             Dim item As Object
             Set item = CreateObject("Scripting.Dictionary")
@@ -1566,8 +1855,17 @@ NextAssignment:
     Exit Function
 
 Fail:
-    tradeoffs.Add "Local rent calc failed: " & Err.Description
-    Set EnrichAssignmentsWithLocalRents = CreateObject("Scripting.Dictionary")
+    If Err.Number = LOCAL_RENT_ERR_LAYOUT Or Err.Number = LOCAL_RENT_ERR_GROSS Or Err.Number = LOCAL_RENT_ERR_ALLOWANCE Then
+        Err.Raise Err.Number, Err.Source, Err.Description
+    End If
+
+    Err.Raise LOCAL_RENT_ERR_UNEXPECTED, "AMI_Optix_ResultsWriter.LocalRentCalc", _
+              "Local rent calc failed unexpectedly." & vbCrLf & vbCrLf & _
+              "Year: " & CStr(m_LocalRentYear) & vbCrLf & _
+              "Workbook: " & m_LocalRentPath & vbCrLf & _
+              "Sheet: AMI & Rent" & vbCrLf & _
+              "Fingerprint: " & m_LocalRentFingerprint & vbCrLf & _
+              "Error: " & Err.Description
 End Function
 
 Private Function ComputeWaami(assignments As Collection) As Double
