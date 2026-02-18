@@ -17,22 +17,21 @@ Private m_EnsureVisibleAt As Date
 Public Sub EnsureLiveSyncInitialized()
     If m_LiveSyncInitialized Then Exit Sub
 
-    Dim v As String
-    v = GetSetting("AMI_Optix", "Settings", "LiveSyncEnabled", "1")
-    g_AMIOptixLiveSyncEnabled = (Trim$(v) <> "0")
+    ' Fix-05: Manual Working Copy is always-on; live sync cannot be disabled.
+    g_AMIOptixLiveSyncEnabled = True
 
     m_LiveSyncInitialized = True
 End Sub
 
 Public Function GetLiveSyncEnabled() As Boolean
-    EnsureLiveSyncInitialized
-    GetLiveSyncEnabled = g_AMIOptixLiveSyncEnabled
+    ' Fix-05: Manual Working Copy is always-on; live sync cannot be disabled.
+    GetLiveSyncEnabled = True
 End Function
 
 Public Sub SetLiveSyncEnabled(enabled As Boolean)
     EnsureLiveSyncInitialized
-    g_AMIOptixLiveSyncEnabled = enabled
-    SaveSetting "AMI_Optix", "Settings", "LiveSyncEnabled", IIf(enabled, "1", "0")
+    ' Fix-05: Manual Working Copy is always-on; ignore requested state.
+    g_AMIOptixLiveSyncEnabled = True
 End Sub
 
 Public Sub Auto_Open()
