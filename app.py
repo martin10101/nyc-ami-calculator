@@ -969,6 +969,166 @@ def optimize_units():
                     notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
                 timing["edge_scenarios_ms"] = int(round((time.perf_counter() - edge_start) * 1000))
 
+        # --- Fix-02: De-dupe outcome-identical scenarios (post-processing) ---
+        # Only remove scenarios when they are truly identical in outputs (band mix + rent totals),
+        # then keep the best "placement" (40% units lower floors; higher AMI/higher rent higher floors).
+        try:
+            scenario_priority = [
+                "absolute_best",
+                "best_3_band",
+                "best_2_band",
+                "alternative",
+                "client_oriented",
+                "max_revenue",
+            ]
+            priority_index = {k: i for i, k in enumerate(scenario_priority)}
+
+            def _outcome_signature(scenario: dict) -> tuple | None:
+                if not scenario:
+                    return None
+
+                metrics = scenario.get("metrics") or {}
+                band_mix = metrics.get("band_mix") or []
+                rent_totals = scenario.get("rent_totals") or {}
+
+                # Be conservative: if we don't have rent totals, we can't safely claim outcomes match.
+                if not band_mix:
+                    return None
+                if "net_monthly" not in rent_totals or "net_annual" not in rent_totals:
+                    return None
+
+                mix_items: list[tuple[int, int, float]] = []
+                for item in band_mix:
+                    if not isinstance(item, dict):
+                        return None
+                    try:
+                        band = int(item.get("band"))
+                    except Exception:
+                        return None
+                    try:
+                        units = int(item.get("units") or 0)
+                    except Exception:
+                        units = 0
+                    try:
+                        net_sf = round(float(item.get("net_sf") or 0.0), 2)
+                    except Exception:
+                        net_sf = 0.0
+                    mix_items.append((band, units, net_sf))
+                mix_items.sort(key=lambda x: x[0])
+
+                try:
+                    net_monthly = round(float(rent_totals.get("net_monthly")), 2)
+                    net_annual = round(float(rent_totals.get("net_annual")), 2)
+                except Exception:
+                    return None
+
+                try:
+                    total_sf = round(float(metrics.get("total_sf") or 0.0), 2)
+                except Exception:
+                    total_sf = 0.0
+                try:
+                    waami = round(float(scenario.get("waami") or 0.0), 10)
+                except Exception:
+                    waami = 0.0
+
+                return (tuple(mix_items), net_monthly, net_annual, total_sf, waami)
+
+            def _placement_key(scenario: dict) -> tuple:
+                assignments = (scenario or {}).get("assignments") or []
+                floors: list[float] = []
+                bands: list[float] = []
+                rents: list[float] = []
+
+                for unit in assignments:
+                    if not isinstance(unit, dict):
+                        continue
+                    try:
+                        floor = float(unit.get("floor") or 0.0)
+                    except Exception:
+                        floor = 0.0
+                    try:
+                        band = float(unit.get("assigned_ami") or 0.0)
+                    except Exception:
+                        band = 0.0
+                    try:
+                        rent = float(unit.get("monthly_rent") or 0.0)
+                    except Exception:
+                        rent = 0.0
+                    floors.append(floor)
+                    bands.append(band)
+                    rents.append(rent)
+
+                # Count "inversions" where lower AMI is placed above higher AMI (or vice versa).
+                inversions = 0
+                n = len(floors)
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        if (bands[i] < bands[j] and floors[i] > floors[j]) or (bands[i] > bands[j] and floors[i] < floors[j]):
+                            inversions += 1
+
+                align_ami = sum(f * b for f, b in zip(floors, bands))
+                align_rent = sum(f * r for f, r in zip(floors, rents))
+                low40_floor_sum = sum(f for f, b in zip(floors, bands) if b <= 0.4000001)
+
+                # Higher is better (fewer inversions; better alignment; 40% units lower floors).
+                return (-inversions, align_ami, align_rent, -low40_floor_sum)
+
+            groups: dict[tuple, list[str]] = {}
+            for key, scenario in (scenarios or {}).items():
+                sig = _outcome_signature(scenario)
+                if sig is None:
+                    continue
+                groups.setdefault(sig, []).append(str(key))
+
+            removed = 0
+            if groups:
+                for sig, keys in groups.items():
+                    if len(keys) < 2:
+                        continue
+
+                    def _keeper_sort_key(k: str) -> tuple:
+                        return (priority_index.get(k, 10_000), k)
+
+                    keep_key = sorted(keys, key=_keeper_sort_key)[0]
+
+                    # Prefer non-edge scenarios when available, then apply placement tie-break.
+                    candidates = []
+                    for k in keys:
+                        sc = (scenarios or {}).get(k)
+                        if not sc:
+                            continue
+                        tier = str(sc.get("tier") or "").strip().lower()
+                        is_edge = (tier == "edge")
+                        candidates.append((is_edge, _placement_key(sc), k, sc))
+                    if not candidates:
+                        continue
+
+                    strict_candidates = [c for c in candidates if not c[0]]
+                    pool = strict_candidates if strict_candidates else candidates
+                    winner = max(
+                        pool,
+                        key=lambda c: (
+                            c[1],
+                            -priority_index.get(c[2], 10_000),
+                            c[2],
+                        ),
+                    )
+                    winner_key = winner[2]
+                    winner_scenario = winner[3]
+
+                    scenarios[keep_key] = winner_scenario
+                    for k in keys:
+                        if k == keep_key:
+                            continue
+                        if k in scenarios:
+                            del scenarios[k]
+                            removed += 1
+
+            if removed > 0:
+                notes.append(f"De-duped {removed} outcome-identical scenario(s) (Fix-02).")
+        except Exception:
+            pass
+
         learning_info = None
         if compare_baseline and baseline_scenarios and scenarios:
             def _scenario_snapshot(scenarios_dict: dict) -> dict:
