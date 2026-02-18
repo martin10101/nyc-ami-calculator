@@ -78,7 +78,7 @@
 
 \- Work branch: fix/01-datareader-stability
 
-\- Commit: 875b126ef2a42a9f54a921098897b9cc0a80eb6e
+\- Commit: e370726c9d1b8c7b8627cbb2cb59cdf72783103e
 
 \- PR: \#8 https://github.com/martin10101/nyc-ami-calculator/pull/8
 
@@ -98,13 +98,13 @@
 
 \- Summary:
 
-&nbsp; - DataReader: FindDataSheet no longer treats incidental ActiveSheet as authoritative unless itâ€™s a known template/program sheet; prefers stable template names first to avoid wrong-sheet/AMI-column caching.
+&nbsp; - DataReader: FindDataSheet no longer treats incidental ActiveSheet as authoritative unless it's a known template/program sheet; prefers stable template names first to avoid wrong-sheet/AMI-column caching.
 
 &nbsp; - Ribbon: rent roll dropdown no longer activates worksheets or shows modal selection UI (stores selection only; DebugLog).
 
 \- Tests run + results: python -m pytest -q (51 passed, 13 warnings)
 
-\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 875b126ef2a42a9f54a921098897b9cc0a80eb6e
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = e370726c9d1b8c7b8627cbb2cb59cdf72783103e
 
 \- Notes / risks:
 
