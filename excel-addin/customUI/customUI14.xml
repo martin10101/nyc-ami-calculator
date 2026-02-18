@@ -47,6 +47,12 @@
                   imageMso="WatchWindow"
                   onAction="Ribbon_ShowRentTablesStatus"
                   supertip="Show Rent Tables status on the Diagnostics sheet (selected year, cache source file, timestamps)."/>
+          <button id="btnVerifyManualRentsAPI"
+                  label="Verify Manual Rents (API)"
+                  size="normal"
+                  imageMso="DataValidation"
+                  onAction="Ribbon_VerifyManualRentsAPI"
+                  supertip="One-click verification: compare locally-computed Manual Working Copy rents to /api/evaluate for the selected year. Shows a single summary and writes details to Diagnostics."/>
           <button id="btnManageRentRollYears"
                   label="Manage Rent Roll Years..."
                   size="normal"

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -96,6 +97,15 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 RENT_CALCULATORS_DIR = os.environ.get('RENT_CALCULATOR_DIR', os.path.join(os.getcwd(), 'rent_calculators'))
 ACTIVE_CALCULATOR_FILE = os.path.join(RENT_CALCULATORS_DIR, '.active')
 os.makedirs(RENT_CALCULATORS_DIR, exist_ok=True)
+
+# ----------------------------------------------------------------------------
+# Rent calculator naming conventions (Excel add-in)
+# ----------------------------------------------------------------------------
+
+DEFAULT_RENT_ROLL_YEAR = 2025
+DEFAULT_RENT_CALCULATOR_FILENAME = "2025 AMI Rent Calculator Unlocked.xlsx"
+RENT_CALC_REMOTE_PREFIX = "AMI_Optix_Rent_Calculator_"
+RENT_CALC_REMOTE_SUFFIX = ".xlsx"
 
 # API Key for Excel Add-in authentication
 # Set this in environment variable: AMI_OPTIX_API_KEY
@@ -241,11 +251,132 @@ def _get_active_rent_calculator_path():
                 return active_path
 
     # Fall back to default in repo root
-    default_path = os.path.join(os.getcwd(), "2025 AMI Rent Calculator Unlocked.xlsx")
+    default_path = os.path.join(os.getcwd(), DEFAULT_RENT_CALCULATOR_FILENAME)
     if os.path.exists(default_path):
         return default_path
 
     return None
+
+
+def _default_rent_calculator_path() -> str | None:
+    default_path = os.path.join(os.getcwd(), DEFAULT_RENT_CALCULATOR_FILENAME)
+    if os.path.exists(default_path):
+        return default_path
+    return None
+
+
+def _normalize_rent_roll_year(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        year = int(str(value).strip())
+    except Exception:
+        return None
+    if year < 1900 or year > 2100:
+        return None
+    return year
+
+
+def _infer_year_from_calculator_id(calculator_id: str | None) -> int | None:
+    if not calculator_id:
+        return None
+    m = re.match(
+        rf"^{re.escape(RENT_CALC_REMOTE_PREFIX)}(\d{{4}}){re.escape(RENT_CALC_REMOTE_SUFFIX)}$",
+        str(calculator_id),
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _resolve_rent_calculator_for_request(data: dict) -> tuple[str | None, dict]:
+    """
+    Resolve a rent calculator path deterministically for a single request.
+
+    This enables stateless API calls (Fix-06d verify) by selecting the rent
+    schedule based on request payload rather than server-global active state.
+
+    Supported request fields:
+      - rent_roll_year (int)
+      - calculator_id (string; e.g., "AMI_Optix_Rent_Calculator_2024.xlsx" or "default")
+    """
+    requested_year = _normalize_rent_roll_year(data.get("rent_roll_year"))
+    requested_calc = str(data.get("calculator_id") or "").strip()
+    if requested_calc == "":
+        requested_calc = None
+
+    meta = {
+        "rent_roll_year_requested": requested_year,
+        "calculator_id_requested": requested_calc,
+        "rent_roll_year_used": None,
+        "calculator_id_used": None,
+        "calculator_filename": None,
+        "rent_schedule_source": None,
+        "rent_schedule_warning": None,
+    }
+
+    default_path = _default_rent_calculator_path()
+
+    def _use(path: str | None, year_used: int | None, calc_id_used: str | None, source: str, warning: str | None = None):
+        meta["rent_roll_year_used"] = year_used
+        meta["calculator_id_used"] = calc_id_used
+        meta["calculator_filename"] = os.path.basename(path) if path else None
+        meta["rent_schedule_source"] = source
+        meta["rent_schedule_warning"] = warning
+        return path, meta
+
+    # 1) Explicit calculator_id takes precedence.
+    if requested_calc:
+        calc_norm = requested_calc.strip()
+        if calc_norm.lower() in {"default", DEFAULT_RENT_CALCULATOR_FILENAME.lower()}:
+            # Deterministic "default" selection (do not depend on ACTIVE_CALCULATOR_FILE).
+            return _use(default_path, DEFAULT_RENT_ROLL_YEAR if default_path else None, "default", "request_calculator_id")
+
+        safe_name = secure_filename(calc_norm)
+        candidate = os.path.join(RENT_CALCULATORS_DIR, safe_name)
+        if os.path.exists(candidate):
+            year_used = _infer_year_from_calculator_id(safe_name)
+            return _use(candidate, year_used, safe_name, "request_calculator_id")
+
+        warning = f"calculator_id not found: {safe_name}; using default rent calculator"
+        return _use(default_path, DEFAULT_RENT_ROLL_YEAR if default_path else None, "default", "request_calculator_id_fallback", warning)
+
+    # 2) Explicit rent_roll_year selection.
+    if requested_year:
+        # 2025 default: prefer uploaded override if present.
+        if requested_year == DEFAULT_RENT_ROLL_YEAR:
+            override_name = f"{RENT_CALC_REMOTE_PREFIX}{requested_year}{RENT_CALC_REMOTE_SUFFIX}"
+            override_path = os.path.join(RENT_CALCULATORS_DIR, override_name)
+            if os.path.exists(override_path):
+                return _use(override_path, requested_year, override_name, "request_year")
+            return _use(default_path, requested_year if default_path else None, "default", "request_year")
+
+        expected_name = f"{RENT_CALC_REMOTE_PREFIX}{requested_year}{RENT_CALC_REMOTE_SUFFIX}"
+        expected_path = os.path.join(RENT_CALCULATORS_DIR, expected_name)
+        if os.path.exists(expected_path):
+            return _use(expected_path, requested_year, expected_name, "request_year")
+
+        warning = f"rent_roll_year not found on server: {requested_year}; using default rent calculator ({DEFAULT_RENT_ROLL_YEAR})"
+        return _use(default_path, DEFAULT_RENT_ROLL_YEAR if default_path else None, "default", "request_year_fallback", warning)
+
+    # 3) Backward compatibility: use server-global active selection.
+    active_path = _get_active_rent_calculator_path()
+    if not active_path:
+        return _use(None, None, None, "server_active")
+
+    filename = os.path.basename(active_path)
+    if filename.lower() == DEFAULT_RENT_CALCULATOR_FILENAME.lower():
+        return _use(active_path, DEFAULT_RENT_ROLL_YEAR, "default", "server_active")
+
+    if os.path.dirname(active_path).rstrip("\\/") == RENT_CALCULATORS_DIR.rstrip("\\/"):
+        year_used = _infer_year_from_calculator_id(filename)
+        return _use(active_path, year_used, filename, "server_active")
+
+    return _use(active_path, None, filename, "server_active")
 
 
 def _list_rent_calculators():
@@ -1211,6 +1342,8 @@ def evaluate_assignment():
 
     Request body:
     {
+      "rent_roll_year": 2025,
+      "calculator_id": "AMI_Optix_Rent_Calculator_2025.xlsx" | "default",
       "program": "UAP" | "MIH",
       "mih_option": "Option 1" | "Option 4",
       "mih_residential_sf": 46197.57,
@@ -1249,6 +1382,11 @@ def evaluate_assignment():
     mih_residential_sf = data.get('mih_residential_sf')
     mih_max_band_percent = data.get('mih_max_band_percent')
 
+    rent_calc_path, rent_meta = _resolve_rent_calculator_for_request(data)
+    # Default these fields so even early validation failures can report selection state.
+    rent_meta.setdefault("rent_schedule_loaded", False)
+    rent_meta.setdefault("rent_schedule_cache_hit", False)
+
     try:
         df_units = pd.DataFrame(units)
         if 'assigned_ami' not in df_units.columns:
@@ -1269,25 +1407,31 @@ def evaluate_assignment():
                 mih_max_band_percent=mih_max_band_percent,
             )
         except ValueError as e:
-            return jsonify({
+            resp = {
                 "success": False,
                 "errors": [str(e)],
                 "summary": {},
-            }), 200
+            }
+            resp.update(rent_meta)
+            return jsonify(resp), 200
 
         # Validate constraints first.
         is_valid, errors, summary = _validate_assignment_payload(units, config)
         if not is_valid:
-            return jsonify({
+            resp = {
                 "success": False,
                 "errors": errors,
                 "summary": summary,
-            }), 200
+            }
+            resp.update(rent_meta)
+            return jsonify(resp), 200
 
         rent_schedule = None
-        rent_calc_path = _get_active_rent_calculator_path()
+        cache_hit = False
         if rent_calc_path:
-            rent_schedule, _cache_hit = _load_rent_schedule_cached(rent_calc_path)
+            rent_schedule, cache_hit = _load_rent_schedule_cached(rent_calc_path)
+        rent_meta["rent_schedule_loaded"] = bool(rent_schedule)
+        rent_meta["rent_schedule_cache_hit"] = bool(cache_hit)
 
         assignments = df_units.to_dict(orient='records')
         # Normalize assigned_ami to the 0-2 range (support 60/120 inputs as well as 0.6/1.2).
@@ -1309,7 +1453,7 @@ def evaluate_assignment():
             except Exception:
                 pass
 
-        return jsonify({
+        resp = {
             "success": True,
             "summary": summary,
             "metrics": _sanitize_for_json(metrics),
@@ -1319,7 +1463,9 @@ def evaluate_assignment():
             "program": program,
             "mih_option": mih_option,
             "mih_residential_sf": mih_residential_sf,
-        })
+        }
+        resp.update(rent_meta)
+        return jsonify(resp)
 
     except Exception as e:
         app.logger.exception("evaluate_assignment failed: %s", e)

@@ -950,6 +950,20 @@ Fail:
     MsgBox Err.Description, vbCritical, "AMI Optix - Refresh Rent Tables"
 End Sub
 
+Public Sub Ribbon_VerifyManualRentsAPI(control As IRibbonControl)
+    ' Fix-06d: One-click verification that locally-computed manual rents match /api/evaluate.
+    ' IMPORTANT: This must NOT trigger any automatic API calls on edits; only runs on button click.
+    On Error GoTo Fail
+
+    Call VerifyManualRentsAPI
+    EnsureAMIOptixTabActive
+    Exit Sub
+
+Fail:
+    MsgBox "Verify Manual Rents (API) failed: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
 Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index As Integer)
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then

@@ -449,6 +449,54 @@ ErrorHandler:
     CallEvaluateAPI = ""
 End Function
 
+Public Function CallEvaluateAPIStateless(payload As String, Optional ByRef outError As String = "") As String
+    ' Makes ONE POST request to /api/evaluate endpoint without relying on server-global "active calculator" state.
+    ' Intended for Fix-06d verification (no pre-activation call; selection comes from payload fields).
+    Dim http As Object
+    Dim url As String
+    Dim apiKey As String
+
+    outError = ""
+    On Error GoTo ErrorHandler
+
+    url = API_BASE_URL & "/api/evaluate"
+    apiKey = GetAPIKey()
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 30000, 30000, 120000
+
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Accept", "application/json"
+
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
+
+    DebugLog "HTTP POST /api/evaluate (stateless): payload_len=" & Len(payload), True
+
+    http.send payload
+
+    DebugLog "HTTP /api/evaluate (stateless): status=" & http.Status & ", resp_len=" & Len(http.responseText), True
+
+    If http.Status = 200 Then
+        CallEvaluateAPIStateless = http.responseText
+    ElseIf http.Status = 401 Then
+        outError = "Invalid API key." & vbCrLf & vbCrLf & "Please check your API key in Settings."
+        CallEvaluateAPIStateless = ""
+    Else
+        outError = "API Error: " & http.Status & " - " & http.statusText
+        If Len(http.responseText) > 0 Then outError = outError & vbCrLf & vbCrLf & http.responseText
+        CallEvaluateAPIStateless = ""
+    End If
+
+    Exit Function
+
+ErrorHandler:
+    outError = "Connection error: " & Err.Description
+    CallEvaluateAPIStateless = ""
+End Function
+
 Public Function CallManualCalculateAPI(payload As String) As String
     ' Makes POST request to /api/manual_calculate endpoint.
     ' This endpoint always returns computed rents/totals and diagnostics, even if the assignment is non-compliant.
@@ -588,7 +636,9 @@ Public Function BuildEvaluatePayloadV2( _
     program As String, _
     mihOption As String, _
     mihResidentialSF As Double, _
-    mihMaxBandPercent As Long _
+    mihMaxBandPercent As Long, _
+    Optional rentRollYear As Long = 0, _
+    Optional calculatorId As String = "" _
 ) As String
     ' Builds JSON payload for /api/evaluate (explicit assigned_ami per unit).
     Dim json As String
@@ -600,6 +650,24 @@ Public Function BuildEvaluatePayloadV2( _
     If programNorm = "" Then programNorm = "UAP"
 
     json = "{"
+
+    Dim yearNorm As Long
+    yearNorm = rentRollYear
+    If yearNorm <= 0 Then yearNorm = GetSelectedRentRollYearSetting()
+
+    Dim didPrefix As Boolean
+    didPrefix = False
+    If yearNorm > 0 Then
+        json = json & """rent_roll_year"": " & CStr(yearNorm)
+        didPrefix = True
+    End If
+    If Trim$(calculatorId) <> "" Then
+        If didPrefix Then json = json & ", "
+        json = json & """calculator_id"": """ & EscapeJSON(CStr(calculatorId)) & """"
+        didPrefix = True
+    End If
+    If didPrefix Then json = json & ", "
+
     json = json & """program"": """ & EscapeJSON(programNorm) & """, "
 
     If programNorm = "MIH" Then
