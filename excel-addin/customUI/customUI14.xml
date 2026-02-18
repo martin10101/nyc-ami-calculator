@@ -33,6 +33,12 @@
                     getItemID="Ribbon_GetRentRollYearID"
                     getSelectedItemIndex="Ribbon_GetRentRollYearSelectedIndex"
                     supertip="Select which rent calculator year to use for MIH/UAP calculations (default 2025)."/>
+          <button id="btnRefreshRentTablesCache"
+                  label="Refresh Rent Tables (Selected Year)"
+                  size="normal"
+                  imageMso="Refresh"
+                  onAction="Ribbon_RefreshRentTablesCache"
+                  supertip="Rebuild the local per-user rent tables cache (CSV) for the selected year from the authoritative year workbook (Z:\\ first; %APPDATA% fallback)."/>
           <button id="btnManageRentRollYears"
                   label="Manage Rent Roll Years..."
                   size="normal"

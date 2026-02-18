@@ -819,6 +819,31 @@ Fail:
     MsgBox "Manage Rent Roll Years failed: " & Err.Description, vbExclamation, "AMI Optix"
 End Sub
 
+Public Sub Ribbon_RefreshRentTablesCache(control As IRibbonControl)
+    ' Fix-06c: Force-refresh the per-user normalized rent tables cache (CSV) for the selected year.
+    On Error GoTo Fail
+
+    InitRentRollYearState
+
+    Dim year As Long
+    year = m_SelectedRentRollYear
+
+    Dim sourcePath As String
+    Dim cacheFolder As String
+    Dim fingerprint As String
+    sourcePath = ""
+    cacheFolder = ""
+    fingerprint = ""
+
+    Call EnsureRentTablesCache(year, True, sourcePath, cacheFolder, fingerprint)
+
+    MsgBox "Rent tables cache refreshed for " & CStr(year) & " from " & sourcePath & " -> " & cacheFolder, vbInformation, "AMI Optix"
+    Exit Sub
+
+Fail:
+    MsgBox Err.Description, vbCritical, "AMI Optix - Refresh Rent Tables"
+End Sub
+
 Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index As Integer)
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then

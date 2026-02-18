@@ -992,10 +992,65 @@ Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As S
     rentError = ""
 
     On Error GoTo RentFail
-    If EnsureLocalRentScheduleReady(tradeoffs) Then
-        Set rentTotals = EnrichAssignmentsWithLocalRents(assignments, utilities, tradeoffs)
-        rentOk = True
-    End If
+
+    Dim selectedYear As Long
+    selectedYear = GetSelectedRentRollYearLocal()
+
+    Dim sourcePath As String
+    Dim cacheFolder As String
+    Dim sourceFp As String
+    sourcePath = ""
+    cacheFolder = ""
+    sourceFp = ""
+
+    Call EnsureRentTablesCache(selectedYear, False, sourcePath, cacheFolder, sourceFp)
+
+    ' Load normalized cache tables (CSV -> Dict).
+    Call LoadRentLimitsCacheToDict(selectedYear)
+    Call LoadUtilityAllowancesCacheToDict(selectedYear)
+
+    Dim totalNet As Double
+    totalNet = 0#
+
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If a Is Nothing Then GoTo NextAssignment
+
+        Dim unitId As String
+        unitId = ""
+        On Error Resume Next
+        If a.Exists("unit_id") Then unitId = CStr(a("unit_id"))
+        On Error GoTo RentFail
+
+        Dim ami As Double
+        ami = 0#
+        If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+        If ami > 2# Then ami = ami / 100#
+        a("assigned_ami") = ami
+
+        Dim rentResult As Object
+        Set rentResult = ComputeNetRent(selectedYear, programNorm, a("bedrooms"), ami, utilities, unitId)
+
+        a("gross_rent") = rentResult("gross_rent")
+        a("monthly_rent") = rentResult("monthly_rent")
+        a("annual_rent") = rentResult("annual_rent")
+        a("allowance_total") = rentResult("allowance_total")
+        a("allowances") = rentResult("allowances")
+
+        If IsNumeric(a("monthly_rent")) Then totalNet = totalNet + CDbl(a("monthly_rent"))
+
+NextAssignment:
+    Next i
+
+    Set rentTotals = CreateObject("Scripting.Dictionary")
+    rentTotals("net_monthly") = Round(totalNet, 2)
+    rentTotals("net_annual") = Round(totalNet * 12#, 2)
+    rentOk = True
+
+    tradeoffs.Add "Local rent calc: table-driven cache OK (" & CStr(selectedYear) & ")."
+
     On Error GoTo ErrorHandler
     GoTo AfterRent
 
@@ -1350,7 +1405,7 @@ Fail:
     If n <> 0 Then Err.Raise n, src, desc
 End Function
 
-Private Function ValidateLocalRentWorkbookLayout(rentWs As Worksheet, ByRef fingerprint As String, ByRef reason As String) As Boolean
+Public Function ValidateLocalRentWorkbookLayout(rentWs As Worksheet, ByRef fingerprint As String, ByRef reason As String) As Boolean
     ' Fix-06b: Fail fast if the rent workbook no longer matches the expected "AMI & Rent" layout
     ' used by the local lookup parser (layout-scraping).
     On Error GoTo Fail
