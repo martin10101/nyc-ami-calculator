@@ -47,6 +47,16 @@ Public Sub VerifyManualRentsAPI()
     Dim selectedYear As Long
     selectedYear = GetSelectedRentRollYearSettingLocal()
 
+    ' Ensure local cache exists/valid before verification.
+    ' This gives a clear blocking message with expected source paths if the year workbook is missing.
+    Dim ensuredSourcePath As String
+    Dim ensuredCacheFolder As String
+    Dim ensuredSourceFp As String
+    ensuredSourcePath = ""
+    ensuredCacheFolder = ""
+    ensuredSourceFp = ""
+    Call EnsureRentTablesCache(selectedYear, False, ensuredSourcePath, ensuredCacheFolder, ensuredSourceFp)
+
     Dim rentStatus As Object
     Set rentStatus = Nothing
     On Error Resume Next

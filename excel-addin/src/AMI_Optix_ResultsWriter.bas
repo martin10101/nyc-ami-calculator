@@ -1071,6 +1071,11 @@ RentFail:
     Call ShowLocalRentCalcErrorOnce(rentError)
 
 AfterRent:
+    ' Hard block on local rent calc failure: do not rewrite the manual table with partial/blank rents.
+    If Not rentOk Then
+        RefreshManualWorkingCopyLocalRents = False
+        Exit Function
+    End If
 
     Dim waami As Double
     waami = ComputeWaami(assignments)
