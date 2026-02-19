@@ -576,3 +576,43 @@
 &nbsp; - Render auto-deploy remains OFF; manual deploy is required in Render UI.
 
 &nbsp; - Release PR is open and tracks this release branch to `main`.
+
+\### 2026-02-19 Follow-up: remaining issues (manual auto-refresh hardening + MIH 40% cap regression guard)
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: release/2026-ami-optix-all-fixes
+
+\- Commit: 92995d78827e2c887cc6a1b8a0782a0493fae81e
+
+\- PR: \#3 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/3
+
+\- Files changed:
+
+&nbsp; - excel-addin/src/AMI\_Optix\_ResultsWriter.bas
+
+&nbsp; - excel-addin/src/AMI\_Optix\_VerifyManualRents.bas
+
+&nbsp; - tests/test\_api\_optimize\_learning.py
+
+\- Summary:
+
+&nbsp; - Manual Working Copy local refresh is now fail-closed: if rent table cache/year source is missing or invalid, it exits without writing partial rents/totals.
+
+&nbsp; - Verify Manual Rents (API) now ensures selected-year rent-table cache readiness up front so missing year files produce a clear blocking error path before compare logic runs.
+
+&nbsp; - Added optimize regression coverage to ensure MIH Option 1 scenarios never exceed the hard 10% share at \<=40% AMI.
+
+\- Tests run + results:
+
+&nbsp; - python -m pytest -q tests/test\_api\_evaluate.py tests/test\_api\_optimize\_learning.py (7 passed)
+
+&nbsp; - python -m pytest -q (54 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 92995d78827e2c887cc6a1b8a0782a0493fae81e
+
+\- Notes / risks:
+
+&nbsp; - If selected-year rent source files are not present on `Z:\AMI_Optix\RentRollYears\<year>\` and `%APPDATA%\AMI_Optix\RentRollYears\<year>\`, verify and refresh will block by design.
