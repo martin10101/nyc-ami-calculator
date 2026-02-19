@@ -42,6 +42,10 @@
 
 \- \[x] Fix-06b Harden local manual rent calc (fingerprint + fail-fast errors)
 
+\- \[x] Fix-06c Table-driven local rent calc + per-user rent tables cache (CSV)
+
+\- \[x] Fix-06d Verify Manual Rents (API) via stateless /api/evaluate
+
 
 
 \## Work Log
@@ -535,3 +539,40 @@
 \- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 8a5d49096bf3b1c40e0b849e8e0073226cda683a
 
 
+\### 2026-02-19 Release branch created: all fixes combined (Fix-01..Fix-06d)
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: release/2026-ami-optix-all-fixes
+
+\- Commit: e5bda4d3c6dca92f5bcc4292a7214d6019eee7ef (release branch base commit containing Fix-06c + Fix-06d + ledger updates)
+
+\- PR: pending creation (`release/2026-ami-optix-all-fixes` -> `main`)
+
+\- Files changed:
+
+&nbsp; - docs/CODEX\_LEDGER.md
+
+&nbsp; - docs/RELEASE\_NOTES\_2026.md
+
+&nbsp; - docs/EXCEL\_INSTALL\_GUIDE.md
+
+\- Summary:
+
+&nbsp; - Created final combined release branch without squashing history; verified Fix-01, Fix-04, Fix-03, Fix-01b, Fix-02, Fix-05, Fix-06, Fix-06b, Fix-06c, and Fix-06d commits are all included.
+
+&nbsp; - Added release notes and a full Excel install/update guide with explicit module/class/form import paths and troubleshooting.
+
+&nbsp; - No solver scenario API rent behavior changes; no reintroduction of per-edit `/api/manual_calculate`.
+
+\- Tests run + results: python -m pytest -q (52 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = e5bda4d3c6dca92f5bcc4292a7214d6019eee7ef
+
+\- Notes / risks:
+
+&nbsp; - Render auto-deploy remains OFF; manual deploy is required in Render UI.
+
+&nbsp; - Release PR link will be added after push/open in Task 4.
