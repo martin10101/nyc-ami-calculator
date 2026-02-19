@@ -616,3 +616,39 @@
 \- Notes / risks:
 
 &nbsp; - If selected-year rent source files are not present on `Z:\AMI_Optix\RentRollYears\<year>\` and `%APPDATA%\AMI_Optix\RentRollYears\<year>\`, verify and refresh will block by design.
+
+\### 2026-02-19 Follow-up: admin auth compatibility for year activation
+
+\- Repo: martin10101/nyc-ami-calculator-all-fixes-test
+
+\- Base branch: main
+
+\- Work branch: release/2026-ami-optix-all-fixes
+
+\- Commit: 1871eac29f0e56ce5fcde17eb66aa15c287e1c56
+
+\- PR: \#3 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/3
+
+\- Files changed:
+
+&nbsp; - app.py
+
+&nbsp; - excel-addin/src/AMI\_Optix\_API.bas
+
+&nbsp; - tests/test\_admin\_auth\_compat.py
+
+\- Summary:
+
+&nbsp; - Added backward-compatible server auth behavior so admin endpoints accept the standard API key when `AMI_OPTIX_ALLOW_API_KEY_FOR_ADMIN=1` (default), preventing 401 activation failures for Excel clients with a single API key field.
+
+&nbsp; - Kept strict admin-only mode available by setting `AMI_OPTIX_ALLOW_API_KEY_FOR_ADMIN=0`.
+
+&nbsp; - Improved Excel 401 activation message with explicit Render env fix guidance.
+
+\- Tests run + results:
+
+&nbsp; - python -m pytest -q tests/test\_admin\_auth\_compat.py (2 passed)
+
+&nbsp; - python -m pytest -q (56 passed, 13 warnings)
+
+\- Render deploy: manual; auto-deploy OFF; ready-to-deploy commit SHA = 1871eac29f0e56ce5fcde17eb66aa15c287e1c56
