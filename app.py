@@ -183,7 +183,8 @@ def _build_program_config(
         rules['waami_cap_percent'] = 60.0
         rules['max_bands_per_scenario'] = 3
         rules['share_thresholds'] = [
-            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
+            # MIH Option 1: at-most 10% of residential SF may be at <=40% AMI.
+            {'band_threshold': 40, 'max_share': 0.10, 'denominator': 'residential'},
         ]
     else:
         rules['waami_cap_percent'] = 115.0

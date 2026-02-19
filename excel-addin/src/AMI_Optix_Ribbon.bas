@@ -14,6 +14,18 @@ Private m_SelectedRentRoll As String
 Private m_RibbonUI As IRibbonUI
 Private Const AMI_OPTIX_TAB_ID As String = "tabAMIOptix"
 
+' Rent roll year selector (server-side rent calculator)
+Private Const AMI_OPTIX_REGISTRY_PATH As String = "AMI_Optix"
+Private Const RENTROLL_YEAR_MIN As Long = 2022
+Private Const RENTROLL_YEAR_MAX As Long = 2026
+Private Const RENTROLL_YEAR_DEFAULT As Long = 2025
+Private Const RENTROLL_YEAR_REG_SECTION As String = "RentRollYears"
+Private Const RENTROLL_YEAR_REG_KEY_SELECTED As String = "SelectedYear"
+Private Const RENTROLL_YEAR_REG_KEY_REMOTE_PREFIX As String = "RemoteFilename_"
+
+Private m_SelectedRentRollYear As Long
+Private m_RentRollYearInitialized As Boolean
+
 Public Sub Ribbon_OnLoad(ribbon As IRibbonUI)
     Set m_RibbonUI = ribbon
 End Sub
@@ -59,18 +71,6 @@ Private Function InferSourceLabelFromPath(path As String) As String
         InferSourceLabelFromPath = ""
     End If
 End Function
-
-' Rent roll year selector (server-side rent calculator)
-Private Const AMI_OPTIX_REGISTRY_PATH As String = "AMI_Optix"
-Private Const RENTROLL_YEAR_MIN As Long = 2022
-Private Const RENTROLL_YEAR_MAX As Long = 2026
-Private Const RENTROLL_YEAR_DEFAULT As Long = 2025
-Private Const RENTROLL_YEAR_REG_SECTION As String = "RentRollYears"
-Private Const RENTROLL_YEAR_REG_KEY_SELECTED As String = "SelectedYear"
-Private Const RENTROLL_YEAR_REG_KEY_REMOTE_PREFIX As String = "RemoteFilename_"
-
-Private m_SelectedRentRollYear As Long
-Private m_RentRollYearInitialized As Boolean
 
 '-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - SOLVER GROUP

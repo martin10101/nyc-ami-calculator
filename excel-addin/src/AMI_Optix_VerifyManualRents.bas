@@ -811,14 +811,19 @@ SafeExit:
     Set GetTopMismatches = Nothing
 End Function
 
-Private Function MismatchScore(m As Object) As Double
+Private Function MismatchScore(ByVal m As Variant) As Double
     On Error GoTo SafeExit
     MismatchScore = 0#
-    If m Is Nothing Then Exit Function
+
+    Dim obj As Object
+    Set obj = Nothing
+    If Not IsObject(m) Then Exit Function
+    Set obj = m
+    If obj Is Nothing Then Exit Function
 
     Dim d As Variant
     d = Empty
-    If m.Exists("delta") Then d = m("delta")
+    If obj.Exists("delta") Then d = obj("delta")
     If IsNumeric(d) Then
         MismatchScore = Abs(CDbl(d))
     Else
@@ -845,4 +850,3 @@ Private Function FormatMaybeCurrency(v As Variant) As String
 SafeExit:
     FormatMaybeCurrency = "(unknown)"
 End Function
-

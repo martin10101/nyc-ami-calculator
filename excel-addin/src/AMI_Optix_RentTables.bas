@@ -32,6 +32,8 @@ Private Const RENT_TABLES_ERR_IMPORT As Long = vbObjectError + 621
 
 Public Function ResolveYearWorkbookPath(year As Long, Optional ByRef sourceLabel As String = "") As String
     ' Z: first, then %APPDATA% fallback.
+    On Error GoTo SafeExit
+
     Dim preferredName As String
     preferredName = RENTROLL_LOCAL_FILENAME_PREFIX & CStr(year) & RENTROLL_LOCAL_FILENAME_SUFFIX
 
@@ -40,7 +42,7 @@ Public Function ResolveYearWorkbookPath(year As Long, Optional ByRef sourceLabel
 
     Dim sharedPreferred As String
     sharedPreferred = sharedFolder & "\" & preferredName
-    If Dir$(sharedPreferred) <> "" Then
+    If FileExistsSafe(sharedPreferred) Then
         sourceLabel = "Z:"
         ResolveYearWorkbookPath = sharedPreferred
         Exit Function
@@ -59,7 +61,7 @@ Public Function ResolveYearWorkbookPath(year As Long, Optional ByRef sourceLabel
 
     Dim localPreferred As String
     localPreferred = localFolder & "\" & preferredName
-    If Dir$(localPreferred) <> "" Then
+    If FileExistsSafe(localPreferred) Then
         sourceLabel = "AppData"
         ResolveYearWorkbookPath = localPreferred
         Exit Function
@@ -73,6 +75,11 @@ Public Function ResolveYearWorkbookPath(year As Long, Optional ByRef sourceLabel
         Exit Function
     End If
 
+    sourceLabel = ""
+    ResolveYearWorkbookPath = ""
+    Exit Function
+
+SafeExit:
     sourceLabel = ""
     ResolveYearWorkbookPath = ""
 End Function
@@ -863,13 +870,13 @@ Private Sub ValidateRentLimitsCoverage(rows As Collection, year As Long, sourceP
     For Each progKey In programs.Keys
         Dim b As Long
         For b = LBound(requiredBeds) To UBound(requiredBeds)
-            Dim bed As String
-            bed = CStr(requiredBeds(b))
+            Dim reqBed As String
+            reqBed = CStr(requiredBeds(b))
             For ra = LBound(requiredAmiKeys) To UBound(requiredAmiKeys)
                 Dim amiKey2 As String
                 amiKey2 = CStr(requiredAmiKeys(ra))
                 Dim fullKey As String
-                fullKey = CStr(progKey) & "|" & bed & "|" & amiKey2
+                fullKey = CStr(progKey) & "|" & reqBed & "|" & amiKey2
                 If Not seen.Exists(fullKey) Then
                     Err.Raise RENT_TABLES_ERR_IMPORT, "AMI_Optix_RentTables.ValidateRentLimitsCoverage", _
                               "Rent limits missing required key." & vbCrLf & vbCrLf & _
@@ -945,11 +952,11 @@ Private Sub ValidateUtilityAllowanceCoverage(rows As Collection, year As Long, s
 
             Dim b As Long
             For b = LBound(requiredBeds) To UBound(requiredBeds)
-                Dim bed As String
-                bed = CStr(requiredBeds(b))
+                Dim reqBed As String
+                reqBed = CStr(requiredBeds(b))
 
                 Dim fullKey As String
-                fullKey = CStr(uTypeKey) & "|" & variantCode & "|" & bed
+                fullKey = CStr(uTypeKey) & "|" & variantCode & "|" & reqBed
 
                 If Not seen.Exists(fullKey) Then
                     Err.Raise RENT_TABLES_ERR_IMPORT, "AMI_Optix_RentTables.ValidateUtilityAllowanceCoverage", _
@@ -1031,6 +1038,17 @@ Private Function FirstWorkbookInFolder(folderPath As String) As String
 
 SafeExit:
     FirstWorkbookInFolder = ""
+End Function
+
+Private Function FileExistsSafe(path As String) As Boolean
+    On Error GoTo SafeExit
+    FileExistsSafe = False
+    If Trim$(path) = "" Then Exit Function
+    FileExistsSafe = (Dir$(path) <> "")
+    Exit Function
+
+SafeExit:
+    FileExistsSafe = False
 End Function
 
 Private Sub EnsureFolderExistsSafe(path As String)
