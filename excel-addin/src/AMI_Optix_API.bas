@@ -218,6 +218,12 @@ Private Function ActivateRentCalculatorByNameInternal(name As String, showErrors
             msg = "Could not activate rent calculator." & vbCrLf & _
                   "Status: " & http.Status & " - " & http.statusText & vbCrLf & _
                   "Name: " & CStr(name)
+            If http.Status = 401 Then
+                msg = msg & vbCrLf & vbCrLf & _
+                      "This endpoint requires admin authorization." & vbCrLf & _
+                      "Render fix: set AMI_OPTIX_ADMIN_KEY equal to AMI_OPTIX_API_KEY, " & _
+                      "or set AMI_OPTIX_ALLOW_API_KEY_FOR_ADMIN=1."
+            End If
             If Len(http.responseText) > 0 Then msg = msg & vbCrLf & vbCrLf & http.responseText
             MsgBox msg, vbExclamation, "AMI Optix"
         End If

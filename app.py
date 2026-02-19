@@ -112,6 +112,9 @@ RENT_CALC_REMOTE_SUFFIX = ".xlsx"
 API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')
 # Admin key for rent calculator management (optional, defaults to API key)
 ADMIN_KEY = os.environ.get('AMI_OPTIX_ADMIN_KEY', API_KEY)
+# Backward-compatibility: allow regular API key on admin endpoints.
+# Set AMI_OPTIX_ALLOW_API_KEY_FOR_ADMIN=0 to require strict admin-only key.
+ALLOW_API_KEY_FOR_ADMIN = str(os.environ.get('AMI_OPTIX_ALLOW_API_KEY_FOR_ADMIN', '1')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 # ----------------------------------------------------------------------------
 # Rent schedule cache (per-process)
@@ -234,7 +237,18 @@ def _validate_admin_key():
         # No admin key configured - allow all requests (dev mode)
         return None
 
-    provided_key = request.headers.get('X-API-Key', '') or request.headers.get('X-Admin-Key', '')
+    provided_api_key = request.headers.get('X-API-Key', '')
+    provided_admin_key = request.headers.get('X-Admin-Key', '')
+    provided_key = provided_api_key or provided_admin_key
+
+    if provided_key == ADMIN_KEY:
+        return None
+
+    # Compatibility mode for existing Excel add-ins that only have a single API key field.
+    # This avoids breaking deployments where AMI_OPTIX_ADMIN_KEY differs from AMI_OPTIX_API_KEY.
+    if ALLOW_API_KEY_FOR_ADMIN and API_KEY and provided_api_key == API_KEY:
+        return None
+
     if provided_key != ADMIN_KEY:
         return jsonify({"error": "Invalid or missing admin key"}), 401
     return None
