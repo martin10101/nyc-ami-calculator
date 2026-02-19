@@ -549,7 +549,7 @@
 
 \- Commit: e5bda4d3c6dca92f5bcc4292a7214d6019eee7ef (release branch base commit containing Fix-06c + Fix-06d + ledger updates)
 
-\- PR: pending creation (`release/2026-ami-optix-all-fixes` -> `main`)
+\- PR: \#3 https://github.com/martin10101/nyc-ami-calculator-all-fixes-test/pull/3
 
 \- Files changed:
 
@@ -575,4 +575,4 @@
 
 &nbsp; - Render auto-deploy remains OFF; manual deploy is required in Render UI.
 
-&nbsp; - Release PR link will be added after push/open in Task 4.
+&nbsp; - Release PR is open and tracks this release branch to `main`.
