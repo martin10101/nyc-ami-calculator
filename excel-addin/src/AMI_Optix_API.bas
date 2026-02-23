@@ -8,8 +8,283 @@ Attribute VB_Name = "AMI_Optix_API"
 Option Explicit
 
 '-------------------------------------------------------------------------------
+' RENT CALCULATOR YEAR (Fix-03)
+'-------------------------------------------------------------------------------
+
+Private Const AMI_OPTIX_REGISTRY_PATH As String = "AMI_Optix"
+Private Const RENTROLL_YEAR_REG_SECTION As String = "RentRollYears"
+Private Const RENTROLL_YEAR_REG_KEY_SELECTED As String = "SelectedYear"
+
+Private Const RENTROLL_YEAR_MIN As Long = 2022
+Private Const RENTROLL_YEAR_MAX As Long = 2026
+Private Const RENTROLL_YEAR_DEFAULT As Long = 2025
+
+Private Const RENT_CALC_REMOTE_PREFIX As String = "AMI_Optix_Rent_Calculator_"
+Private Const RENT_CALC_REMOTE_SUFFIX As String = ".xlsx"
+Private Const RENT_CALC_REMOTE_DEFAULT_NAME As String = "default"
+
+Private m_LastActivatedRentCalcName As String
+Private m_LastActivationWarnedName As String
+Private m_DefaultYearOverrideUnavailable As Boolean
+
+'-------------------------------------------------------------------------------
 ' API CALL
 '-------------------------------------------------------------------------------
+
+Public Function EnsureSelectedRentRollYearActive(Optional showErrors As Boolean = False) As Boolean
+    ' Ensures the API is using the rent calculator matching the user's selected Rent Roll Year.
+    Dim year As Long
+    year = GetSelectedRentRollYearSetting()
+    EnsureSelectedRentRollYearActive = EnsureRentCalculatorYearActive(year, showErrors)
+End Function
+
+Public Function ActivateRentCalculatorByName(name As String, Optional showErrors As Boolean = True) As Boolean
+    ActivateRentCalculatorByName = ActivateRentCalculatorByNameInternal(CStr(name), showErrors)
+
+    If ActivateRentCalculatorByName Then
+        m_LastActivatedRentCalcName = CStr(name)
+        m_LastActivationWarnedName = ""
+    End If
+End Function
+
+Public Function UploadRentCalculatorFile( _
+    localFilePath As String, _
+    remoteFileName As String, _
+    Optional overwrite As Boolean = True, _
+    Optional showErrors As Boolean = True _
+) As Boolean
+    ' Uploads a rent calculator workbook to the API storage (multipart/form-data).
+    On Error GoTo Fail
+
+    If Trim$(localFilePath) = "" Or Dir(localFilePath) = "" Then
+        If showErrors Then
+            MsgBox "File not found:" & vbCrLf & localFilePath, vbExclamation, "AMI Optix"
+        End If
+        Exit Function
+    End If
+
+    Dim boundary As String
+    boundary = MakeMultipartBoundary()
+
+    Dim body As Variant
+    body = BuildRentCalculatorUploadBodyBytes(localFilePath, remoteFileName, overwrite, boundary)
+
+    Dim http As Object
+    Dim url As String
+    Dim apiKey As String
+
+    url = API_BASE_URL & "/api/rent-calculators/upload"
+    apiKey = GetAPIKey()
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 30000, 30000, 240000
+
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "multipart/form-data; boundary=" & boundary
+    http.setRequestHeader "Accept", "application/json"
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
+
+    http.send body
+
+    If http.Status = 200 Then
+        UploadRentCalculatorFile = True
+    Else
+        If showErrors Then
+            Dim msg As String
+            msg = "Rent calculator upload failed." & vbCrLf & _
+                  "Status: " & http.Status & " - " & http.statusText
+            If Len(http.responseText) > 0 Then msg = msg & vbCrLf & vbCrLf & http.responseText
+            MsgBox msg, vbExclamation, "AMI Optix"
+        End If
+        UploadRentCalculatorFile = False
+    End If
+    Exit Function
+
+Fail:
+    If showErrors Then
+        MsgBox "Rent calculator upload failed: " & Err.Description, vbExclamation, "AMI Optix"
+    End If
+    UploadRentCalculatorFile = False
+End Function
+
+Private Function GetSelectedRentRollYearSetting() As Long
+    Dim raw As String
+    raw = GetSetting(AMI_OPTIX_REGISTRY_PATH, RENTROLL_YEAR_REG_SECTION, RENTROLL_YEAR_REG_KEY_SELECTED, CStr(RENTROLL_YEAR_DEFAULT))
+
+    Dim y As Long
+    y = RENTROLL_YEAR_DEFAULT
+    On Error Resume Next
+    y = CLng(raw)
+    On Error GoTo 0
+
+    If y < RENTROLL_YEAR_MIN Or y > RENTROLL_YEAR_MAX Then y = RENTROLL_YEAR_DEFAULT
+    GetSelectedRentRollYearSetting = y
+End Function
+
+Private Function EnsureRentCalculatorYearActive(year As Long, showErrors As Boolean) As Boolean
+    Dim targetName As String
+
+    If year = RENTROLL_YEAR_DEFAULT Then
+        ' Default year normally uses the built-in default calculator.
+        ' If the user uploaded a 2025 override (same naming convention), prefer it when available.
+        Dim overrideName As String
+        overrideName = RentCalculatorRemoteNameForYear(year)
+
+        If m_LastActivatedRentCalcName = overrideName Then
+            EnsureRentCalculatorYearActive = True
+            Exit Function
+        End If
+
+        If Not m_DefaultYearOverrideUnavailable Then
+            If ActivateRentCalculatorByNameInternal(overrideName, False) Then
+                m_LastActivatedRentCalcName = overrideName
+                m_LastActivationWarnedName = ""
+                EnsureRentCalculatorYearActive = True
+                Exit Function
+            End If
+            m_DefaultYearOverrideUnavailable = True
+        End If
+
+        targetName = RENT_CALC_REMOTE_DEFAULT_NAME
+    Else
+        targetName = RentCalculatorRemoteNameForYear(year)
+    End If
+
+    If targetName = "" Then
+        EnsureRentCalculatorYearActive = True
+        Exit Function
+    End If
+
+    If m_LastActivatedRentCalcName = targetName Then
+        EnsureRentCalculatorYearActive = True
+        Exit Function
+    End If
+
+    Dim allowUI As Boolean
+    allowUI = showErrors
+    If showErrors Then
+        If m_LastActivationWarnedName = targetName Then allowUI = False
+    End If
+
+    If ActivateRentCalculatorByNameInternal(targetName, allowUI) Then
+        m_LastActivatedRentCalcName = targetName
+        m_LastActivationWarnedName = ""
+        EnsureRentCalculatorYearActive = True
+        Exit Function
+    End If
+
+    If showErrors And m_LastActivationWarnedName <> targetName Then
+        m_LastActivationWarnedName = targetName
+    End If
+
+    EnsureRentCalculatorYearActive = False
+End Function
+
+Private Function RentCalculatorRemoteNameForYear(year As Long) As String
+    RentCalculatorRemoteNameForYear = RENT_CALC_REMOTE_PREFIX & CStr(year) & RENT_CALC_REMOTE_SUFFIX
+End Function
+
+Private Function ActivateRentCalculatorByNameInternal(name As String, showErrors As Boolean) As Boolean
+    On Error GoTo Fail
+
+    Dim http As Object
+    Dim url As String
+    Dim apiKey As String
+    Dim payload As String
+
+    url = API_BASE_URL & "/api/rent-calculators/activate"
+    apiKey = GetAPIKey()
+    payload = "{""name"": """ & EscapeJSON(CStr(name)) & """}"
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 30000, 30000, 60000
+
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Accept", "application/json"
+    If Len(apiKey) > 0 Then
+        http.setRequestHeader "X-API-Key", apiKey
+    End If
+
+    http.send payload
+
+    If http.Status = 200 Then
+        ActivateRentCalculatorByNameInternal = True
+    Else
+        If showErrors Then
+            Dim msg As String
+            msg = "Could not activate rent calculator." & vbCrLf & _
+                  "Status: " & http.Status & " - " & http.statusText & vbCrLf & _
+                  "Name: " & CStr(name)
+            If Len(http.responseText) > 0 Then msg = msg & vbCrLf & vbCrLf & http.responseText
+            MsgBox msg, vbExclamation, "AMI Optix"
+        End If
+        ActivateRentCalculatorByNameInternal = False
+    End If
+    Exit Function
+
+Fail:
+    If showErrors Then
+        MsgBox "Could not activate rent calculator: " & Err.Description, vbExclamation, "AMI Optix"
+    End If
+    ActivateRentCalculatorByNameInternal = False
+End Function
+
+Private Function MakeMultipartBoundary() As String
+    Randomize
+    MakeMultipartBoundary = "----AMIOptixBoundary" & Format$(Now, "yyyymmddhhnnss") & CStr(Int(Rnd() * 1000000#))
+End Function
+
+Private Function BuildRentCalculatorUploadBodyBytes( _
+    localFilePath As String, _
+    remoteFileName As String, _
+    overwrite As Boolean, _
+    boundary As String _
+) As Variant
+    Dim fileBytes As Variant
+    fileBytes = ReadBinaryFileBytes(localFilePath)
+
+    Dim safeName As String
+    safeName = Replace(CStr(remoteFileName), """", "_")
+
+    Dim prefix As String
+    prefix = "--" & boundary & vbCrLf & _
+             "Content-Disposition: form-data; name=""overwrite""" & vbCrLf & vbCrLf & _
+             IIf(overwrite, "true", "false") & vbCrLf & _
+             "--" & boundary & vbCrLf & _
+             "Content-Disposition: form-data; name=""file""; filename=""" & safeName & """" & vbCrLf & _
+             "Content-Type: application/octet-stream" & vbCrLf & vbCrLf
+
+    Dim suffix As String
+    suffix = vbCrLf & "--" & boundary & "--" & vbCrLf
+
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1 ' adTypeBinary
+    stm.Open
+    stm.Write StrToBytes(prefix)
+    stm.Write fileBytes
+    stm.Write StrToBytes(suffix)
+    stm.Position = 0
+    BuildRentCalculatorUploadBodyBytes = stm.Read
+    stm.Close
+End Function
+
+Private Function ReadBinaryFileBytes(filePath As String) As Variant
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1 ' adTypeBinary
+    stm.Open
+    stm.LoadFromFile filePath
+    ReadBinaryFileBytes = stm.Read
+    stm.Close
+End Function
+
+Private Function StrToBytes(s As String) As Variant
+    StrToBytes = StrConv(CStr(s), vbFromUnicode)
+End Function
 
 Public Function CallOptimizeAPI(payload As String) As String
     ' Makes POST request to /api/optimize endpoint
@@ -23,6 +298,11 @@ Public Function CallOptimizeAPI(payload As String) As String
     Dim t0 As Double
 
     On Error GoTo ErrorHandler
+
+    If Not EnsureSelectedRentRollYearActive(True) Then
+        CallOptimizeAPI = ""
+        Exit Function
+    End If
 
     url = API_BASE_URL & "/api/optimize"
     t0 = Timer
@@ -126,6 +406,11 @@ Public Function CallEvaluateAPI(payload As String) As String
 
     On Error GoTo ErrorHandler
 
+    If Not EnsureSelectedRentRollYearActive(True) Then
+        CallEvaluateAPI = ""
+        Exit Function
+    End If
+
     url = API_BASE_URL & "/api/evaluate"
     apiKey = GetAPIKey()
 
@@ -172,6 +457,11 @@ Public Function CallManualCalculateAPI(payload As String) As String
     Dim apiKey As String
 
     On Error GoTo ErrorHandler
+
+    If Not EnsureSelectedRentRollYearActive(True) Then
+        CallManualCalculateAPI = ""
+        Exit Function
+    End If
 
     url = API_BASE_URL & "/api/manual_calculate"
     apiKey = GetAPIKey()

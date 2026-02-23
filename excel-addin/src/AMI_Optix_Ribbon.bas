@@ -10,6 +10,18 @@ Private m_RentRollSheets() As String
 Private m_RentRollCount As Long
 Private m_SelectedRentRoll As String
 
+' Rent roll year selector (server-side rent calculator)
+Private Const AMI_OPTIX_REGISTRY_PATH As String = "AMI_Optix"
+Private Const RENTROLL_YEAR_MIN As Long = 2022
+Private Const RENTROLL_YEAR_MAX As Long = 2026
+Private Const RENTROLL_YEAR_DEFAULT As Long = 2025
+Private Const RENTROLL_YEAR_REG_SECTION As String = "RentRollYears"
+Private Const RENTROLL_YEAR_REG_KEY_SELECTED As String = "SelectedYear"
+Private Const RENTROLL_YEAR_REG_KEY_REMOTE_PREFIX As String = "RemoteFilename_"
+
+Private m_SelectedRentRollYear As Long
+Private m_RentRollYearInitialized As Boolean
+
 '-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - SOLVER GROUP
 '-------------------------------------------------------------------------------
@@ -657,6 +669,120 @@ End Sub
 ' RIBBON CALLBACKS - RENT ROLL GROUP
 '-------------------------------------------------------------------------------
 
+Public Sub Ribbon_SelectRentRollYear(control As IRibbonControl, id As String, index As Integer)
+    ' Called when user selects a year from dropdown (2022-2026).
+    InitRentRollYearState
+
+    Dim year As Long
+    year = RENTROLL_YEAR_MIN + CLng(index)
+    If year < RENTROLL_YEAR_MIN Or year > RENTROLL_YEAR_MAX Then Exit Sub
+
+    m_SelectedRentRollYear = year
+    SaveSetting AMI_OPTIX_REGISTRY_PATH, RENTROLL_YEAR_REG_SECTION, RENTROLL_YEAR_REG_KEY_SELECTED, CStr(year)
+    DebugLog "Ribbon_SelectRentRollYear: selected=" & year, True
+
+    ' Best-effort: ensure the API uses the selected year (rent calculator activation is server-global).
+    Call EnsureSelectedRentRollYearActive(True)
+
+    Call MaybeWarnRentRollYearMismatch(year)
+End Sub
+
+Public Sub Ribbon_GetRentRollYearCount(control As IRibbonControl, ByRef returnedVal)
+    ' NOTE: RibbonX passes this ByRef as a Variant; keep it untyped to avoid "Type mismatch".
+    returnedVal = (RENTROLL_YEAR_MAX - RENTROLL_YEAR_MIN + 1)
+End Sub
+
+Public Sub Ribbon_GetRentRollYearLabel(control As IRibbonControl, index As Integer, ByRef returnedVal)
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant.
+    Dim year As Long
+    year = RENTROLL_YEAR_MIN + CLng(index)
+    If year < RENTROLL_YEAR_MIN Or year > RENTROLL_YEAR_MAX Then
+        returnedVal = ""
+    Else
+        returnedVal = CStr(year)
+    End If
+End Sub
+
+Public Sub Ribbon_GetRentRollYearID(control As IRibbonControl, index As Integer, ByRef returnedVal)
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant.
+    returnedVal = "rryear_" & index
+End Sub
+
+Public Sub Ribbon_GetRentRollYearSelectedIndex(control As IRibbonControl, ByRef returnedVal)
+    ' NOTE: RibbonX passes returnedVal ByRef as a Variant.
+    InitRentRollYearState
+
+    Dim idx As Long
+    idx = CLng(m_SelectedRentRollYear - RENTROLL_YEAR_MIN)
+    If idx < 0 Or idx > (RENTROLL_YEAR_MAX - RENTROLL_YEAR_MIN) Then
+        idx = CLng(RENTROLL_YEAR_DEFAULT - RENTROLL_YEAR_MIN)
+    End If
+    returnedVal = idx
+End Sub
+
+Public Sub Ribbon_ManageRentRollYears(control As IRibbonControl)
+    ' Upload/replace year calculator files and activate on the API.
+    ' UI is intentionally lightweight (FileDialog) to avoid adding new UserForm files.
+    On Error GoTo Fail
+
+    InitRentRollYearState
+
+    Dim year As Long
+    year = m_SelectedRentRollYear
+
+    If ActiveWorkbook Is Nothing Then
+        MsgBox "Open a workbook first.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim fd As Object
+    Set fd = Application.FileDialog(3) ' msoFileDialogFilePicker
+    If fd Is Nothing Then Exit Sub
+
+    With fd
+        .Title = "Select rent calculator workbook for year " & CStr(year)
+        .AllowMultiSelect = False
+        .Filters.Clear
+        .Filters.Add "Excel Workbooks", "*.xlsx; *.xlsm"
+        If .Show <> -1 Then Exit Sub
+    End With
+
+    Dim selectedPath As String
+    selectedPath = CStr(fd.SelectedItems(1))
+    If Trim$(selectedPath) = "" Then Exit Sub
+
+    Dim yearFolder As String
+    yearFolder = EnsureRentRollYearFolder(year)
+    If Trim$(yearFolder) = "" Then
+        MsgBox "Could not create Rent Roll Years folder under %APPDATA%.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    Dim localPath As String
+    localPath = yearFolder & "\RentCalculator_" & CStr(year) & ".xlsx"
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso Is Nothing Then
+        MsgBox "File system access is unavailable.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
+    fso.CopyFile selectedPath, localPath, True
+
+    Dim remoteName As String
+    remoteName = RentCalculatorRemoteNameForYear(year)
+
+    If Not UploadRentCalculatorFile(localPath, remoteName, True, True) Then Exit Sub
+    If Not ActivateRentCalculatorByName(remoteName, True) Then Exit Sub
+
+    MsgBox "Uploaded and activated rent calculator for year " & CStr(year) & ".", vbInformation, "AMI Optix"
+    Exit Sub
+
+Fail:
+    MsgBox "Manage Rent Roll Years failed: " & Err.Description, vbExclamation, "AMI Optix"
+End Sub
+
 Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index As Integer)
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then
@@ -1274,4 +1400,140 @@ Private Function ScenarioPickerLine(index As Long, scenarioKey As String, scenar
 
     ScenarioPickerLine = index & ". " & FormatScenarioNameForPicker(CStr(scenarioKey)) & _
                          " [" & tierLabel & "] (WAAMI: " & waami & ")"
+End Function
+
+Private Sub InitRentRollYearState()
+    If m_RentRollYearInitialized Then Exit Sub
+
+    Dim raw As String
+    raw = GetSetting(AMI_OPTIX_REGISTRY_PATH, RENTROLL_YEAR_REG_SECTION, RENTROLL_YEAR_REG_KEY_SELECTED, CStr(RENTROLL_YEAR_DEFAULT))
+
+    Dim y As Long
+    y = RENTROLL_YEAR_DEFAULT
+    On Error Resume Next
+    y = CLng(raw)
+    On Error GoTo 0
+
+    If y < RENTROLL_YEAR_MIN Or y > RENTROLL_YEAR_MAX Then y = RENTROLL_YEAR_DEFAULT
+
+    m_SelectedRentRollYear = y
+    m_RentRollYearInitialized = True
+End Sub
+
+Private Function EnsureRentRollYearFolder(year As Long) As String
+    ' Ensure: %APPDATA%\AMI_Optix\RentRollYears\<year>\
+    On Error GoTo Fail
+
+    Dim appData As String
+    appData = Environ$("APPDATA")
+    If Trim$(appData) = "" Then Exit Function
+
+    Dim basePath As String
+    basePath = appData & "\AMI_Optix"
+    Call EnsureFolderExists(basePath)
+
+    Dim yearsPath As String
+    yearsPath = basePath & "\RentRollYears"
+    Call EnsureFolderExists(yearsPath)
+
+    Dim yearPath As String
+    yearPath = yearsPath & "\" & CStr(year)
+    Call EnsureFolderExists(yearPath)
+
+    If Dir(yearPath, vbDirectory) = "" Then Exit Function
+
+    EnsureRentRollYearFolder = yearPath
+    Exit Function
+
+Fail:
+End Function
+
+Private Function RentCalculatorRemoteNameForYear(year As Long) As String
+    RentCalculatorRemoteNameForYear = "AMI_Optix_Rent_Calculator_" & CStr(year) & ".xlsx"
+End Function
+
+Private Sub MaybeWarnRentRollYearMismatch(selectedYear As Long)
+    ' Best-effort warning only; OK continues (not blocking).
+    On Error GoTo Fail
+
+    Dim declaredYear As Long
+    declaredYear = DetectWorkbookDeclaredRentRollYear()
+    If declaredYear <= 0 Then Exit Sub
+    If declaredYear = selectedYear Then Exit Sub
+
+    MsgBox "Warning: workbook appears to declare Rent Roll year " & CStr(declaredYear) & _
+           ", but Rent Roll Year is set to " & CStr(selectedYear) & "." & vbCrLf & vbCrLf & _
+           "Click OK to continue (the selected year will be used).", _
+           vbExclamation, "AMI Optix"
+    Exit Sub
+
+Fail:
+End Sub
+
+Private Function DetectWorkbookDeclaredRentRollYear() As Long
+    ' Best-effort detection: workbook name -> rent roll sheet name -> small top-of-sheet scan.
+    On Error GoTo Fail
+
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim y As Long
+    y = FindYearInText(ActiveWorkbook.Name)
+    If y > 0 Then DetectWorkbookDeclaredRentRollYear = y: Exit Function
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+
+    If Trim$(m_SelectedRentRoll) <> "" Then
+        On Error Resume Next
+        Set ws = ActiveWorkbook.Worksheets(m_SelectedRentRoll)
+        On Error GoTo Fail
+    End If
+
+    If ws Is Nothing Then
+        On Error Resume Next
+        Set ws = ActiveWorkbook.Worksheets("RentRoll")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("UAP")
+        If ws Is Nothing Then Set ws = ActiveWorkbook.Worksheets("MIH")
+        On Error GoTo Fail
+    End If
+
+    If ws Is Nothing Then Exit Function
+
+    y = FindYearInText(ws.Name)
+    If y > 0 Then DetectWorkbookDeclaredRentRollYear = y: Exit Function
+
+    Dim r As Long, c As Long
+    For r = 1 To 10
+        For c = 1 To 8
+            Dim v As Variant
+            v = ws.Cells(r, c).Value
+
+            If IsNumeric(v) Then
+                On Error Resume Next
+                y = CLng(v)
+                On Error GoTo Fail
+                If y >= RENTROLL_YEAR_MIN And y <= RENTROLL_YEAR_MAX Then
+                    DetectWorkbookDeclaredRentRollYear = y
+                    Exit Function
+                End If
+            ElseIf VarType(v) = vbString Then
+                y = FindYearInText(CStr(v))
+                If y > 0 Then DetectWorkbookDeclaredRentRollYear = y: Exit Function
+            End If
+        Next c
+    Next r
+
+    Exit Function
+
+Fail:
+End Function
+
+Private Function FindYearInText(text As String) As Long
+    Dim y As Long
+    For y = RENTROLL_YEAR_MAX To RENTROLL_YEAR_MIN Step -1
+        If InStr(1, text, CStr(y), vbTextCompare) > 0 Then
+            FindYearInText = y
+            Exit Function
+        End If
+    Next y
 End Function
