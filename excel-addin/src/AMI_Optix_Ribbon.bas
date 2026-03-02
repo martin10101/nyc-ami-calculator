@@ -661,13 +661,7 @@ Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index 
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then
         m_SelectedRentRoll = m_RentRollSheets(index)
-
-        ' Activate the selected sheet
-        On Error Resume Next
-        ActiveWorkbook.Worksheets(m_SelectedRentRoll).Activate
-        On Error GoTo 0
-
-        MsgBox "Selected rent roll: " & m_SelectedRentRoll, vbInformation, "AMI Optix"
+        DebugLog "Ribbon_SelectRentRoll: selected=" & m_SelectedRentRoll, True
     End If
 End Sub
 

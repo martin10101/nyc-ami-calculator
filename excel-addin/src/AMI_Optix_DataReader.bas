@@ -32,7 +32,7 @@ Public Function ReadUnitData() As Collection
 
     On Error GoTo ErrorHandler
 
-    ' Try to find data in active sheet first, then search all sheets
+    ' Find a stable data sheet (prefer known template sheet names over incidental ActiveSheet)
     Set ws = FindDataSheet()
 
     If ws Is Nothing Then
@@ -86,15 +86,29 @@ Private Function FindDataSheet() As Worksheet
     Dim ws As Worksheet
     Dim preferredNames As Variant
     Dim i As Long
+    Dim activeWs As Worksheet
 
-    ' First try active sheet
-    If HasUnitDataHeaders(ActiveSheet) Then
-        Set FindDataSheet = ActiveSheet
+    If ActiveWorkbook Is Nothing Then
+        Set FindDataSheet = Nothing
         Exit Function
     End If
 
-    ' Try preferred sheet names
-    preferredNames = Array("UAP", "PROJECT WORKSHEET", "RentRoll", "Units", "Sheet1", "Data")
+    ' Only treat the active sheet as authoritative if it's a known template/program sheet.
+    Set activeWs = Nothing
+    On Error Resume Next
+    Set activeWs = ActiveSheet
+    On Error GoTo 0
+
+    preferredNames = Array("UAP", "MIH", "PROJECT WORKSHEET", "RentRoll", "Rent Roll", "Units", "Unit Schedule", "Sheet1", "Data")
+
+    If Not activeWs Is Nothing Then
+        If IsPreferredSheetName(activeWs.Name) Then
+            If HasUnitDataHeaders(activeWs) Then
+                Set FindDataSheet = activeWs
+                Exit Function
+            End If
+        End If
+    End If
 
     For i = LBound(preferredNames) To UBound(preferredNames)
         On Error Resume Next
@@ -110,6 +124,14 @@ Private Function FindDataSheet() As Worksheet
         Set ws = Nothing
     Next i
 
+    ' Fallback: if the active sheet has headers but isn't a template name, allow it.
+    If Not activeWs Is Nothing Then
+        If HasUnitDataHeaders(activeWs) Then
+            Set FindDataSheet = activeWs
+            Exit Function
+        End If
+    End If
+
     ' Search all sheets
     For Each ws In ActiveWorkbook.Worksheets
         If HasUnitDataHeaders(ws) Then
@@ -119,6 +141,12 @@ Private Function FindDataSheet() As Worksheet
     Next ws
 
     Set FindDataSheet = Nothing
+End Function
+
+Private Function IsPreferredSheetName(sheetName As String) As Boolean
+    Dim s As String
+    s = UCase$(Trim$(sheetName))
+    IsPreferredSheetName = (s = "UAP" Or s = "MIH" Or s = "PROJECT WORKSHEET" Or s = "RENTROLL" Or s = "RENT ROLL")
 End Function
 
 Private Function HasUnitDataHeaders(ws As Worksheet) As Boolean
