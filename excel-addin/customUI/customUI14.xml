@@ -74,13 +74,6 @@
                   supertip="Open the log folder."/>
         </group>
         <group id="grpManual" label="Manual">
-          <toggleButton id="tglLiveSync"
-                        label="Live Sync"
-                        size="normal"
-                        imageMso="RefreshAll"
-                        getPressed="Ribbon_GetLiveSync"
-                        onAction="Ribbon_ToggleLiveSync"
-                        supertip="When ON, Scenario Manual auto-syncs with AMI edits. Turn OFF to clear the manual block and AMI column for custom inputs."/>
           <button id="btnManualCalculate"
                   label="Manual Calculate"
                   size="normal"
