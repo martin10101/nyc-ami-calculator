@@ -10,6 +10,22 @@ Private m_RentRollSheets() As String
 Private m_RentRollCount As Long
 Private m_SelectedRentRoll As String
 
+' Best-effort: keep the AMI Optix ribbon tab selected after ribbon actions.
+Private m_RibbonUI As IRibbonUI
+Private Const AMI_OPTIX_TAB_ID As String = "tabAMIOptix"
+
+Public Sub Ribbon_OnLoad(ribbon As IRibbonUI)
+    Set m_RibbonUI = ribbon
+End Sub
+
+Private Sub EnsureAMIOptixTabActive()
+    On Error Resume Next
+    If Not m_RibbonUI Is Nothing Then
+        m_RibbonUI.ActivateTab AMI_OPTIX_TAB_ID
+    End If
+    On Error GoTo 0
+End Sub
+
 '-------------------------------------------------------------------------------
 ' RIBBON CALLBACKS - SOLVER GROUP
 '-------------------------------------------------------------------------------
@@ -17,19 +33,23 @@ Private m_SelectedRentRoll As String
 Public Sub Ribbon_RunSolver(control As IRibbonControl)
     ' Called when "Run Solver" button is clicked
     RunOptimizationForProgram "UAP"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_RunSolverUAP(control As IRibbonControl)
     RunOptimizationForProgram "UAP"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_RunSolverMIH(control As IRibbonControl)
     RunOptimizationForProgram "MIH"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_ViewScenarios(control As IRibbonControl)
     ' Called when "View Scenarios" button is clicked
     ShowScenarioSelector
+    EnsureAMIOptixTabActive
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -46,6 +66,7 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
         MsgBox "No scenarios available." & vbCrLf & vbCrLf & _
                "Run the solver first to generate scenarios.", _
                vbInformation, "AMI Optix"
+        EnsureAMIOptixTabActive
         Exit Sub
     End If
 
@@ -58,11 +79,13 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
         MsgBox "No scenarios available." & vbCrLf & vbCrLf & _
                "Run the solver first to generate scenarios.", _
                vbInformation, "AMI Optix"
+        EnsureAMIOptixTabActive
         Exit Sub
     End If
 
     If scenarios.Count = 0 Then
         MsgBox "No scenarios available.", vbInformation, "AMI Optix"
+        EnsureAMIOptixTabActive
         Exit Sub
     End If
 
@@ -91,6 +114,7 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
     Set liveUnits = ReadCurrentProgramUnits(programNorm)
     If liveUnits Is Nothing Or liveUnits.Count = 0 Then
         MsgBox "Could not read units from the workbook.", vbExclamation, "AMI Optix"
+        EnsureAMIOptixTabActive
         Exit Sub
     End If
 
@@ -136,7 +160,10 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
         existingReason, _
         Type:=2 _
     )
-    If reasonVar = False Then Exit Sub ' Cancel
+    If reasonVar = False Then
+        EnsureAMIOptixTabActive
+        Exit Sub ' Cancel
+    End If
 
     Dim choiceReason As String
     choiceReason = CStr(reasonVar)
@@ -170,10 +197,12 @@ Public Sub Ribbon_RecordScenarioChoice(control As IRibbonControl)
                "Try: Settings → Log Settings → set Log Root to a local folder like C:\Temp\AMI_Optix_Learning, then click Record Choice again.", _
                vbExclamation, "AMI Optix"
     End If
+    EnsureAMIOptixTabActive
     Exit Sub
 
 Fail:
     MsgBox "Could not record choice: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -233,10 +262,12 @@ Public Sub Ribbon_ToggleLiveSync(control As IRibbonControl, pressed As Boolean)
                "Edits in the program AMI column will refresh Scenario Manual automatically.", _
                vbInformation, "AMI Optix"
     End If
+    EnsureAMIOptixTabActive
     Exit Sub
 
 Fail:
     MsgBox "Could not toggle Live Sync: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
@@ -246,11 +277,16 @@ Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
 
-    If Not ManualCalculateScenario(programNorm) Then Exit Sub
+    If Not ManualCalculateScenario(programNorm) Then
+        EnsureAMIOptixTabActive
+        Exit Sub
+    End If
+    EnsureAMIOptixTabActive
     Exit Sub
 
 Fail:
     MsgBox "Manual Calculate failed: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Private Function ReadCurrentProgramUnits(programNorm As String) As Collection
@@ -661,14 +697,9 @@ Public Sub Ribbon_SelectRentRoll(control As IRibbonControl, id As String, index 
     ' Called when user selects a rent roll from dropdown
     If index >= 0 And index < m_RentRollCount Then
         m_SelectedRentRoll = m_RentRollSheets(index)
-
-        ' Activate the selected sheet
-        On Error Resume Next
-        ActiveWorkbook.Worksheets(m_SelectedRentRoll).Activate
-        On Error GoTo 0
-
-        MsgBox "Selected rent roll: " & m_SelectedRentRoll, vbInformation, "AMI Optix"
+        DebugLog "Ribbon_SelectRentRoll: selected=" & m_SelectedRentRoll, True
     End If
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_GetRentRollCount(control As IRibbonControl, ByRef returnedVal)
@@ -716,6 +747,7 @@ Public Sub Ribbon_RefreshRentRolls(control As IRibbonControl)
     ' Refresh the rent roll list
     RefreshRentRollList
     MsgBox "Found " & m_RentRollCount & " potential rent roll sheets.", vbInformation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Private Sub RefreshRentRollList()
@@ -887,11 +919,13 @@ End Function
 Public Sub Ribbon_OpenUtilities(control As IRibbonControl)
     ' Open utility settings dialog
     ShowUtilityForm
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_OpenAPISettings(control As IRibbonControl)
     ' Open API settings dialog
     ShowSettingsForm
+    EnsureAMIOptixTabActive
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -906,6 +940,7 @@ Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
 
     If ActiveWorkbook Is Nothing Then
         MsgBox "Open a workbook first.", vbExclamation, "AMI Optix"
+        EnsureAMIOptixTabActive
         Exit Sub
     End If
 
@@ -932,26 +967,33 @@ Public Sub Ribbon_OpenLearningSettings(control As IRibbonControl)
            "Log Root: " & GetLearningLogRootPath() & vbCrLf & _
            "Run Log File: " & GetRunLogFilePath(), _
            vbInformation, "AMI Optix"
+    EnsureAMIOptixTabActive
     Exit Sub
 
 Fail:
     MsgBox "Log settings failed: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_OpenLearningLogs(control As IRibbonControl)
     ' Opens the log folder in Explorer.
     On Error GoTo Fail
 
-    If ActiveWorkbook Is Nothing Then Exit Sub
+    If ActiveWorkbook Is Nothing Then
+        EnsureAMIOptixTabActive
+        Exit Sub
+    End If
 
     Dim folderPath As String
     folderPath = GetLearningLogRootPath()
     Call EnsureFolderExists(folderPath)
 
     Shell "explorer.exe """ & folderPath & """", vbNormalFocus
+    EnsureAMIOptixTabActive
     Exit Sub
 
 Fail:
+    EnsureAMIOptixTabActive
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -961,9 +1003,11 @@ End Sub
 Public Sub Ribbon_ShowDiagnostics(control As IRibbonControl)
     On Error GoTo Fail
     Call ShowAMIOptixDiagnostics
+    EnsureAMIOptixTabActive
     Exit Sub
 Fail:
     MsgBox "Diagnostics failed: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_ShowAbout(control As IRibbonControl)
@@ -975,6 +1019,7 @@ Public Sub Ribbon_ShowAbout(control As IRibbonControl)
            "projects to maximize revenue while meeting regulatory requirements." & vbCrLf & vbCrLf & _
            "API: " & API_BASE_URL, _
            vbInformation, "About AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 '-------------------------------------------------------------------------------
