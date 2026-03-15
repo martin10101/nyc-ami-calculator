@@ -172,7 +172,7 @@ NextUnit:
     End If
 
     Dim payload As String
-    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, selectedYear)
+    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
 
     Dim apiErr As String
     apiErr = ""
