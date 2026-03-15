@@ -18,17 +18,43 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     }
 }
 
-# ── Check Node.js ─────────────────────────────────────────────────────────────
-try {
-    $nodeVersion = & node --version 2>&1
-    Write-Host "Node.js found: $nodeVersion"
-} catch {
+# ── Find Node.js (PATH or portable fallback locations) ───────────────────────
+$nodeExe = $null
+$npmCmd  = $null
+
+$portableCandidates = @(
+    'C:\node\node-v20.19.0-win-x64',
+    'C:\node\node-v18.20.0-win-x64',
+    'C:\node'
+)
+
+# Try PATH first
+if (Get-Command 'node' -ErrorAction SilentlyContinue) {
+    $nodeExe = 'node'
+    $npmCmd  = 'npm'
+} else {
+    foreach ($dir in $portableCandidates) {
+        $candidate = Join-Path $dir 'node.exe'
+        if (Test-Path $candidate) {
+            $nodeExe = $candidate
+            $npmCmd  = Join-Path $dir 'npm.cmd'
+            # Add to session PATH so child processes can find it
+            $env:PATH = "$dir;$env:PATH"
+            break
+        }
+    }
+}
+
+if (-not $nodeExe) {
     Write-Host ''
-    Write-Host 'ERROR: Node.js is not installed or not on PATH.' -ForegroundColor Red
-    Write-Host 'Download it from: https://nodejs.org  (LTS version, Windows Installer)' -ForegroundColor Yellow
-    Write-Host 'After installing, re-run this script.' -ForegroundColor Yellow
+    Write-Host 'ERROR: Node.js not found.' -ForegroundColor Red
+    Write-Host 'Run this to install it (no admin needed):' -ForegroundColor Yellow
+    Write-Host '  Invoke-WebRequest -Uri "https://nodejs.org/dist/v20.19.0/node-v20.19.0-win-x64.zip" -OutFile "$env:TEMP\node.zip" -UseBasicParsing; Expand-Archive -LiteralPath "$env:TEMP\node.zip" -DestinationPath "C:\node" -Force' -ForegroundColor Yellow
     exit 1
 }
+
+$nodeVersion = & $nodeExe --version 2>&1
+Write-Host "Node.js found: $nodeVersion"
 
 # ── Install npm dependencies if needed ───────────────────────────────────────
 $nodeModules = Join-Path $scriptDir 'node_modules'
@@ -36,7 +62,7 @@ if (-not (Test-Path $nodeModules)) {
     Write-Host 'Installing dependencies (first run only)...'
     Push-Location $scriptDir
     try {
-        & npm install --no-fund --no-audit 2>&1 | Out-Host
+        & $npmCmd install --no-fund --no-audit 2>&1 | Out-Host
     } finally {
         Pop-Location
     }
@@ -76,4 +102,4 @@ $job = Start-Job -ScriptBlock {
 } -ArgumentList $url
 
 $serverScript = Join-Path $scriptDir 'server.js'
-& node $serverScript
+& $nodeExe $serverScript
