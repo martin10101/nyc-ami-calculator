@@ -760,6 +760,21 @@ function Invoke-AmiOptixExcelMacro {
     }
 }
 
+function Get-AmiOptixWorksheetByName {
+    param(
+        [Parameter(Mandatory = $true)][object]$Workbook,
+        [Parameter(Mandatory = $true)][string]$WorksheetName
+    )
+
+    foreach ($worksheet in @($Workbook.Worksheets)) {
+        if ([string]$worksheet.Name -eq $WorksheetName) {
+            return $worksheet
+        }
+    }
+
+    throw "Worksheet '$WorksheetName' does not exist."
+}
+
 function Test-AmiOptixAssertion {
     param(
         [Parameter(Mandatory = $true)][object]$Workbook,
@@ -770,7 +785,7 @@ function Test-AmiOptixAssertion {
     switch ($type) {
         'sheet_exists' {
             try {
-                $null = $Workbook.Worksheets.Item([string]$Assertion.sheet)
+                $null = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
                 return [ordered]@{ succeeded = $true; details = "Worksheet '$($Assertion.sheet)' exists." }
             } catch {
                 return [ordered]@{ succeeded = $false; details = "Worksheet '$($Assertion.sheet)' does not exist." }
@@ -778,7 +793,7 @@ function Test-AmiOptixAssertion {
         }
         'cell_contains' {
             try {
-                $sheet = $Workbook.Worksheets.Item([string]$Assertion.sheet)
+                $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
                 $value = [string]$sheet.Range([string]$Assertion.cell).Text
                 $needle = [string]$Assertion.text
                 return [ordered]@{
@@ -791,7 +806,7 @@ function Test-AmiOptixAssertion {
         }
         'sheet_contains_text' {
             try {
-                $sheet = $Workbook.Worksheets.Item([string]$Assertion.sheet)
+                $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
                 $range = $sheet.UsedRange
                 $value = [string]$range.Text
                 $needle = [string]$Assertion.text
