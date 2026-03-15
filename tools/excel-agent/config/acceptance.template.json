@@ -60,9 +60,10 @@
           "sheet": "AMI Optix Diagnostics"
         },
         {
-          "type": "sheet_contains_text",
+          "type": "sheet_kv_equals",
           "sheet": "AMI Optix Diagnostics",
-          "text": "MATCH"
+          "key": "Result",
+          "value": "MATCH"
         }
       ]
     }

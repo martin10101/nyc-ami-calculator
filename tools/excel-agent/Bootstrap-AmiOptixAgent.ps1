@@ -93,9 +93,11 @@ $bundledUapSource = Join-Path $resolvedRepoRoot 'tools\excel-agent\assets\workbo
 $bundledMihSource = Join-Path $resolvedRepoRoot 'tools\excel-agent\assets\workbooks\MIH_golden.xlsb'
 if (Test-Path -LiteralPath $bundledUapSource) {
     Copy-Item -LiteralPath $bundledUapSource -Destination (Join-Path $workbooksRoot 'UAP_golden.xlsm') -Force
+    try { Unblock-File -LiteralPath (Join-Path $workbooksRoot 'UAP_golden.xlsm') -ErrorAction Stop } catch {}
 }
 if (Test-Path -LiteralPath $bundledMihSource) {
     Copy-Item -LiteralPath $bundledMihSource -Destination (Join-Path $workbooksRoot 'MIH_golden.xlsb') -Force
+    try { Unblock-File -LiteralPath (Join-Path $workbooksRoot 'MIH_golden.xlsb') -ErrorAction Stop } catch {}
 }
 
 $seededRentRollYears = New-Object System.Collections.Generic.List[object]
@@ -111,6 +113,7 @@ if (Test-Path -LiteralPath $bundledRentRollYearsRoot) {
         $destinationWorkbookPath = Join-Path $destinationFolder ("RentCalculator_{0}.xlsx" -f $yearLabel)
         New-Item -ItemType Directory -Force -Path $destinationFolder | Out-Null
         Copy-Item -LiteralPath $sourceWorkbookPath -Destination $destinationWorkbookPath -Force
+        try { Unblock-File -LiteralPath $destinationWorkbookPath -ErrorAction Stop } catch {}
 
         $destinationWorkbook = Get-Item -LiteralPath $destinationWorkbookPath
         $seededRentRollYears.Add([ordered]@{

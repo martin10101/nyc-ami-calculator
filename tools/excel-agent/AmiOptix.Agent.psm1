@@ -867,14 +867,57 @@ function Test-AmiOptixAssertion {
                 return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
             }
         }
+        'sheet_kv_equals' {
+            try {
+                $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
+                $key = [string]$Assertion.key
+                $expected = [string]$Assertion.value
+                $maxRows = [int](Get-AmiOptixObjectProperty -InputObject $Assertion -Name 'maxRows' -Default 200)
+                if ($maxRows -le 0) { $maxRows = 200 }
+
+                for ($row = 1; $row -le $maxRows; $row++) {
+                    $cellKey = [string]$sheet.Cells.Item($row, 1).Text
+                    if ([string]::Equals($cellKey.Trim(), $key.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+                        $actual = [string]$sheet.Cells.Item($row, 2).Text
+                        $ok = [string]::Equals($actual.Trim(), $expected.Trim(), [StringComparison]::OrdinalIgnoreCase)
+                        return [pscustomobject]@{
+                            succeeded = $ok
+                            details = if ($ok) {
+                                "Key '$key' = '$actual'."
+                            } else {
+                                "Key '$key' = '$actual' (expected '$expected')."
+                            }
+                        }
+                    }
+                }
+
+                return [pscustomobject]@{
+                    succeeded = $false
+                    details = "Key '$key' was not found in $($Assertion.sheet) column A (scanned first $maxRows rows)."
+                }
+            } catch {
+                return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
+            }
+        }
         'sheet_contains_text' {
             try {
                 $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
                 $range = $sheet.UsedRange
-                $value = [string]$range.Text
                 $needle = [string]$Assertion.text
+                $values = $range.Value2
+                $found = $false
+                if ($null -ne $values) {
+                    if ($values -is [System.Array]) {
+                        foreach ($cell in $values) {
+                            if ($null -eq $cell) { continue }
+                            if ([string]$cell -like "*$needle*") { $found = $true; break }
+                        }
+                    } else {
+                        $found = ([string]$values -like "*$needle*")
+                    }
+                }
                 return [pscustomobject]@{
-                    succeeded = $value -like "*$needle*"
+                    succeeded = $found
                     details = "Scanned UsedRange for '$needle'."
                 }
             } catch {
@@ -1006,7 +1049,16 @@ function Invoke-AmiOptixAcceptanceSuite {
             $scenarioResult.assertions = @($assertionResults)
             $scenarioResult.succeeded = -not ($assertionResults | Where-Object { -not $_.succeeded })
             $scenarioResult.classification = if ($scenarioResult.succeeded) { 'passed' } else { 'code-failure' }
-            $scenarioResult.details = if ($scenarioResult.succeeded) { 'Scenario completed and all assertions passed.' } else { 'One or more assertions failed.' }
+            if ($scenarioResult.succeeded) {
+                $scenarioResult.details = 'Scenario completed and all assertions passed.'
+            } else {
+                $firstFailure = $assertionResults | Where-Object { -not $_.succeeded } | Select-Object -First 1
+                $scenarioResult.details = if ($firstFailure -and $firstFailure.details) {
+                    "Assertion failed: $($firstFailure.details)"
+                } else {
+                    'One or more assertions failed.'
+                }
+            }
         } catch {
             $scenarioResult.classification = 'code-failure'
             $scenarioResult.details = "$scenarioStep :: $($_.Exception.Message)"
