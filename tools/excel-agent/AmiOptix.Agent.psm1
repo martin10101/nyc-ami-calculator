@@ -55,6 +55,33 @@ function New-AmiOptixManualActionRequest {
     }
 }
 
+function Test-AmiOptixObjectProperty {
+    param(
+        [Parameter(Mandatory = $true)]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $InputObject) {
+        return $false
+    }
+
+    return $null -ne $InputObject.PSObject.Properties[$Name]
+}
+
+function Get-AmiOptixObjectProperty {
+    param(
+        [Parameter(Mandatory = $true)]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name,
+        $Default = $null
+    )
+
+    if (Test-AmiOptixObjectProperty -InputObject $InputObject -Name $Name) {
+        return $InputObject.$Name
+    }
+
+    return $Default
+}
+
 function Get-AmiOptixSecuritySensitiveRelativePaths {
     return @(
         'app.py',
@@ -735,25 +762,33 @@ function Invoke-AmiOptixAcceptanceSuite {
     New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 
     foreach ($scenario in $suite.scenarios) {
-        if ($scenario.enabled -eq $false) {
+        $scenarioEnabled = Get-AmiOptixObjectProperty -InputObject $scenario -Name 'enabled' -Default $true
+        if ($scenarioEnabled -eq $false) {
             continue
         }
 
+        $scenarioName = [string](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'name' -Default 'Unnamed scenario')
+        $requiresInteractiveUi = [bool](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'requiresInteractiveUi' -Default $false)
+        $workbookRole = [string](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'workbookRole' -Default '')
+        $macro = [string](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'macro' -Default '')
+        $scenarioArguments = Get-AmiOptixObjectProperty -InputObject $scenario -Name 'arguments' -Default @()
+        $scenarioAssertions = Get-AmiOptixObjectProperty -InputObject $scenario -Name 'assertions' -Default @()
+
         $scenarioResult = [ordered]@{
-            name = $scenario.name
+            name = $scenarioName
             succeeded = $false
             classification = 'code-failure'
             details = ''
             assertions = @()
         }
 
-        if ($scenario.requiresInteractiveUi -eq $true -and -not $Config.allowInteractiveUi) {
+        if ($requiresInteractiveUi -eq $true -and -not $Config.allowInteractiveUi) {
             $scenarioResult.classification = 'manual/automation-gap'
             $scenarioResult.details = 'Scenario is marked as interactive and would block unattended COM automation because the current VBA entrypoint raises modal UI.'
             $suiteResults.Add($scenarioResult)
             $manualActions.Add((New-AmiOptixManualActionRequest `
                 -Classification 'manual/automation-gap' `
-                -Blocked "Scenario '$($scenario.name)' requires interactive UI" `
+                -Blocked "Scenario '$scenarioName' requires interactive UI" `
                 -Why 'The configured macro shows modal MsgBox/InputBox UI and cannot be exercised unattended without a dedicated automation-safe test mode.' `
                 -MinimumManualSteps @(
                     'Either run this scenario manually and record the result, or add a test-safe non-modal entrypoint before enabling unattended execution.',
@@ -769,9 +804,13 @@ function Invoke-AmiOptixAcceptanceSuite {
             $excel = New-AmiOptixExcelApplication
             $addin = $excel.Workbooks.Open($Config.rebuiltAddinPath)
 
-            if ($scenario.workbookRole) {
-                $goldenPath = $Config.goldenWorkbooks.($scenario.workbookRole)
-                $runtimeWorkbookPath = Join-Path $runtimeRoot ("{0}-{1:yyyyMMddHHmmss}.xlsm" -f $scenario.workbookRole, [DateTime]::UtcNow)
+            if ($workbookRole) {
+                $goldenPath = $Config.goldenWorkbooks.$workbookRole
+                $runtimeExtension = [System.IO.Path]::GetExtension([string]$goldenPath)
+                if ([string]::IsNullOrWhiteSpace($runtimeExtension)) {
+                    $runtimeExtension = '.xlsm'
+                }
+                $runtimeWorkbookPath = Join-Path $runtimeRoot ("{0}-{1:yyyyMMddHHmmss}{2}" -f $workbookRole, [DateTime]::UtcNow, $runtimeExtension)
                 Copy-Item -LiteralPath $goldenPath -Destination $runtimeWorkbookPath -Force
                 $workbook = $excel.Workbooks.Open($runtimeWorkbookPath)
                 $workbook.Activate() | Out-Null
@@ -779,16 +818,16 @@ function Invoke-AmiOptixAcceptanceSuite {
                 $workbook = $addin
             }
 
-            $macroName = "'{0}'!{1}" -f ([System.IO.Path]::GetFileName($Config.rebuiltAddinPath)), [string]$scenario.macro
+            $macroName = "'{0}'!{1}" -f ([System.IO.Path]::GetFileName($Config.rebuiltAddinPath)), $macro
             $arguments = @()
-            if ($scenario.arguments) {
-                $arguments = @($scenario.arguments)
+            if ($scenarioArguments) {
+                $arguments = @($scenarioArguments)
             }
 
             $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments $arguments
 
             $assertionResults = New-Object System.Collections.Generic.List[object]
-            foreach ($assertion in $scenario.assertions) {
+            foreach ($assertion in @($scenarioAssertions)) {
                 $assertionResults.Add((Test-AmiOptixAssertion -Workbook $workbook -Assertion $assertion))
             }
 
@@ -814,7 +853,7 @@ function Invoke-AmiOptixAcceptanceSuite {
 
     $result = [ordered]@{
         generatedAtUtc = [DateTime]::UtcNow.ToString('o')
-        succeeded = (-not ($suiteResults | Where-Object { -not $_.succeeded })) -and ($manualActions.Count -eq 0)
+        succeeded = ((@($suiteResults | Where-Object { -not $_.succeeded }).Count -eq 0) -and ($manualActions.Count -eq 0))
         scenarios = @($suiteResults)
         manualActionRequests = @($manualActions)
     }
