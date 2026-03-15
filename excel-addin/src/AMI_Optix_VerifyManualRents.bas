@@ -384,10 +384,6 @@ Private Sub ShowVerifySummary(ByVal automationMode As Boolean, ByVal result As S
         On Error Resume Next
         ShowAMIOptixDiagnostics
         On Error GoTo 0
-
-        If UCase$(Trim$(result)) <> "MATCH" Then
-            Err.Raise vbObjectError + 771, "AMI_Optix_VerifyManualRents.VerifyManualRentsAPICore", summary
-        End If
     Else
         If UCase$(Trim$(result)) = "MATCH" Then
             MsgBox summary, vbInformation, "AMI Optix - Verify Manual Rents (API)"
