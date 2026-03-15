@@ -36,7 +36,11 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     ' One-click verification: compute local rents from cache, then compare with /api/evaluate.
     On Error GoTo Fail
 
+    Dim stepName As String
+    stepName = "start"
+
     Dim startedAt As String
+    stepName = "init_timestamp"
     startedAt = Format$(Now, "yyyy-mm-dd hh:nn:ss")
 
     Dim wbName As String
@@ -44,15 +48,18 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     wbName = ""
     wbPath = ""
     If Not ActiveWorkbook Is Nothing Then
+        stepName = "read_workbook_identity"
         wbName = ActiveWorkbook.Name
         wbPath = ActiveWorkbook.FullName
     End If
 
     Dim programNorm As String
+    stepName = "detect_program"
     programNorm = UCase$(Trim$(DetectProgramFromWorkbook()))
     If programNorm <> "UAP" And programNorm <> "MIH" Then programNorm = "UAP"
 
     Dim selectedYear As Long
+    stepName = "read_selected_year"
     selectedYear = GetSelectedRentRollYearSettingLocal()
 
     ' Ensure local cache exists/valid before verification.
@@ -63,10 +70,12 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     ensuredSourcePath = ""
     ensuredCacheFolder = ""
     ensuredSourceFp = ""
+    stepName = "ensure_rent_tables_cache"
     Call EnsureRentTablesCache(selectedYear, False, ensuredSourcePath, ensuredCacheFolder, ensuredSourceFp)
 
     Dim rentStatus As Object
     Set rentStatus = Nothing
+    stepName = "get_rent_tables_status"
     On Error Resume Next
     Set rentStatus = GetRentTablesStatus(selectedYear)
     On Error GoTo Fail
@@ -81,6 +90,7 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     localCacheGeneratedAt = ""
 
     If Not rentStatus Is Nothing Then
+        stepName = "read_rent_status_fields"
         On Error Resume Next
         localCacheStatus = CStr(rentStatus("cache_status"))
         localCacheLabel = CStr(rentStatus("cache_source_label"))
@@ -90,6 +100,7 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     End If
 
     Dim units As Collection
+    stepName = "read_units"
     Set units = ReadProgramUnits(programNorm)
     If units Is Nothing Or units.Count = 0 Then
         Err.Raise vbObjectError + 650, "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI", _
@@ -98,9 +109,11 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     End If
 
     Dim utilities As Object
+    stepName = "read_utilities"
     Set utilities = GetUtilitySelectionsForProgram(programNorm)
 
     ' Local rent calc (Fix-06c) - DO NOT rebuild cache here.
+    stepName = "load_local_rent_tables_cache"
     Call LoadRentLimitsCacheToDict(selectedYear)
     Call LoadUtilityAllowancesCacheToDict(selectedYear)
 
@@ -112,6 +125,7 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
     localTotalNet = 0#
 
     Dim i As Long
+    stepName = "compute_local_rents"
     For i = 1 To units.Count
         Dim u As Object
         Set u = units(i)
@@ -133,6 +147,7 @@ Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = 
         If ami <= 0# Then GoTo NextUnit
 
         Dim rentResult As Object
+        stepName = "compute_local_rent_unit"
         Set rentResult = ComputeNetRent(selectedYear, programNorm, u("bedrooms"), ami, utilities, unitId)
 
         Dim net As Double
@@ -157,6 +172,7 @@ NextUnit:
     If programNorm = "MIH" Then
         Dim mihErr As String
         mihErr = ""
+        stepName = "read_mih_inputs"
         If Not TryReadMIHInputsQuiet(mihOption, mihResidentialSF, mihMaxBandPercent, mihErr) Then
             RecordVerifyState startedAt, "MISMATCH", programNorm, selectedYear, _
                               localCacheStatus, localCacheLabel, localCacheSourcePath, localCacheGeneratedAt, _
@@ -172,11 +188,13 @@ NextUnit:
     End If
 
     Dim payload As String
+    stepName = "build_evaluate_payload"
     payload = BuildEvaluatePayloadForVerify(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, selectedYear)
 
     Dim apiErr As String
     apiErr = ""
     Dim responseText As String
+    stepName = "call_api_evaluate"
     responseText = CallEvaluateAPIStateless(payload, apiErr)
     If responseText = "" Then
         Err.Raise vbObjectError + 651, "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI", _
@@ -184,6 +202,7 @@ NextUnit:
     End If
 
     Dim apiResult As Object
+    stepName = "parse_api_json"
     Set apiResult = ParseJSON(responseText)
     If apiResult Is Nothing Then
         Err.Raise vbObjectError + 652, "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI", "Could not parse /api/evaluate JSON response."
@@ -191,6 +210,7 @@ NextUnit:
 
     Dim apiSuccess As Boolean
     apiSuccess = True
+    stepName = "read_api_success"
     On Error Resume Next
     If apiResult.Exists("success") Then apiSuccess = CBool(apiResult("success"))
     On Error GoTo Fail
@@ -206,6 +226,7 @@ NextUnit:
 
     If Not apiSuccess Then
         Dim errs As String
+        stepName = "extract_api_errors"
         errs = ExtractErrorsList(apiResult)
 
         RecordVerifyState startedAt, "MISMATCH", programNorm, selectedYear, _
@@ -231,6 +252,7 @@ NextUnit:
 
     Dim apiAssignments As Object
     Set apiAssignments = Nothing
+    stepName = "read_api_assignments"
     Call TryGetVerifyObjectValue(apiResult, "assignments", apiAssignments)
 
     If Not apiAssignments Is Nothing Then
@@ -264,6 +286,7 @@ NextA:
 
     Dim rentTotals As Object
     Set rentTotals = Nothing
+    stepName = "read_api_totals"
     Call TryGetVerifyObjectValue(apiResult, "rent_totals", rentTotals)
 
     If Not rentTotals Is Nothing Then
@@ -329,6 +352,7 @@ NextA:
     End If
 
     Dim isMatch As Boolean
+    stepName = "final_compare"
     If comparedPerUnit Then
         isMatch = (mismatches.Count = 0) And (Not totalsMismatch)
     ElseIf comparedTotals Then
@@ -356,13 +380,17 @@ NextA:
                                         localTotalNet, apiTotalNet, comparedPerUnit, comparedTotals, mismatches, _
                                         "")
 
+    stepName = "show_summary"
     ShowVerifySummary automationMode, result, summary
 
     Exit Sub
 
 Fail:
     Dim errMsg As String
-    errMsg = Err.Description
+    errMsg = "Step: " & stepName & vbCrLf & _
+             "Error: " & CStr(Err.Number) & vbCrLf & _
+             "Source: " & Err.Source & vbCrLf & _
+             "Message: " & Err.Description
 
     On Error Resume Next
     RecordVerifyState startedAt, "MISMATCH", programNorm, selectedYear, _
