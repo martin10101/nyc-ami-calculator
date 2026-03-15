@@ -18,7 +18,6 @@ const PORT       = parseInt(process.env.PORT || '3000', 10);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
 // ── Session state ─────────────────────────────────────────────────────────────
-// sessionId → { aborted, activeProcess, resolvePause, rejectPause }
 const sessions = new Map();
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -55,10 +54,7 @@ const TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          relative_path: {
-            type: 'string',
-            description: 'Path relative to repo root, e.g. excel-addin/src/AMI_Optix_ResultsWriter.bas'
-          }
+          relative_path: { type: 'string', description: 'Path relative to repo root' }
         },
         required: ['relative_path']
       }
@@ -68,13 +64,13 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'edit_source_file',
-      description: 'Make a targeted edit to a source file by replacing an exact string. The old_string must match exactly (including whitespace and line endings).',
+      description: 'Make a targeted edit to a source file by replacing an exact string.',
       parameters: {
         type: 'object',
         properties: {
-          relative_path: { type: 'string', description: 'Path relative to repo root' },
-          old_string:    { type: 'string', description: 'Exact text to replace' },
-          new_string:    { type: 'string', description: 'Replacement text' }
+          relative_path: { type: 'string' },
+          old_string:    { type: 'string' },
+          new_string:    { type: 'string' }
         },
         required: ['relative_path', 'old_string', 'new_string']
       }
@@ -84,7 +80,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'read_results',
-      description: 'Read the latest acceptance test results JSON from the agent workspace.',
+      description: 'Read the latest acceptance test results JSON.',
       parameters: { type: 'object', properties: {} }
     }
   },
@@ -92,7 +88,15 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'read_build_result',
-      description: 'Read the latest build result JSON from the agent workspace.',
+      description: 'Read the latest build result JSON.',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'compile_check',
+      description: 'After editing source files, run this before full tests. It rebuilds the add-in and calls a no-op function to verify the project compiles cleanly. Returns COMPILE_OK or COMPILE_ERROR with the exact error text. Much faster than a full refresh.',
       parameters: { type: 'object', properties: {} }
     }
   },
@@ -100,11 +104,11 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: 'Pause and ask the user a question when you are genuinely stuck and cannot proceed without their input. Use this sparingly — only when you truly cannot determine the next step on your own.',
+      description: 'Pause and ask the user a question when you cannot proceed without their input.',
       parameters: {
         type: 'object',
         properties: {
-          question: { type: 'string', description: 'The specific question to ask the user' }
+          question: { type: 'string' }
         },
         required: ['question']
       }
@@ -112,24 +116,45 @@ const TOOLS = [
   }
 ];
 
-// ── PowerShell runner with timeout + kill-on-abort ───────────────────────────
-function runPowershell(scriptPath, args, sessionId, timeoutMs = 300000) {
+// ── PowerShell runner with parallel dialog watcher ────────────────────────────
+function runPowershell(scriptPath, args, sessionId, timeoutMs, send) {
+  if (!timeoutMs) timeoutMs = 60000;
   return new Promise((resolve) => {
+    const session = sessions.get(sessionId);
+
+    // Main process
     const ps = spawn('powershell', [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args
     ]);
-
-    const session = sessions.get(sessionId);
     if (session) session.activeProcess = ps;
 
     let stdout = '';
     let stderr = '';
     let finished = false;
 
+    // Dialog watcher runs in parallel
+    const watcherScript = path.join(__dirname, 'Watch-ExcelDialog.ps1');
+    let watcher = null;
+    if (fs.existsSync(watcherScript)) {
+      watcher = spawn('powershell', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', watcherScript,
+        '-TimeoutMs', String(timeoutMs), '-PollMs', '300'
+      ]);
+      watcher.stdout.on('data', d => {
+        const line = d.toString().trim();
+        if (line.startsWith('DIALOG_DISMISSED:')) {
+          const errorText = line.slice('DIALOG_DISMISSED:'.length).trim();
+          if (send) send('dialog_dismissed', errorText);
+          stdout += `\n[Excel dialog auto-dismissed. Error text: ${errorText}]`;
+        }
+      });
+    }
+
     const finish = (code) => {
       if (finished) return;
       finished = true;
       if (session) session.activeProcess = null;
+      if (watcher) { try { watcher.kill(); } catch {} }
       resolve({ code, stdout, stderr });
     };
 
@@ -143,7 +168,7 @@ function runPowershell(scriptPath, args, sessionId, timeoutMs = 300000) {
         resolve({
           code: -1,
           stdout,
-          stderr: (stderr || '') + '\n[TIMED OUT after 5 minutes — Excel may have a compile error dialog open. Please close Excel manually and try again.]'
+          stderr: (stderr || '') + '\n[TIMED OUT — Excel may have an open dialog. Please close Excel and try again.]'
         });
       }
     }, timeoutMs);
@@ -181,8 +206,15 @@ async function executeTool(name, args, sessionId, send) {
   switch (name) {
     case 'run_acceptance_tests': {
       const script = path.join(AGENT_ROOT, 'scripts', 'Invoke-AmiOptixAcceptance.ps1');
-      if (!fs.existsSync(script)) return 'Acceptance script not found at ' + script + '. Run a full refresh first.';
-      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId);
+      if (!fs.existsSync(script)) return 'Acceptance script not found. Run a full refresh first.';
+      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 60000, send);
+      return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
+    }
+
+    case 'compile_check': {
+      const script = path.join(AGENT_ROOT, 'scripts', 'Invoke-AmiOptixCompileCheck.ps1');
+      if (!fs.existsSync(script)) return 'Compile check script not found. Run a full refresh first to bootstrap the workspace.';
+      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 60000, send);
       return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
     }
 
@@ -192,7 +224,7 @@ async function executeTool(name, args, sessionId, send) {
         : path.join(AGENT_ROOT, 'scripts', 'Refresh-AmiOptixAgent.ps1');
       const psArgs = ['-AgentRoot', AGENT_ROOT];
       if (REPO_ROOT) psArgs.push('-RepoRoot', REPO_ROOT);
-      const r = await runPowershell(repoScript, psArgs, sessionId);
+      const r = await runPowershell(repoScript, psArgs, sessionId, 60000, send);
       return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
     }
 
@@ -217,11 +249,10 @@ async function executeTool(name, args, sessionId, send) {
       try {
         const content = fs.readFileSync(filePath, 'utf8');
         if (!content.includes(args.old_string)) {
-          return 'ERROR: old_string not found in file — no changes made. Check whitespace and line endings exactly.';
+          return 'ERROR: old_string not found in file — no changes made.';
         }
         const updated = content.replace(args.old_string, args.new_string);
         fs.writeFileSync(filePath, updated, 'utf8');
-        // Send a richer progress event showing what changed
         const preview = args.old_string.slice(0, 120).replace(/\n/g, '↵');
         send('file_edited', { path: args.relative_path, preview });
         return 'OK: edited ' + args.relative_path;
@@ -250,34 +281,44 @@ async function executeTool(name, args, sessionId, send) {
 // ── System prompt ─────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are an autonomous repair agent for AMI Optix — a NYC affordable housing AMI calculator implemented as a VBA Excel add-in with a PowerShell automation layer.
 
-When the user describes a problem, work autonomously:
-1. Run acceptance tests to see what is failing
-2. Read relevant source files to diagnose the root cause
-3. Edit source files to fix the issue
-4. Run a full refresh (rebuild + retest)
-5. If the same error appears after a fix attempt, call ask_user — do NOT keep retrying the same approach
-6. When all tests pass, report success clearly
+IMPORTANT — narrate every step out loud as you work. Before each action write one sentence: what you are about to do and why. After each tool result write one sentence: what you found. The user must never be in the dark about what you are doing.
+
+Example narration style:
+"I'm going to run the acceptance tests to see what is currently failing."
+"Tests show the MIH optimization is failing with a compile error in WriteMihSquareFootageSummary — that function is missing."
+"I'm reading AMI_Optix_ResultsWriter.bas to find where to add the missing function."
+"Found the call site at line 420. I'm going to add the function definition above it."
+"Edit applied. Running a full refresh to verify the fix."
+
+When the test result includes '[Excel dialog auto-dismissed. Error text: ...]', that text tells you exactly what compile error Excel threw — use it to diagnose the problem.
+
+Autonomous work loop:
+1. Narrate → run acceptance tests to see what is failing
+2. Narrate → read relevant source files to find root cause
+3. Narrate → edit source files to fix
+4. Narrate → call compile_check (fast: rebuilds + verifies compile, ~30s) — fix any COMPILE_ERROR before proceeding
+5. Narrate → run full refresh only once compile is clean
+6. If same error repeats after a fix attempt → call ask_user (do NOT keep retrying)
+7. When all tests pass → report success with a clear summary
+
+IMPORTANT: Always call compile_check after editing VBA source files. Do not call run_full_refresh until compile_check returns COMPILE_OK. This catches missing functions, undefined variables, and syntax errors in seconds instead of minutes.
 
 Rules:
-- Do NOT ask clarifying questions unless you cannot proceed without information only the user knows
-- Call ask_user when you hit a blocker you cannot resolve (same error repeating, ambiguous requirements, Excel hung)
-- When all tests pass, stop and report what you fixed
-- Never make the same edit twice if it didn't work — try a different approach or ask_user
+- Never make the same edit twice if it failed — try a different approach or ask_user
+- Call ask_user only when you truly cannot proceed without information only the user can provide
+- When tests pass, stop and summarize what was broken and what you fixed
 
-The codebase:
+Codebase:
 - VBA source: excel-addin/src/*.bas, *.cls
 - PowerShell agent: tools/excel-agent/*.ps1, *.psm1
-- Acceptance config: tools/excel-agent/config/acceptance.template.json
-- Workbook roles: "uap" (utility allowance program), "mih" (mandatory inclusionary housing)
+- Workbook roles: "uap", "mih"
 - Key modules: AMI_Optix_Automation, AMI_Optix_VerifyManualRents, AMI_Optix_RentCalcTables, AMI_Optix_ResultsWriter, AMI_Optix_Diagnostics
-- Acceptance tests: Diagnostics smoke, Run UAP optimization, Run MIH optimization, Verify Manual Rents (API)`;
+- Tests: Diagnostics smoke, Run UAP optimization, Run MIH optimization, Verify Manual Rents (API)`;
 
-// ── Resume endpoint ───────────────────────────────────────────────────────────
+// ── Resume / Abort endpoints ──────────────────────────────────────────────────
 app.post('/api/resume/:sessionId', (req, res) => {
   const session = sessions.get(req.params.sessionId);
-  if (!session || !session.resolvePause) {
-    return res.status(404).json({ error: 'No paused session found' });
-  }
+  if (!session || !session.resolvePause) return res.status(404).json({ error: 'No paused session' });
   const answer = (req.body && req.body.answer) ? String(req.body.answer) : '';
   const resolve = session.resolvePause;
   session.resolvePause = null;
@@ -286,99 +327,107 @@ app.post('/api/resume/:sessionId', (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Abort endpoint ────────────────────────────────────────────────────────────
 app.post('/api/abort/:sessionId', (req, res) => {
   const session = sessions.get(req.params.sessionId);
   if (session) {
     session.aborted = true;
-    if (session.activeProcess) {
-      try { session.activeProcess.kill(); } catch {}
-    }
-    if (session.rejectPause) {
-      session.rejectPause(new Error('Aborted by user'));
-    }
+    if (session.activeProcess) { try { session.activeProcess.kill(); } catch {} }
+    if (session.rejectPause)   { session.rejectPause(new Error('Aborted by user')); }
   }
   res.json({ ok: true });
 });
 
-// ── Chat endpoint (SSE) ───────────────────────────────────────────────────────
+// ── Chat endpoint (SSE + streaming OpenAI) ────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   const { message, history = [] } = req.body;
   const sessionId = crypto.randomUUID();
 
-  sessions.set(sessionId, {
-    aborted: false,
-    activeProcess: null,
-    resolvePause: null,
-    rejectPause: null
-  });
+  sessions.set(sessionId, { aborted: false, activeProcess: null, resolvePause: null, rejectPause: null });
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-
-  // Send session ID first so client can use it for abort/resume
   res.write(`data: ${JSON.stringify({ type: 'session', data: sessionId })}\n\n`);
 
   const send = (type, data) => {
-    if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
-    }
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
   };
 
-  // Kill process and mark aborted when client disconnects
   res.on('close', () => {
-    const session = sessions.get(sessionId);
-    if (session) {
-      session.aborted = true;
-      if (session.activeProcess) {
-        try { session.activeProcess.kill(); } catch {}
-      }
-      if (session.rejectPause) {
-        session.rejectPause(new Error('Client disconnected'));
-      }
+    const s = sessions.get(sessionId);
+    if (s) {
+      s.aborted = true;
+      if (s.activeProcess) { try { s.activeProcess.kill(); } catch {} }
+      if (s.rejectPause)   { s.rejectPause(new Error('Client disconnected')); }
     }
   });
 
-  const recentHistory = history.slice(-10);
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
-    ...recentHistory,
+    ...history.slice(-10),
     { role: 'user', content: message }
   ];
 
   try {
     let iterations = 0;
-    const MAX_ITERATIONS = 30;
     let lastError = null;
     let sameErrorStrikes = 0;
 
-    while (iterations < MAX_ITERATIONS) {
+    while (iterations < 30) {
       iterations++;
-
       const session = sessions.get(sessionId);
       if (session && session.aborted) break;
 
-      const response = await openai.chat.completions.create({
+      // ── Streaming OpenAI call ──
+      const stream = await openai.chat.completions.create({
         model: 'gpt-5.2',
         messages,
         tools: TOOLS,
-        tool_choice: 'auto'
+        tool_choice: 'auto',
+        stream: true
       });
 
-      const choice = response.choices[0];
-      const assistantMessage = choice.message;
-      messages.push(assistantMessage);
+      let assistantContent = '';
+      let toolCallsMap = {};
+      let finishReason = null;
 
-      if (assistantMessage.content) {
-        send('text', assistantMessage.content);
+      for await (const chunk of stream) {
+        const session = sessions.get(sessionId);
+        if (session && session.aborted) break;
+
+        const delta = chunk.choices[0]?.delta;
+        finishReason = chunk.choices[0]?.finish_reason || finishReason;
+
+        // Stream text in real time
+        if (delta?.content) {
+          assistantContent += delta.content;
+          send('text_chunk', delta.content);
+        }
+
+        // Accumulate tool call chunks
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (!toolCallsMap[tc.index]) {
+              toolCallsMap[tc.index] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+            }
+            if (tc.id)                    toolCallsMap[tc.index].id += tc.id;
+            if (tc.function?.name)        toolCallsMap[tc.index].function.name += tc.function.name;
+            if (tc.function?.arguments)   toolCallsMap[tc.index].function.arguments += tc.function.arguments;
+          }
+        }
       }
 
-      if (choice.finish_reason === 'stop' || !assistantMessage.tool_calls?.length) {
-        break;
-      }
+      const toolCalls = Object.values(toolCallsMap);
 
-      for (const toolCall of assistantMessage.tool_calls) {
+      // Push assistant message to history
+      const assistantMsg = { role: 'assistant', content: assistantContent || null };
+      if (toolCalls.length) assistantMsg.tool_calls = toolCalls;
+      messages.push(assistantMsg);
+
+      if (finishReason === 'stop' || !toolCalls.length) break;
+
+      // ── Execute tools ──
+      for (const toolCall of toolCalls) {
         const session = sessions.get(sessionId);
         if (session && session.aborted) break;
 
@@ -387,21 +436,19 @@ app.post('/api/chat', async (req, res) => {
         try { toolArgs = JSON.parse(toolCall.function.arguments || '{}'); } catch {}
 
         send('tool_start', toolName);
-
         const result = await executeTool(toolName, toolArgs, sessionId, send);
-
         send('tool_done', toolName);
 
-        // Detect same error repeating — escalate to user after 2 strikes
+        // Same-error escalation
         if (toolName === 'run_acceptance_tests' || toolName === 'run_full_refresh') {
-          const errorMatch = String(result).match(/code-failure[^\n]*/);
-          const currentError = errorMatch ? errorMatch[0] : null;
+          const m = String(result).match(/code-failure[^\n]*/);
+          const currentError = m ? m[0] : null;
           if (currentError && currentError === lastError) {
             sameErrorStrikes++;
             if (sameErrorStrikes >= 2) {
-              send('text', '⚠️ I\'ve hit the same error twice and my last fix didn\'t work. Asking you for guidance...');
+              send('text_chunk', '\n\n⚠️ Same error twice — asking you for guidance.\n');
               const answer = await executeTool('ask_user', {
-                question: `I tried to fix this error twice but it keeps coming back:\n\n"${currentError}"\n\nWhat would you like me to do? You can describe what you see in Excel, tell me to try a different approach, or let me know if you need to do something manually first.`
+                question: `I've tried to fix this error twice and it keeps coming back:\n\n"${currentError}"\n\nWhat do you want me to do? You can describe what you see in Excel, ask me to try a different approach, or let me know if you need to do something manually first.`
               }, sessionId, send);
               messages.push({ role: 'tool', tool_call_id: toolCall.id, content: String(result) });
               messages.push({ role: 'user', content: 'User replied: ' + answer });
@@ -415,25 +462,19 @@ app.post('/api/chat', async (req, res) => {
           }
         }
 
-        // Only truncate log output, never source file contents
         const NO_TRUNCATE = new Set(['read_source_file', 'list_source_files', 'edit_source_file']);
-        const MAX_LOG = 8000;
         const resultStr = String(result);
-        const content = NO_TRUNCATE.has(toolName) || resultStr.length <= MAX_LOG
+        const content = NO_TRUNCATE.has(toolName) || resultStr.length <= 8000
           ? resultStr
-          : resultStr.slice(0, MAX_LOG) + '\n[...truncated]';
+          : resultStr.slice(0, 8000) + '\n[...truncated]';
 
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content
-        });
+        messages.push({ role: 'tool', tool_call_id: toolCall.id, content });
       }
     }
 
     send('done', null);
   } catch (err) {
-    if (!err.message.includes('aborted') && !err.message.includes('Aborted')) {
+    if (!err.message.includes('borted') && !err.message.includes('disconnected')) {
       send('error', err.message);
     } else {
       send('stopped', null);
@@ -445,5 +486,5 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AMI Optix Chat Agent running → http://localhost:${PORT}`);
+  console.log(`AMI Optix Chat Agent → http://localhost:${PORT}`);
 });

@@ -304,6 +304,7 @@ const TOOL_LABELS = {
   edit_source_file:     { icon: '✏️',  label: 'Editing source file…' },
   read_results:         { icon: '📊', label: 'Reading test results…' },
   read_build_result:    { icon: '🔨', label: 'Reading build result…' },
+  compile_check:        { icon: '🔍', label: 'Checking compile…' },
   ask_user:             { icon: '❓', label: 'Asking you a question…' }
 };
 const TOOL_DONE = {
@@ -314,6 +315,7 @@ const TOOL_DONE = {
   edit_source_file:     'File edited',
   read_results:         'Results read',
   read_build_result:    'Build result read',
+  compile_check:        'Compile check complete',
   ask_user:             'Waiting for your answer…'
 };
 
@@ -528,10 +530,31 @@ async function sendMessage() {
           });
         }
 
+        if (event.type === 'text_chunk') {
+          dots.style.display = 'none';
+          agentText += event.data;
+          textNode.innerHTML = renderText(agentText);
+          scrollBottom();
+        }
+
         if (event.type === 'text') {
           dots.style.display = 'none';
           agentText += event.data;
           textNode.innerHTML = renderText(agentText);
+          scrollBottom();
+        }
+
+        if (event.type === 'dialog_dismissed') {
+          dots.style.display = 'none';
+          const pill = document.createElement('div');
+          pill.className = 'tool-pill edited';
+          pill.innerHTML = `
+            <div class="pill-icon">⚠️</div>
+            <div class="pill-body">
+              <div class="pill-label">Excel dialog auto-dismissed</div>
+              <div class="pill-detail">${esc(event.data)}</div>
+            </div>`;
+          toolStrip.appendChild(pill);
           scrollBottom();
         }
 

@@ -368,3 +368,7 @@ Fail:
     ws.Cells(r, 1).Value = "(could not enumerate notes)"
     WriteNotesList = r + 1
 End Function
+
+Public Sub SyntaxCheck_Agent()
+    ' No-op: if the project compiles, this sub is reachable.
+End Sub
