@@ -787,9 +787,9 @@ function Test-AmiOptixAssertion {
         'sheet_exists' {
             try {
                 $null = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
-                return [ordered]@{ succeeded = $true; details = "Worksheet '$($Assertion.sheet)' exists." }
+                return [pscustomobject]@{ succeeded = $true; details = "Worksheet '$($Assertion.sheet)' exists." }
             } catch {
-                return [ordered]@{ succeeded = $false; details = "Worksheet '$($Assertion.sheet)' does not exist." }
+                return [pscustomobject]@{ succeeded = $false; details = "Worksheet '$($Assertion.sheet)' does not exist." }
             }
         }
         'cell_contains' {
@@ -797,12 +797,12 @@ function Test-AmiOptixAssertion {
                 $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
                 $value = [string]$sheet.Range([string]$Assertion.cell).Text
                 $needle = [string]$Assertion.text
-                return [ordered]@{
+                return [pscustomobject]@{
                     succeeded = $value -like "*$needle*"
                     details = "Cell $($Assertion.sheet)!$($Assertion.cell) = '$value'"
                 }
             } catch {
-                return [ordered]@{ succeeded = $false; details = $_.Exception.Message }
+                return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
             }
         }
         'sheet_contains_text' {
@@ -811,16 +811,16 @@ function Test-AmiOptixAssertion {
                 $range = $sheet.UsedRange
                 $value = [string]$range.Text
                 $needle = [string]$Assertion.text
-                return [ordered]@{
+                return [pscustomobject]@{
                     succeeded = $value -like "*$needle*"
                     details = "Scanned UsedRange for '$needle'."
                 }
             } catch {
-                return [ordered]@{ succeeded = $false; details = $_.Exception.Message }
+                return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
             }
         }
         default {
-            return [ordered]@{
+            return [pscustomobject]@{
                 succeeded = $false
                 details = "Unsupported assertion type '$type'."
             }
@@ -920,9 +920,9 @@ function Invoke-AmiOptixAcceptanceSuite {
             $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments $arguments
 
             $scenarioStep = 'running assertions'
-            $assertionResults = New-Object System.Collections.Generic.List[object]
+            $assertionResults = @()
             foreach ($assertion in @($scenarioAssertions)) {
-                $assertionResults.Add((Test-AmiOptixAssertion -Workbook $workbook -Assertion $assertion))
+                $assertionResults += ,(Test-AmiOptixAssertion -Workbook $workbook -Assertion $assertion)
             }
 
             $scenarioResult.assertions = @($assertionResults)
