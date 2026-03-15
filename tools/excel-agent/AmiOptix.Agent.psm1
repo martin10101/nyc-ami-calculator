@@ -858,11 +858,14 @@ function Invoke-AmiOptixAcceptanceSuite {
         }
     }
 
+    $scenarioArray = @($suiteResults.ToArray())
+    $manualActionArray = @($manualActions.ToArray())
+
     $result = [ordered]@{
         generatedAtUtc = [DateTime]::UtcNow.ToString('o')
         succeeded = (($failedScenarios.Count -eq 0) -and ($manualActions.Count -eq 0))
-        scenarios = @($suiteResults)
-        manualActionRequests = @($manualActions)
+        scenarios = $scenarioArray
+        manualActionRequests = $manualActionArray
     }
 
     if ($ResultPath) {
