@@ -882,7 +882,12 @@ function Invoke-AmiOptixAcceptanceSuite {
                 $workbook = $addin
             }
 
-            $macroName = "'{0}'!{1}" -f ([System.IO.Path]::GetFileName($Config.rebuiltAddinPath)), $macro
+            $addinName = [string]$addin.Name
+            if ($addinName -match '\s') {
+                $macroName = "'{0}'!{1}" -f $addinName, $macro
+            } else {
+                $macroName = "{0}!{1}" -f $addinName, $macro
+            }
             $arguments = @()
             if ($scenarioArguments) {
                 $arguments = @($scenarioArguments)
