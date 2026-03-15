@@ -278,15 +278,17 @@ app.post('/api/chat', async (req, res) => {
 
         send('tool_done', toolName);
 
-        const MAX_TOOL_CHARS = 8000;
         const resultStr = String(result);
-        const truncated = resultStr.length > MAX_TOOL_CHARS
-          ? resultStr.slice(0, MAX_TOOL_CHARS) + '\n[...truncated]'
-          : resultStr;
+        // Only truncate verbose output (logs/test results), never source file contents
+        const NO_TRUNCATE_TOOLS = new Set(['read_source_file', 'list_source_files', 'edit_source_file']);
+        const MAX_LOG_CHARS = 8000;
+        const content = NO_TRUNCATE_TOOLS.has(toolName) || resultStr.length <= MAX_LOG_CHARS
+          ? resultStr
+          : resultStr.slice(0, MAX_LOG_CHARS) + '\n[...truncated]';
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: truncated
+          content
         });
       }
     }
