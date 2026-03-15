@@ -560,16 +560,17 @@ Private Sub TryGetVerifyObjectValue(ByVal source As Object, ByVal key As String,
     On Error Resume Next
     Set outObject = Nothing
     If source Is Nothing Then Exit Sub
+    If Not source.Exists(key) Then Exit Sub
 
-    Dim temp As Variant
-    temp = source(key)
+    Dim tempObject As Object
+    Set tempObject = source(key)
     If Err.Number <> 0 Then
         Err.Clear
         Exit Sub
     End If
 
-    If IsObject(temp) Then
-        Set outObject = temp
+    If Not tempObject Is Nothing Then
+        Set outObject = tempObject
     End If
     Err.Clear
 End Sub

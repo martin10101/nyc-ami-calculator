@@ -152,14 +152,14 @@ if ($null -ne $config.PSObject.Properties['buildTag']) {
 Write-AmiOptixJsonFile -Path $configPath -InputObject $config
 
 $syncStatePath = Join-Path $AgentRoot 'state\agent-sync.json'
-$syncState = [ordered]@{
+$syncState = [pscustomobject]@{
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
     buildTag = $buildTag
     repoRoot = $resolvedRepoRoot
     agentRoot = $AgentRoot
     scriptsRoot = $scriptsRoot
     sourceRoot = $sourceRoot
-    seededRentRollYears = @($seededRentRollYears)
+    seededRentRollYears = @($seededRentRollYears.ToArray())
 }
 Write-AmiOptixJsonFile -Path $syncStatePath -InputObject $syncState
 
