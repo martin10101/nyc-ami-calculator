@@ -234,9 +234,10 @@ app.post('/api/chat', async (req, res) => {
     res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
   };
 
+  const recentHistory = history.slice(-10); // keep last 5 turns
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
-    ...history,
+    ...recentHistory,
     { role: 'user', content: message }
   ];
 
@@ -248,7 +249,7 @@ app.post('/api/chat', async (req, res) => {
       iterations++;
 
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages,
         tools: TOOLS,
         tool_choice: 'auto'
@@ -277,10 +278,15 @@ app.post('/api/chat', async (req, res) => {
 
         send('tool_done', toolName);
 
+        const MAX_TOOL_CHARS = 8000;
+        const resultStr = String(result);
+        const truncated = resultStr.length > MAX_TOOL_CHARS
+          ? resultStr.slice(0, MAX_TOOL_CHARS) + '\n[...truncated]'
+          : resultStr;
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: String(result)
+          content: truncated
         });
       }
     }
