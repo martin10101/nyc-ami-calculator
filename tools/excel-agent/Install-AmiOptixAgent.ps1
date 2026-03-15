@@ -121,19 +121,17 @@ What you still need to do manually:
 2. Open your normal AMI Optix add-in once in Excel and save the API key through:
    AMI Optix > API Settings
 
-3. Build the staged test add-in:
-   powershell -ExecutionPolicy Bypass -File $AgentRoot\scripts\Build-StagedAddin.ps1 -AgentRoot $AgentRoot
+3. Run the one-command sync + build + acceptance refresh:
+   powershell -ExecutionPolicy Bypass -File $AgentRoot\scripts\Refresh-AmiOptixAgent.ps1 -AgentRoot $AgentRoot
 
-4. Run the guarded acceptance check:
-   powershell -ExecutionPolicy Bypass -File $AgentRoot\scripts\Invoke-AmiOptixAcceptance.ps1 -AgentRoot $AgentRoot
-
-5. Run the orchestrator:
+4. Run the orchestrator:
    powershell -ExecutionPolicy Bypass -File $AgentRoot\scripts\Run-AmiOptixAutofix.ps1 -AgentRoot $AgentRoot
 
 Important:
 - This setup does NOT need Git on the client PC.
 - The zip/extracted repo is only the installer source.
 - After install, the agent lives under $AgentRoot.
+- The bundled 2024/2025 rent calculator workbooks are seeded into %APPDATA%\AMI_Optix\RentRollYears during refresh.
 "@
 
 if (-not $copiedInstalledAddin) {

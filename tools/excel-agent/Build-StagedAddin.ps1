@@ -13,6 +13,9 @@ $config = Read-AmiOptixJsonFile -Path $configPath
 $manifest = Read-AmiOptixJsonFile -Path $manifestPath
 $result = Invoke-AmiOptixStagedBuild -Config $config -Manifest $manifest -ResultPath $resultPath
 
+if ($config.buildTag) {
+    Write-Host "Build tag: $($config.buildTag)"
+}
 Write-Host "Build succeeded: $($result.succeeded)"
 Write-Host "Result: $resultPath"
 if ($result.error) {

@@ -9,6 +9,40 @@ Public Sub RunOptimizationMIH_Agent()
     RunOptimizationAgentCore "MIH"
 End Sub
 
+Public Sub RefreshRentTablesCache_Agent(Optional ByVal rentRollYear As Long = 0)
+    Dim targetYear As Long
+    Dim sourcePath As String
+    Dim cacheFolder As String
+    Dim fingerprint As String
+
+    On Error GoTo ErrorHandler
+
+    targetYear = rentRollYear
+    If targetYear <= 0 Then
+        targetYear = CLng(GetSetting("AMI_Optix", "RentRollYears", "SelectedYear", "2025"))
+    End If
+
+    sourcePath = ""
+    cacheFolder = ""
+    fingerprint = ""
+    Call EnsureRentTablesCache(targetYear, True, sourcePath, cacheFolder, fingerprint)
+    Exit Sub
+
+ErrorHandler:
+    Err.Raise vbObjectError + 797, "AMI_Optix_Automation.RefreshRentTablesCache_Agent", Err.Description
+End Sub
+
+Public Sub RefreshBundledRentTablesCaches_Agent()
+    On Error GoTo ErrorHandler
+
+    Call RefreshRentTablesCache_Agent(2024)
+    Call RefreshRentTablesCache_Agent(2025)
+    Exit Sub
+
+ErrorHandler:
+    Err.Raise vbObjectError + 798, "AMI_Optix_Automation.RefreshBundledRentTablesCaches_Agent", Err.Description
+End Sub
+
 Private Sub RunOptimizationAgentCore(program As String)
     Dim units As Collection
     Dim utilities As Object

@@ -12,6 +12,7 @@ $files = @(
     'Build-StagedAddin.ps1',
     'Install-AmiOptixAgent.ps1',
     'Invoke-AmiOptixAcceptance.ps1',
+    'Refresh-AmiOptixAgent.ps1',
     'Run-AmiOptixAutofix.ps1'
 )
 

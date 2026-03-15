@@ -349,6 +349,54 @@ function Close-AmiOptixExcelApplication {
     [GC]::WaitForPendingFinalizers()
 }
 
+function Invoke-AmiOptixCacheWarmup {
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [int[]]$Years
+    )
+
+    $yearList = @($Years | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+    $result = [ordered]@{
+        succeeded = $true
+        details = @()
+    }
+
+    if ($yearList.Count -eq 0) {
+        return $result
+    }
+
+    $excel = $null
+    $addin = $null
+    try {
+        $excel = New-AmiOptixExcelApplication
+        $addin = $excel.Workbooks.Open($Config.rebuiltAddinPath)
+        $addinName = [string]$addin.Name
+        $macroName = if ($addinName -match '\s') {
+            "'{0}'!AMI_Optix_Automation.RefreshRentTablesCache_Agent" -f $addinName
+        } else {
+            "{0}!AMI_Optix_Automation.RefreshRentTablesCache_Agent" -f $addinName
+        }
+
+        foreach ($year in $yearList) {
+            $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments @([int]$year)
+            $result.details += "Refreshed rent tables cache for year $year."
+        }
+    } catch {
+        $result.succeeded = $false
+        $result.details = @("warming rent-table caches :: $($_.Exception.Message)")
+    } finally {
+        if ($addin) {
+            try { $addin.Close($false) } catch {}
+            try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($addin) } catch {}
+        }
+        if ($excel) {
+            Close-AmiOptixExcelApplication -Excel $excel
+        }
+    }
+
+    return $result
+}
+
 function Test-AmiOptixVbProjectAccess {
     param(
         [Parameter(Mandatory = $true)][object]$Excel
@@ -840,6 +888,22 @@ function Invoke-AmiOptixAcceptanceSuite {
     $manualActions = New-Object System.Collections.Generic.List[object]
     $runtimeRoot = Join-Path $Config.agentRoot 'workbooks\runtime'
     New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+
+    $cacheWarmupYears = @()
+    if (Test-AmiOptixObjectProperty -InputObject $suite -Name 'cacheWarmupYears') {
+        $cacheWarmupYears = @($suite.cacheWarmupYears)
+    }
+
+    $cacheWarmupResult = Invoke-AmiOptixCacheWarmup -Config $Config -Years $cacheWarmupYears
+    if (-not $cacheWarmupResult.succeeded) {
+        $suiteResults.Add([ordered]@{
+            name = 'Refresh bundled rent-table caches'
+            succeeded = $false
+            classification = 'environment-failure'
+            details = [string]($cacheWarmupResult.details -join ' | ')
+            assertions = @()
+        })
+    }
 
     foreach ($scenario in $suite.scenarios) {
         $scenarioEnabled = Get-AmiOptixObjectProperty -InputObject $scenario -Name 'enabled' -Default $true
