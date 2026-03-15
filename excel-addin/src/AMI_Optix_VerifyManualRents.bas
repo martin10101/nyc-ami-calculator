@@ -172,7 +172,7 @@ NextUnit:
     End If
 
     Dim payload As String
-    payload = BuildEvaluatePayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent)
+    payload = BuildEvaluatePayloadForVerify(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, selectedYear)
 
     Dim apiErr As String
     apiErr = ""
@@ -558,6 +558,87 @@ Private Function DictGetString(d As Object, key As String, Optional defaultValue
     Exit Function
 SafeExit:
     DictGetString = defaultValue
+End Function
+
+Private Function BuildEvaluatePayloadForVerify( _
+    units As Collection, _
+    utilities As Object, _
+    program As String, _
+    mihOption As String, _
+    mihResidentialSF As Double, _
+    mihMaxBandPercent As Long, _
+    rentRollYear As Long _
+) As String
+    Dim json As String
+    Dim unit As Object
+    Dim i As Long
+    Dim programNorm As String
+
+    programNorm = UCase$(Trim$(program))
+    If programNorm = "" Then programNorm = "UAP"
+
+    json = "{"
+    If rentRollYear > 0 Then
+        json = json & """rent_roll_year"": " & CStr(rentRollYear) & ", "
+    End If
+
+    json = json & """program"": """ & EscapeVerifyJson(CStr(programNorm)) & """, "
+
+    If programNorm = "MIH" Then
+        If mihOption <> "" Then
+            json = json & """mih_option"": """ & EscapeVerifyJson(CStr(mihOption)) & """, "
+        End If
+        If mihResidentialSF > 0 Then
+            json = json & """mih_residential_sf"": " & Replace(CStr(mihResidentialSF), ",", "") & ", "
+        End If
+        If mihMaxBandPercent > 0 Then
+            json = json & """mih_max_band_percent"": " & mihMaxBandPercent & ", "
+        End If
+    End If
+
+    json = json & """utilities"": {"
+    json = json & """electricity"": """ & EscapeVerifyJson(CStr(utilities("electricity"))) & """, "
+    json = json & """cooking"": """ & EscapeVerifyJson(CStr(utilities("cooking"))) & """, "
+    json = json & """heat"": """ & EscapeVerifyJson(CStr(utilities("heat"))) & """, "
+    json = json & """hot_water"": """ & EscapeVerifyJson(CStr(utilities("hot_water"))) & """"
+    json = json & "}, "
+
+    json = json & """units"": ["
+    For i = 1 To units.Count
+        Set unit = units(i)
+        If i > 1 Then json = json & ", "
+
+        json = json & "{"
+        json = json & """unit_id"": """ & EscapeVerifyJson(CStr(unit("unit_id"))) & """, "
+        json = json & """bedrooms"": " & unit("bedrooms") & ", "
+        json = json & """net_sf"": " & unit("net_sf")
+
+        If unit.Exists("floor") Then
+            json = json & ", ""floor"": " & unit("floor")
+        End If
+        If unit.Exists("balcony") Then
+            json = json & ", ""balcony"": " & IIf(unit("balcony"), "true", "false")
+        End If
+        If unit.Exists("client_ami") Then
+            json = json & ", ""assigned_ami"": " & unit("client_ami")
+        End If
+
+        json = json & "}"
+    Next i
+    json = json & "]}"
+
+    BuildEvaluatePayloadForVerify = json
+End Function
+
+Private Function EscapeVerifyJson(ByVal value As String) As String
+    Dim result As String
+    result = value
+    result = Replace(result, "\", "\\")
+    result = Replace(result, """", "\""")
+    result = Replace(result, vbCr, "\r")
+    result = Replace(result, vbLf, "\n")
+    result = Replace(result, vbTab, "\t")
+    EscapeVerifyJson = result
 End Function
 
 Private Function ExtractErrorsList(apiObj As Object) As String
