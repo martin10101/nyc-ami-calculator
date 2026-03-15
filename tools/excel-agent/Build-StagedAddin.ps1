@@ -18,6 +18,9 @@ Write-Host "Result: $resultPath"
 if ($result.error) {
     Write-Host "Error: $($result.error)"
 }
+if ($result.compileWarning) {
+    Write-Host "Warning: $($result.compileWarning)"
+}
 if ($result.manualActionRequests.Count -gt 0) {
     foreach ($request in $result.manualActionRequests) {
         Write-Host "- $($request.blocked): $($request.why)"

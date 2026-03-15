@@ -530,6 +530,7 @@ function Invoke-AmiOptixVbaCompile {
         if ($null -eq $compileControl) {
             return [ordered]@{
                 succeeded = $false
+                canContinue = $true
                 details = 'Could not locate the VBA Compile command in the VBE command bars.'
             }
         }
@@ -540,11 +541,13 @@ function Invoke-AmiOptixVbaCompile {
 
         return [ordered]@{
             succeeded = $true
+            canContinue = $true
             details = 'Compile command executed.'
         }
     } catch {
         return [ordered]@{
             succeeded = $false
+            canContinue = $false
             details = $_.Exception.Message
         }
     }
@@ -626,12 +629,15 @@ function Invoke-AmiOptixStagedBuild {
 
         $result.removed = @($removed)
         $result.compile = Invoke-AmiOptixVbaCompile -Excel $excel
-        if (-not $result.compile.succeeded) {
+        if (-not $result.compile.succeeded -and -not $result.compile.canContinue) {
             throw "VBA compile failed: $($result.compile.details)"
         }
 
         $workbook.Save()
         $result.succeeded = $true
+        if (-not $result.compile.succeeded -and $result.compile.canContinue) {
+            $result.compileWarning = 'Compile command was unavailable on this machine; saved the rebuilt add-in and deferred compile validation to the acceptance run.'
+        }
     } catch {
         $result.error = $_.Exception.Message
     } finally {
