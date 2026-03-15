@@ -110,3 +110,9 @@ the run stops before build/test and prints why. Security-sensitive work must be 
 - No automatic security-sensitive mutation
 
 Those are explicit guardrails, not omissions.
+
+## Updating scripts without re-extracting the zip
+
+After the first install, you can refresh the agent scripts directly from GitHub with:
+
+- `powershell -ExecutionPolicy Bypass -File C:\AMI_Optix_Agent\scripts\Refresh-AmiOptixAgentFromGitHub.ps1 -AgentRoot C:\AMI_Optix_Agent`

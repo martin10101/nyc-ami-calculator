@@ -851,9 +851,16 @@ function Invoke-AmiOptixAcceptanceSuite {
         $suiteResults.Add($scenarioResult)
     }
 
+    $failedScenarios = New-Object System.Collections.Generic.List[object]
+    foreach ($suiteResult in $suiteResults) {
+        if (-not [bool]$suiteResult.succeeded) {
+            $failedScenarios.Add($suiteResult)
+        }
+    }
+
     $result = [ordered]@{
         generatedAtUtc = [DateTime]::UtcNow.ToString('o')
-        succeeded = ((@($suiteResults | Where-Object { -not $_.succeeded }).Count -eq 0) -and ($manualActions.Count -eq 0))
+        succeeded = (($failedScenarios.Count -eq 0) -and ($manualActions.Count -eq 0))
         scenarios = @($suiteResults)
         manualActionRequests = @($manualActions)
     }
