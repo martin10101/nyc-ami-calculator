@@ -23,11 +23,8 @@
       "name": "Run UAP optimization",
       "enabled": true,
       "workbookRole": "uap",
-      "macro": "AMI_Optix_Main.RunOptimizationForProgram",
-      "arguments": [
-        "UAP"
-      ],
-      "requiresInteractiveUi": true,
+      "macro": "AMI_Optix_Automation.RunOptimizationUAP_Agent",
+      "arguments": [],
       "assertions": [
         {
           "type": "sheet_exists",
@@ -39,11 +36,8 @@
       "name": "Run MIH optimization",
       "enabled": true,
       "workbookRole": "mih",
-      "macro": "AMI_Optix_Main.RunOptimizationForProgram",
-      "arguments": [
-        "MIH"
-      ],
-      "requiresInteractiveUi": true,
+      "macro": "AMI_Optix_Automation.RunOptimizationMIH_Agent",
+      "arguments": [],
       "assertions": [
         {
           "type": "sheet_exists",
@@ -55,14 +49,17 @@
       "name": "Verify Manual Rents (API)",
       "enabled": true,
       "workbookRole": "uap",
-      "macro": "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI",
+      "macro": "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI_Agent",
       "arguments": [],
-      "requiresInteractiveUi": true,
       "assertions": [
+        {
+          "type": "sheet_exists",
+          "sheet": "AMI Optix Diagnostics"
+        },
         {
           "type": "sheet_contains_text",
           "sheet": "AMI Optix Diagnostics",
-          "text": "Verify Manual Rents (API)"
+          "text": "MATCH"
         }
       ]
     }

@@ -25,6 +25,14 @@ Public Const AMI_OPTIX_VERIFY_TOLERANCE_TOTAL_DOLLARS As Double = 1#
 Public g_AMIOptixLastVerify As Object
 
 Public Sub VerifyManualRentsAPI()
+    VerifyManualRentsAPICore False
+End Sub
+
+Public Sub VerifyManualRentsAPI_Agent()
+    VerifyManualRentsAPICore True
+End Sub
+
+Private Sub VerifyManualRentsAPICore(Optional ByVal automationMode As Boolean = False)
     ' One-click verification: compute local rents from cache, then compare with /api/evaluate.
     On Error GoTo Fail
 
@@ -155,10 +163,10 @@ NextUnit:
                               "", "", "", "", _
                               localTotalNet, Empty, False, False, Nothing, _
                               mihErr, wbName, wbPath
-            MsgBox BuildVerifySummaryMessage("MISMATCH", programNorm, selectedYear, localCacheLabel, localCacheSourcePath, localCacheGeneratedAt, _
-                                             "", "", "", "", localTotalNet, Empty, False, False, Nothing, _
-                                             "MIH inputs are missing/invalid:" & vbCrLf & mihErr), _
-                   vbExclamation, "AMI Optix - Verify Manual Rents (API)"
+            ShowVerifySummary automationMode, "MISMATCH", _
+                              BuildVerifySummaryMessage("MISMATCH", programNorm, selectedYear, localCacheLabel, localCacheSourcePath, localCacheGeneratedAt, _
+                                                        "", "", "", "", localTotalNet, Empty, False, False, Nothing, _
+                                                        "MIH inputs are missing/invalid:" & vbCrLf & mihErr)
             Exit Sub
         End If
     End If
@@ -206,11 +214,11 @@ NextUnit:
                           localTotalNet, Empty, False, False, Nothing, _
                           "API evaluate reported assignment invalid." & vbCrLf & vbCrLf & errs, wbName, wbPath
 
-        MsgBox BuildVerifySummaryMessage("MISMATCH", programNorm, selectedYear, localCacheLabel, localCacheSourcePath, localCacheGeneratedAt, _
-                                         apiYearUsed, apiCalcFilename, apiSource, apiWarn, _
-                                         localTotalNet, Empty, False, False, Nothing, _
-                                         "API evaluate reported assignment invalid:" & vbCrLf & vbCrLf & errs), _
-               vbExclamation, "AMI Optix - Verify Manual Rents (API)"
+        ShowVerifySummary automationMode, "MISMATCH", _
+                          BuildVerifySummaryMessage("MISMATCH", programNorm, selectedYear, localCacheLabel, localCacheSourcePath, localCacheGeneratedAt, _
+                                                    apiYearUsed, apiCalcFilename, apiSource, apiWarn, _
+                                                    localTotalNet, Empty, False, False, Nothing, _
+                                                    "API evaluate reported assignment invalid:" & vbCrLf & vbCrLf & errs)
         Exit Sub
     End If
 
@@ -352,11 +360,7 @@ NextA:
                                         localTotalNet, apiTotalNet, comparedPerUnit, comparedTotals, mismatches, _
                                         "")
 
-    If result = "MATCH" Then
-        MsgBox summary, vbInformation, "AMI Optix - Verify Manual Rents (API)"
-    Else
-        MsgBox summary, vbExclamation, "AMI Optix - Verify Manual Rents (API)"
-    End If
+    ShowVerifySummary automationMode, result, summary
 
     Exit Sub
 
@@ -372,7 +376,25 @@ Fail:
                       errMsg, wbName, wbPath
     On Error GoTo 0
 
-    MsgBox "MISMATCH — Verify Manual Rents (API) failed." & vbCrLf & vbCrLf & errMsg, vbExclamation, "AMI Optix - Verify Manual Rents (API)"
+    ShowVerifySummary automationMode, "MISMATCH", "MISMATCH — Verify Manual Rents (API) failed." & vbCrLf & vbCrLf & errMsg
+End Sub
+
+Private Sub ShowVerifySummary(ByVal automationMode As Boolean, ByVal result As String, ByVal summary As String)
+    If automationMode Then
+        On Error Resume Next
+        ShowAMIOptixDiagnostics
+        On Error GoTo 0
+
+        If UCase$(Trim$(result)) <> "MATCH" Then
+            Err.Raise vbObjectError + 771, "AMI_Optix_VerifyManualRents.VerifyManualRentsAPICore", summary
+        End If
+    Else
+        If UCase$(Trim$(result)) = "MATCH" Then
+            MsgBox summary, vbInformation, "AMI Optix - Verify Manual Rents (API)"
+        Else
+            MsgBox summary, vbExclamation, "AMI Optix - Verify Manual Rents (API)"
+        End If
+    End If
 End Sub
 
 '-------------------------------------------------------------------------------

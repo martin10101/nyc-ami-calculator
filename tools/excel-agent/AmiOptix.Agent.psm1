@@ -231,10 +231,10 @@ function Get-AmiOptixSourceManifest {
         }
         acceptanceDefaults = [ordered]@{
             macros = [ordered]@{
-                runUap = 'AMI_Optix_Main.RunOptimizationForProgram'
-                runMih = 'AMI_Optix_Main.RunOptimizationForProgram'
+                runUap = 'AMI_Optix_Automation.RunOptimizationUAP_Agent'
+                runMih = 'AMI_Optix_Automation.RunOptimizationMIH_Agent'
                 diagnostics = 'AMI_Optix_Diagnostics.ShowAMIOptixDiagnostics'
-                verifyManualRents = 'AMI_Optix_VerifyManualRents.VerifyManualRentsAPI'
+                verifyManualRents = 'AMI_Optix_VerifyManualRents.VerifyManualRentsAPI_Agent'
             }
         }
         notes = @(

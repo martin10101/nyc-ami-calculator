@@ -272,6 +272,11 @@ Public Sub RunOptimizationForProgram(program As String)
 
     On Error GoTo ErrorHandler
 
+    If ActiveWorkbook Is Nothing Then
+        MsgBox "Please open a workbook with unit data first.", vbExclamation, "AMI Optix"
+        Exit Sub
+    End If
+
     programNorm = UCase(Trim(program))
     If programNorm = "" Then programNorm = "UAP"
 
