@@ -62,7 +62,7 @@ if (-not (Test-Path $nodeModules)) {
     Write-Host 'Installing dependencies (first run only)...'
     Push-Location $scriptDir
     try {
-        & $npmCmd install --no-fund --no-audit 2>&1 | Out-Host
+        & $npmCmd install --no-fund --no-audit --strict-ssl=false 2>&1 | Out-Host
     } finally {
         Pop-Location
     }
@@ -95,7 +95,7 @@ Write-Host ''
 Write-Host 'Opening browser in 2 seconds... (Ctrl+C to stop the server)' -ForegroundColor Gray
 
 # Open browser after a short delay
-$job = Start-Job -ScriptBlock {
+$null = Start-Job -ScriptBlock {
     param($u)
     Start-Sleep 2
     Start-Process $u
