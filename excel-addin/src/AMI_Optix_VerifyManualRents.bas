@@ -229,13 +229,13 @@ NextUnit:
     Dim perUnitAvailable As Boolean
     perUnitAvailable = False
 
-    Dim apiAssignments As Variant
-    apiAssignments = Empty
+    Dim apiAssignments As Object
+    Set apiAssignments = Nothing
     On Error Resume Next
-    apiAssignments = apiResult("assignments")
+    Set apiAssignments = apiResult("assignments")
     On Error GoTo Fail
 
-    If Not IsEmpty(apiAssignments) Then
+    If Not apiAssignments Is Nothing Then
         Dim a As Variant
         For Each a In apiAssignments
             If Not a Is Nothing Then
@@ -566,17 +566,20 @@ Private Function ExtractErrorsList(apiObj As Object) As String
     If apiObj Is Nothing Then Exit Function
     If Not apiObj.Exists("errors") Then Exit Function
 
-    Dim errs As Variant
-    errs = apiObj("errors")
+    Dim errs As Object
+    Set errs = Nothing
+    Set errs = apiObj("errors")
 
     Dim buf As String
     buf = ""
 
     Dim i As Long
-    If TypeName(errs) = "Collection" Then
+    If Not errs Is Nothing Then
+        If TypeName(errs) = "Collection" Then
         For i = 1 To errs.Count
             buf = buf & "- " & CStr(errs(i)) & vbCrLf
         Next i
+        End If
     End If
 
     ExtractErrorsList = Trim$(buf)
