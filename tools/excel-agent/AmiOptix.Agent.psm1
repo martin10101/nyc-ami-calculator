@@ -988,6 +988,7 @@ function Invoke-AmiOptixAcceptanceSuite {
         })
     }
 
+    $lastSavedRuntimeWorkbookByRole = @{}
     foreach ($scenario in $suite.scenarios) {
         $scenarioEnabled = Get-AmiOptixObjectProperty -InputObject $scenario -Name 'enabled' -Default $true
         if ($scenarioEnabled -eq $false) {
@@ -1039,12 +1040,18 @@ function Invoke-AmiOptixAcceptanceSuite {
                 $scenarioStep = "preparing runtime workbook for role '$workbookRole'"
                 $goldenPath = $Config.goldenWorkbooks.$workbookRole
                 $runtimeExtension = [System.IO.Path]::GetExtension([string]$goldenPath)
-                if ([string]::IsNullOrWhiteSpace($runtimeExtension)) {
-                    $runtimeExtension = '.xlsm'
+                if ([string]::IsNullOrWhiteSpace($runtimeExtension)) { $runtimeExtension = '.xlsm' }
+
+                $reuseLastRuntime = [bool](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'reuseLastRuntime' -Default $false)
+
+                if ($reuseLastRuntime -and $lastSavedRuntimeWorkbookByRole.ContainsKey($workbookRole)) {
+                    $runtimeWorkbookPath = $lastSavedRuntimeWorkbookByRole[$workbookRole]
+                    $scenarioStep = "opening saved runtime workbook for role '$workbookRole'"
+                } else {
+                    $runtimeWorkbookPath = Join-Path $runtimeRoot ("{0}-{1:yyyyMMddHHmmss}{2}" -f $workbookRole, [DateTime]::UtcNow, $runtimeExtension)
+                    Copy-Item -LiteralPath $goldenPath -Destination $runtimeWorkbookPath -Force
+                    $scenarioStep = 'opening runtime workbook'
                 }
-                $runtimeWorkbookPath = Join-Path $runtimeRoot ("{0}-{1:yyyyMMddHHmmss}{2}" -f $workbookRole, [DateTime]::UtcNow, $runtimeExtension)
-                Copy-Item -LiteralPath $goldenPath -Destination $runtimeWorkbookPath -Force
-                $scenarioStep = 'opening runtime workbook'
                 $workbook = $excel.Workbooks.Open($runtimeWorkbookPath)
                 $scenarioStep = 'activating runtime workbook'
                 $workbook.Activate() | Out-Null
@@ -1065,6 +1072,17 @@ function Invoke-AmiOptixAcceptanceSuite {
 
             $scenarioStep = "running macro '$macroName'"
             $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments $arguments
+
+            $saveAfterRun = [bool](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'saveAfterRun' -Default $false)
+            if ($saveAfterRun -and $workbookRole -and $workbook -and ($workbook -ne $addin)) {
+                $scenarioStep = "saving runtime workbook for role '$workbookRole'"
+                try {
+                    $workbook.Save()
+                    $lastSavedRuntimeWorkbookByRole[$workbookRole] = $runtimeWorkbookPath
+                } catch {
+                    # Non-fatal: best-effort save; reuse won't be available for subsequent scenarios
+                }
+            }
 
             $scenarioStep = 'running assertions'
             $assertionResults = @()

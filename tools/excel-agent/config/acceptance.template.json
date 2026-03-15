@@ -25,6 +25,7 @@
     {
       "name": "Run UAP optimization",
       "enabled": true,
+      "saveAfterRun": true,
       "workbookRole": "uap",
       "macro": "AMI_Optix_Automation.RunOptimizationUAP_Agent",
       "arguments": [],
@@ -51,6 +52,7 @@
     {
       "name": "Verify Manual Rents (API)",
       "enabled": true,
+      "reuseLastRuntime": true,
       "workbookRole": "uap",
       "macro": "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI_Agent",
       "arguments": [],
