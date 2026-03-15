@@ -704,7 +704,10 @@ function Invoke-AmiOptixStagedBuild {
             $name = [string]$component.Name
             $type = [int]$component.Type
 
-            if (($allowedNames -contains $name) -and $type -ne 100) {
+            $isManagedCodeComponent = (($type -eq 1) -or ($type -eq 2))
+            $isAmiOptixComponent = $name -like 'AMI_Optix*'
+
+            if ($isManagedCodeComponent -and ($isAmiOptixComponent -or ($allowedNames -contains $name))) {
                 $project.VBComponents.Remove($component)
                 $removed.Add($name)
             }
