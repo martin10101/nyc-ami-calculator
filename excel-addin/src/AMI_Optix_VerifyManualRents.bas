@@ -231,9 +231,7 @@ NextUnit:
 
     Dim apiAssignments As Object
     Set apiAssignments = Nothing
-    On Error Resume Next
-    Set apiAssignments = apiResult("assignments")
-    On Error GoTo Fail
+    Call TryGetVerifyObjectValue(apiResult, "assignments", apiAssignments)
 
     If Not apiAssignments Is Nothing Then
         Dim a As Variant
@@ -266,9 +264,7 @@ NextA:
 
     Dim rentTotals As Object
     Set rentTotals = Nothing
-    On Error Resume Next
-    Set rentTotals = apiResult("rent_totals")
-    On Error GoTo Fail
+    Call TryGetVerifyObjectValue(apiResult, "rent_totals", rentTotals)
 
     If Not rentTotals Is Nothing Then
         Dim tval As Variant
@@ -560,6 +556,24 @@ SafeExit:
     DictGetString = defaultValue
 End Function
 
+Private Sub TryGetVerifyObjectValue(ByVal source As Object, ByVal key As String, ByRef outObject As Object)
+    On Error Resume Next
+    Set outObject = Nothing
+    If source Is Nothing Then Exit Sub
+
+    Dim temp As Variant
+    temp = source(key)
+    If Err.Number <> 0 Then
+        Err.Clear
+        Exit Sub
+    End If
+
+    If IsObject(temp) Then
+        Set outObject = temp
+    End If
+    Err.Clear
+End Sub
+
 Private Function BuildEvaluatePayloadForVerify( _
     units As Collection, _
     utilities As Object, _
@@ -649,7 +663,7 @@ Private Function ExtractErrorsList(apiObj As Object) As String
 
     Dim errs As Object
     Set errs = Nothing
-    Set errs = apiObj("errors")
+    Call TryGetVerifyObjectValue(apiObj, "errors", errs)
 
     Dim buf As String
     buf = ""
