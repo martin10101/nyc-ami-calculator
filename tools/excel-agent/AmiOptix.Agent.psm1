@@ -323,6 +323,9 @@ function New-AmiOptixExcelApplication {
     $excel = New-Object -ComObject Excel.Application
     $excel.Visible = $false
     $excel.DisplayAlerts = $false
+    try {
+        $excel.AutomationSecurity = 1
+    } catch {}
     return $excel
 }
 
