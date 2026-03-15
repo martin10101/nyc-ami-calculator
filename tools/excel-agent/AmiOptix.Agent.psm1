@@ -766,7 +766,8 @@ function Get-AmiOptixWorksheetByName {
         [Parameter(Mandatory = $true)][string]$WorksheetName
     )
 
-    foreach ($worksheet in @($Workbook.Worksheets)) {
+    for ($index = 1; $index -le [int]$Workbook.Worksheets.Count; $index++) {
+        $worksheet = $Workbook.Worksheets.Item($index)
         if ([string]$worksheet.Name -eq $WorksheetName) {
             return $worksheet
         }
