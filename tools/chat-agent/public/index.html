@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMI Optix Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e8eaed;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid #2a2d36;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .logo {
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+
+  header h1 { font-size: 15px; font-weight: 600; color: #f1f3f5; }
+  header p  { font-size: 12px; color: #6b7280; margin-top: 1px; }
+
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .welcome {
+    text-align: center;
+    padding: 48px 24px;
+    color: #4b5563;
+  }
+  .welcome h2 { font-size: 20px; font-weight: 600; color: #9ca3af; margin-bottom: 8px; }
+  .welcome p  { font-size: 14px; line-height: 1.6; }
+
+  .msg {
+    display: flex;
+    gap: 10px;
+    max-width: 820px;
+  }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.agent { align-self: flex-start; }
+
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .msg.user  .avatar { background: #1d4ed8; }
+  .msg.agent .avatar { background: #1f2937; border: 1px solid #374151; }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.65;
+    max-width: 680px;
+  }
+  .msg.user  .bubble { background: #1e3a5f; border: 1px solid #2563eb44; }
+  .msg.agent .bubble { background: #1a1d27; border: 1px solid #2a2d36; }
+
+  .bubble pre {
+    background: #0d1117;
+    border: 1px solid #2a2d36;
+    border-radius: 6px;
+    padding: 10px 14px;
+    overflow-x: auto;
+    font-size: 12px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    margin: 8px 0;
+    white-space: pre-wrap;
+  }
+
+  /* Tool activity */
+  .tool-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 4px 0;
+  }
+  .tool-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    background: #111827;
+    border: 1px solid #374151;
+    color: #9ca3af;
+    align-self: flex-start;
+    max-width: 100%;
+  }
+  .tool-pill.running { border-color: #3b82f6; color: #60a5fa; }
+  .tool-pill.done    { border-color: #22c55e44; color: #4ade80; }
+
+  .spinner {
+    width: 10px; height: 10px;
+    border: 2px solid #3b82f6;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Thinking indicator */
+  .thinking-dots { display: flex; gap: 4px; padding: 8px 0; }
+  .thinking-dots span {
+    width: 7px; height: 7px;
+    background: #4b5563;
+    border-radius: 50%;
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-5px); }
+  }
+
+  /* Input area */
+  #input-area {
+    padding: 16px 24px 20px;
+    border-top: 1px solid #2a2d36;
+    flex-shrink: 0;
+  }
+
+  #input-row {
+    display: flex;
+    gap: 10px;
+    background: #1a1d27;
+    border: 1px solid #2a2d36;
+    border-radius: 12px;
+    padding: 10px 14px;
+    transition: border-color 0.15s;
+  }
+  #input-row:focus-within { border-color: #3b82f6; }
+
+  #msg-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    color: #e8eaed;
+    resize: none;
+    max-height: 140px;
+    line-height: 1.5;
+    font-family: inherit;
+  }
+  #msg-input::placeholder { color: #4b5563; }
+
+  #send-btn {
+    background: #2563eb;
+    border: none;
+    border-radius: 8px;
+    width: 34px; height: 34px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    align-self: flex-end;
+    transition: background 0.15s;
+  }
+  #send-btn:hover:not(:disabled) { background: #1d4ed8; }
+  #send-btn:disabled { background: #374151; cursor: not-allowed; }
+  #send-btn svg { width: 16px; height: 16px; fill: white; }
+
+  #hint { font-size: 11px; color: #374151; margin-top: 8px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚡</div>
+  <div>
+    <h1>AMI Optix Agent</h1>
+    <p>Autonomous repair &amp; test agent</p>
+  </div>
+</header>
+
+<div id="chat">
+  <div class="welcome">
+    <h2>How can I help?</h2>
+    <p>Describe a problem and I'll test it, diagnose it, fix it, and report back.<br>You won't need to do anything — I'll work through it autonomously.</p>
+  </div>
+</div>
+
+<div id="input-area">
+  <div id="input-row">
+    <textarea id="msg-input" rows="1" placeholder="Describe the issue..."></textarea>
+    <button id="send-btn" title="Send">
+      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+    </button>
+  </div>
+  <p id="hint">Press Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+</div>
+
+<script>
+const chat     = document.getElementById('chat');
+const input    = document.getElementById('msg-input');
+const sendBtn  = document.getElementById('send-btn');
+let history    = [];
+let busy       = false;
+
+const TOOL_LABELS = {
+  run_acceptance_tests: '🧪 Running acceptance tests…',
+  run_full_refresh:     '🔄 Running full refresh (build + test)…',
+  list_source_files:    '📂 Listing source files…',
+  read_source_file:     '📄 Reading source file…',
+  edit_source_file:     '✏️ Editing source file…',
+  read_results:         '📊 Reading test results…',
+  read_build_result:    '🔨 Reading build results…'
+};
+const TOOL_DONE = {
+  run_acceptance_tests: '🧪 Tests complete',
+  run_full_refresh:     '🔄 Refresh complete',
+  list_source_files:    '📂 Files listed',
+  read_source_file:     '📄 File read',
+  edit_source_file:     '✏️ File edited',
+  read_results:         '📊 Results read',
+  read_build_result:    '🔨 Build result read'
+};
+
+function autoResize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+}
+
+function scrollToBottom() {
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function removeWelcome() {
+  const w = chat.querySelector('.welcome');
+  if (w) w.remove();
+}
+
+function appendUserMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `
+    <div class="avatar">👤</div>
+    <div class="bubble">${escapeHtml(text)}</div>`;
+  chat.appendChild(div);
+  scrollToBottom();
+}
+
+function createAgentBubble() {
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = '⚡';
+
+  const inner = document.createElement('div');
+  inner.className = 'bubble';
+
+  // thinking dots placeholder
+  const dots = document.createElement('div');
+  dots.className = 'thinking-dots';
+  dots.innerHTML = '<span></span><span></span><span></span>';
+  inner.appendChild(dots);
+
+  const toolStrip = document.createElement('div');
+  toolStrip.className = 'tool-strip';
+  inner.appendChild(toolStrip);
+
+  const textNode = document.createElement('div');
+  textNode.className = 'msg-text';
+  inner.appendChild(textNode);
+
+  div.appendChild(avatar);
+  div.appendChild(inner);
+  chat.appendChild(div);
+  scrollToBottom();
+
+  return { bubble: inner, toolStrip, textNode, dots };
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+function renderText(text) {
+  // simple markdown: ```code``` blocks and **bold**
+  return text
+    .replace(/```([\s\S]*?)```/g, (_, c) => `<pre>${escapeHtml(c.trim())}</pre>`)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+async function sendMessage() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+
+  busy = true;
+  sendBtn.disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  removeWelcome();
+  appendUserMsg(text);
+
+  const { bubble, toolStrip, textNode, dots } = createAgentBubble();
+
+  let activePills = {};
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history })
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let agentText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let event;
+        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (event.type === 'tool_start') {
+          dots.style.display = 'none';
+          const pill = document.createElement('div');
+          pill.className = 'tool-pill running';
+          pill.innerHTML = `<div class="spinner"></div>${TOOL_LABELS[event.data] || event.data}`;
+          toolStrip.appendChild(pill);
+          activePills[event.data] = pill;
+          scrollToBottom();
+        }
+
+        if (event.type === 'tool_done') {
+          const pill = activePills[event.data];
+          if (pill) {
+            pill.className = 'tool-pill done';
+            pill.innerHTML = TOOL_DONE[event.data] || event.data;
+          }
+          scrollToBottom();
+        }
+
+        if (event.type === 'text') {
+          dots.style.display = 'none';
+          agentText += event.data;
+          textNode.innerHTML = renderText(agentText);
+          scrollToBottom();
+        }
+
+        if (event.type === 'error') {
+          dots.style.display = 'none';
+          textNode.innerHTML = `<span style="color:#f87171">Error: ${escapeHtml(event.data)}</span>`;
+          scrollToBottom();
+        }
+
+        if (event.type === 'done') {
+          dots.style.display = 'none';
+          scrollToBottom();
+        }
+      }
+    }
+
+    // Update history for multi-turn context
+    history.push({ role: 'user', content: text });
+    if (agentText) history.push({ role: 'assistant', content: agentText });
+    // Keep last 20 turns
+    if (history.length > 40) history = history.slice(-40);
+
+  } catch (err) {
+    dots.style.display = 'none';
+    textNode.innerHTML = `<span style="color:#f87171">Connection error: ${escapeHtml(err.message)}</span>`;
+  }
+
+  busy = false;
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+input.addEventListener('input', autoResize);
+sendBtn.addEventListener('click', sendMessage);
+</script>
+</body>
+</html>
