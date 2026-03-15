@@ -899,6 +899,32 @@ function Test-AmiOptixAssertion {
                 return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
             }
         }
+        'sheet_kv_absent' {
+            try {
+                $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)
+                $key = [string]$Assertion.key
+                $maxRows = [int](Get-AmiOptixObjectProperty -InputObject $Assertion -Name 'maxRows' -Default 200)
+                if ($maxRows -le 0) { $maxRows = 200 }
+
+                for ($row = 1; $row -le $maxRows; $row++) {
+                    $cellKey = [string]$sheet.Cells.Item($row, 1).Text
+                    if ([string]::Equals($cellKey.Trim(), $key.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+                        $actual = [string]$sheet.Cells.Item($row, 2).Text
+                        return [pscustomobject]@{
+                            succeeded = $false
+                            details = "Key '$key' was present: '$actual'."
+                        }
+                    }
+                }
+
+                return [pscustomobject]@{
+                    succeeded = $true
+                    details = "Key '$key' was not present (scanned first $maxRows rows)."
+                }
+            } catch {
+                return [pscustomobject]@{ succeeded = $false; details = $_.Exception.Message }
+            }
+        }
         'sheet_contains_text' {
             try {
                 $sheet = Get-AmiOptixWorksheetByName -Workbook $Workbook -WorksheetName ([string]$Assertion.sheet)

@@ -60,6 +60,12 @@
           "sheet": "AMI Optix Diagnostics"
         },
         {
+          "type": "sheet_kv_absent",
+          "sheet": "AMI Optix Diagnostics",
+          "key": "Errors",
+          "maxRows": 400
+        },
+        {
           "type": "sheet_kv_equals",
           "sheet": "AMI Optix Diagnostics",
           "key": "Result",
