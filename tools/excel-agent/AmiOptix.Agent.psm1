@@ -880,6 +880,7 @@ function Invoke-AmiOptixAcceptanceSuite {
 
         $workbook = $null
         $excel = $null
+        $addin = $null
         try {
             $excel = New-AmiOptixExcelApplication
             $addin = $excel.Workbooks.Open($Config.rebuiltAddinPath)
@@ -920,16 +921,15 @@ function Invoke-AmiOptixAcceptanceSuite {
             $scenarioResult.succeeded = -not ($assertionResults | Where-Object { -not $_.succeeded })
             $scenarioResult.classification = if ($scenarioResult.succeeded) { 'passed' } else { 'code-failure' }
             $scenarioResult.details = if ($scenarioResult.succeeded) { 'Scenario completed and all assertions passed.' } else { 'One or more assertions failed.' }
-
-            try { $addin.Close($false) } catch {}
-            try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($addin) } catch {}
-            $addin = $null
         } catch {
             $scenarioResult.classification = 'code-failure'
             $scenarioResult.details = $_.Exception.Message
         } finally {
             if ($workbook -or $excel) {
                 Close-AmiOptixExcelApplication -Workbook $workbook -Excel $excel
+            }
+            if ($addin) {
+                try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($addin) } catch {}
             }
         }
 
