@@ -376,10 +376,24 @@ function Invoke-AmiOptixCacheWarmup {
         } else {
             "{0}!AMI_Optix_Automation.RefreshRentTablesCache_Agent" -f $addinName
         }
+        $errorMacroName = if ($addinName -match '\s') {
+            "'{0}'!AMI_Optix_Automation.GetLastCacheRefreshError_Agent" -f $addinName
+        } else {
+            "{0}!AMI_Optix_Automation.GetLastCacheRefreshError_Agent" -f $addinName
+        }
 
         foreach ($year in $yearList) {
-            $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments @([int]$year)
-            $result.details += "Refreshed rent tables cache for year $year."
+            $refreshSucceeded = [bool](Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments @([int]$year))
+            if ($refreshSucceeded) {
+                $result.details += "Refreshed rent tables cache for year $year."
+                continue
+            }
+
+            $refreshError = [string](Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $errorMacroName -Arguments @())
+            if ([string]::IsNullOrWhiteSpace($refreshError)) {
+                $refreshError = "Unknown cache refresh failure."
+            }
+            throw "warming rent-table cache for year $year :: $refreshError"
         }
     } catch {
         $result.succeeded = $false

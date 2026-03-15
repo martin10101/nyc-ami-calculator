@@ -1,6 +1,8 @@
 Attribute VB_Name = "AMI_Optix_Automation"
 Option Explicit
 
+Public g_AMIOptixLastCacheRefreshError As String
+
 Public Sub RunOptimizationUAP_Agent()
     RunOptimizationAgentCore "UAP"
 End Sub
@@ -9,13 +11,15 @@ Public Sub RunOptimizationMIH_Agent()
     RunOptimizationAgentCore "MIH"
 End Sub
 
-Public Sub RefreshRentTablesCache_Agent(Optional ByVal rentRollYear As Long = 0)
+Public Function RefreshRentTablesCache_Agent(Optional ByVal rentRollYear As Long = 0) As Boolean
     Dim targetYear As Long
     Dim sourcePath As String
     Dim cacheFolder As String
     Dim fingerprint As String
 
     On Error GoTo ErrorHandler
+
+    g_AMIOptixLastCacheRefreshError = ""
 
     targetYear = rentRollYear
     If targetYear <= 0 Then
@@ -26,22 +30,33 @@ Public Sub RefreshRentTablesCache_Agent(Optional ByVal rentRollYear As Long = 0)
     cacheFolder = ""
     fingerprint = ""
     Call EnsureRentTablesCache(targetYear, True, sourcePath, cacheFolder, fingerprint)
-    Exit Sub
+    RefreshRentTablesCache_Agent = True
+    Exit Function
 
 ErrorHandler:
-    Err.Raise vbObjectError + 797, "AMI_Optix_Automation.RefreshRentTablesCache_Agent", Err.Description
-End Sub
+    g_AMIOptixLastCacheRefreshError = Err.Description
+    RefreshRentTablesCache_Agent = False
+End Function
 
-Public Sub RefreshBundledRentTablesCaches_Agent()
+Public Function GetLastCacheRefreshError_Agent() As String
+    GetLastCacheRefreshError_Agent = g_AMIOptixLastCacheRefreshError
+End Function
+
+Public Function RefreshBundledRentTablesCaches_Agent() As Boolean
     On Error GoTo ErrorHandler
 
-    Call RefreshRentTablesCache_Agent(2024)
-    Call RefreshRentTablesCache_Agent(2025)
-    Exit Sub
+    g_AMIOptixLastCacheRefreshError = ""
+
+    If Not RefreshRentTablesCache_Agent(2024) Then Exit Function
+    If Not RefreshRentTablesCache_Agent(2025) Then Exit Function
+
+    RefreshBundledRentTablesCaches_Agent = True
+    Exit Function
 
 ErrorHandler:
-    Err.Raise vbObjectError + 798, "AMI_Optix_Automation.RefreshBundledRentTablesCaches_Agent", Err.Description
-End Sub
+    g_AMIOptixLastCacheRefreshError = Err.Description
+    RefreshBundledRentTablesCaches_Agent = False
+End Function
 
 Private Sub RunOptimizationAgentCore(program As String)
     Dim units As Collection
