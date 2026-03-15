@@ -283,7 +283,7 @@ Public Function ComputeNetRent(year As Long, program As String, bedrooms As Vari
     out("allowance_total") = Round(totalAllowance, 2)
     out("monthly_rent") = Round(net, 2)
     out("annual_rent") = Round(net * 12#, 2)
-    out("allowances") = allowancesArr
+    Set out("allowances") = allowancesArr
 
     Set ComputeNetRent = out
     Exit Function
@@ -426,4 +426,3 @@ Private Function FormatUtilityTypeGuideline(value As String, category As String)
 
     FormatUtilityTypeGuideline = CStr(value)
 End Function
-

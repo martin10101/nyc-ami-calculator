@@ -1037,7 +1037,7 @@ Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As S
         a("monthly_rent") = rentResult("monthly_rent")
         a("annual_rent") = rentResult("annual_rent")
         a("allowance_total") = rentResult("allowance_total")
-        a("allowances") = rentResult("allowances")
+        Set a("allowances") = rentResult("allowances")
 
         If IsNumeric(a("monthly_rent")) Then totalNet = totalNet + CDbl(a("monthly_rent"))
 
@@ -1901,7 +1901,7 @@ Private Function EnrichAssignmentsWithLocalRents(assignments As Collection, util
         a("monthly_rent") = Round(net, 2)
         a("annual_rent") = Round(net * 12#, 2)
         a("allowance_total") = Round(totalAllowance, 2)
-        a("allowances") = allowancesArr
+        Set a("allowances") = allowancesArr
 
         totalNet = totalNet + net
 
