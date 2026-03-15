@@ -1,0 +1,15 @@
+{
+  "agentRoot": "C:\\AMI_Optix_Agent",
+  "stagedContainerPath": "C:\\AMI_Optix_Agent\\staging\\AMI_Optix_Staged.xlam",
+  "rebuiltAddinPath": "C:\\AMI_Optix_Agent\\build\\AMI_Optix_Autofix.xlam",
+  "goldenWorkbooks": {
+    "uap": "C:\\AMI_Optix_Agent\\workbooks\\UAP_golden.xlsm",
+    "mih": "C:\\AMI_Optix_Agent\\workbooks\\MIH_golden.xlsb"
+  },
+  "healthEndpoints": {
+    "appApi": "https://nyc-ami-calculator.onrender.com/healthz",
+    "openAiModels": "https://api.openai.com/v1/models"
+  },
+  "acceptancePath": "C:\\AMI_Optix_Agent\\config\\acceptance.json",
+  "allowInteractiveUi": false
+}

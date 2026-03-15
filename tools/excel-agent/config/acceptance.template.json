@@ -1,0 +1,70 @@
+{
+  "scenarios": [
+    {
+      "name": "Diagnostics smoke",
+      "enabled": true,
+      "workbookRole": "uap",
+      "macro": "AMI_Optix_Diagnostics.ShowAMIOptixDiagnostics",
+      "arguments": [],
+      "assertions": [
+        {
+          "type": "sheet_exists",
+          "sheet": "AMI Optix Diagnostics"
+        },
+        {
+          "type": "cell_contains",
+          "sheet": "AMI Optix Diagnostics",
+          "cell": "A1",
+          "text": "AMI Optix Diagnostics"
+        }
+      ]
+    },
+    {
+      "name": "Run UAP optimization",
+      "enabled": true,
+      "workbookRole": "uap",
+      "macro": "AMI_Optix_Main.RunOptimizationForProgram",
+      "arguments": [
+        "UAP"
+      ],
+      "requiresInteractiveUi": true,
+      "assertions": [
+        {
+          "type": "sheet_exists",
+          "sheet": "AMI Scenarios"
+        }
+      ]
+    },
+    {
+      "name": "Run MIH optimization",
+      "enabled": true,
+      "workbookRole": "mih",
+      "macro": "AMI_Optix_Main.RunOptimizationForProgram",
+      "arguments": [
+        "MIH"
+      ],
+      "requiresInteractiveUi": true,
+      "assertions": [
+        {
+          "type": "sheet_exists",
+          "sheet": "AMI Scenarios"
+        }
+      ]
+    },
+    {
+      "name": "Verify Manual Rents (API)",
+      "enabled": true,
+      "workbookRole": "uap",
+      "macro": "AMI_Optix_VerifyManualRents.VerifyManualRentsAPI",
+      "arguments": [],
+      "requiresInteractiveUi": true,
+      "assertions": [
+        {
+          "type": "sheet_contains_text",
+          "sheet": "AMI Optix Diagnostics",
+          "text": "Verify Manual Rents (API)"
+        }
+      ]
+    }
+  ]
+}
