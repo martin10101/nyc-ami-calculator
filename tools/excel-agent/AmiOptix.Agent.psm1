@@ -591,6 +591,64 @@ function Get-AmiOptixImportEntries {
     return @($Manifest.sourceFiles.src | Where-Object { $_.canImport })
 }
 
+function Get-AmiOptixComponentSourceCode {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Extension
+    )
+
+    $lines = Get-Content -LiteralPath $Path
+    $filtered = New-Object System.Collections.Generic.List[string]
+    $skipClassHeader = ($Extension -eq '.cls')
+    $insideClassHeader = $false
+
+    foreach ($line in $lines) {
+        if ($skipClassHeader) {
+            if ($line -match '^BEGIN\s*$') {
+                $insideClassHeader = $true
+                continue
+            }
+
+            if ($insideClassHeader) {
+                if ($line -match '^END\s*$') {
+                    $insideClassHeader = $false
+                }
+                continue
+            }
+
+            if ($line -match '^VERSION\s+1\.0\s+CLASS$') {
+                continue
+            }
+        }
+
+        if ($line -match '^Attribute VB_') {
+            continue
+        }
+
+        $filtered.Add($line)
+    }
+
+    return ($filtered -join [Environment]::NewLine)
+}
+
+function Import-AmiOptixComponent {
+    param(
+        [Parameter(Mandatory = $true)][object]$Project,
+        [Parameter(Mandatory = $true)]$Entry
+    )
+
+    $extension = [string]$Entry.extension
+    if ($extension -eq '.cls') {
+        $component = $Project.VBComponents.Add(2)
+        $component.Name = [string]$Entry.componentName
+        $code = Get-AmiOptixComponentSourceCode -Path $Entry.absolutePath -Extension $extension
+        $component.CodeModule.AddFromString($code)
+        return
+    }
+
+    $Project.VBComponents.Import($Entry.absolutePath) | Out-Null
+}
+
 function Invoke-AmiOptixStagedBuild {
     param(
         [Parameter(Mandatory = $true)]$Config,
@@ -653,7 +711,7 @@ function Invoke-AmiOptixStagedBuild {
         }
 
         foreach ($entry in $importEntries) {
-            $project.VBComponents.Import($entry.absolutePath) | Out-Null
+            Import-AmiOptixComponent -Project $project -Entry $entry
             $result.imported += $entry.relativePath
         }
 
