@@ -881,11 +881,15 @@ function Invoke-AmiOptixAcceptanceSuite {
         $workbook = $null
         $excel = $null
         $addin = $null
+        $scenarioStep = 'initializing scenario'
         try {
+            $scenarioStep = 'opening Excel application'
             $excel = New-AmiOptixExcelApplication
+            $scenarioStep = 'opening rebuilt add-in'
             $addin = $excel.Workbooks.Open($Config.rebuiltAddinPath)
 
             if ($workbookRole) {
+                $scenarioStep = "preparing runtime workbook for role '$workbookRole'"
                 $goldenPath = $Config.goldenWorkbooks.$workbookRole
                 $runtimeExtension = [System.IO.Path]::GetExtension([string]$goldenPath)
                 if ([string]::IsNullOrWhiteSpace($runtimeExtension)) {
@@ -893,7 +897,9 @@ function Invoke-AmiOptixAcceptanceSuite {
                 }
                 $runtimeWorkbookPath = Join-Path $runtimeRoot ("{0}-{1:yyyyMMddHHmmss}{2}" -f $workbookRole, [DateTime]::UtcNow, $runtimeExtension)
                 Copy-Item -LiteralPath $goldenPath -Destination $runtimeWorkbookPath -Force
+                $scenarioStep = 'opening runtime workbook'
                 $workbook = $excel.Workbooks.Open($runtimeWorkbookPath)
+                $scenarioStep = 'activating runtime workbook'
                 $workbook.Activate() | Out-Null
             } else {
                 $workbook = $addin
@@ -910,8 +916,10 @@ function Invoke-AmiOptixAcceptanceSuite {
                 $arguments = @($scenarioArguments)
             }
 
+            $scenarioStep = "running macro '$macroName'"
             $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments $arguments
 
+            $scenarioStep = 'running assertions'
             $assertionResults = New-Object System.Collections.Generic.List[object]
             foreach ($assertion in @($scenarioAssertions)) {
                 $assertionResults.Add((Test-AmiOptixAssertion -Workbook $workbook -Assertion $assertion))
@@ -923,7 +931,7 @@ function Invoke-AmiOptixAcceptanceSuite {
             $scenarioResult.details = if ($scenarioResult.succeeded) { 'Scenario completed and all assertions passed.' } else { 'One or more assertions failed.' }
         } catch {
             $scenarioResult.classification = 'code-failure'
-            $scenarioResult.details = $_.Exception.Message
+            $scenarioResult.details = "$scenarioStep :: $($_.Exception.Message)"
         } finally {
             if ($workbook -or $excel) {
                 Close-AmiOptixExcelApplication -Workbook $workbook -Excel $excel
