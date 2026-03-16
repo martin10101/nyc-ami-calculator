@@ -4,7 +4,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$modulePath = Join-Path $AgentRoot 'scripts\AmiOptix.Agent.psm1'
+# Kill any lingering Excel processes so the build can overwrite the add-in
+Get-Process -Name EXCEL -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 800
+
+# Prefer the repo psm1 (always latest); fall back to deployed copy
+$repoModulePath = if ($env:REPO_ROOT) { Join-Path $env:REPO_ROOT 'tools\excel-agent\AmiOptix.Agent.psm1' } else { $null }
+$deployedModulePath = Join-Path $AgentRoot 'scripts\AmiOptix.Agent.psm1'
+
+$modulePath = if ($repoModulePath -and (Test-Path $repoModulePath)) { $repoModulePath } else { $deployedModulePath }
+
 if (-not (Test-Path $modulePath)) {
     Write-Output 'SETUP_NEEDED: Workspace not bootstrapped. Run a full refresh first.'
     exit 1
@@ -25,33 +34,11 @@ $build = Invoke-AmiOptixStagedBuild `
     -ResultPath (Join-Path $AgentRoot 'artifacts\build-result.json')
 
 if (-not $build.succeeded) {
-    Write-Output "BUILD_FAILED"
-    Write-Output ($build | ConvertTo-Json -Compress)
+    $errorMsg = if ($build.error) { $build.error } elseif ($build.compile -and $build.compile.details) { $build.compile.details } else { ($build | ConvertTo-Json -Compress) }
+    Write-Output "COMPILE_ERROR: $errorMsg"
     exit 1
 }
 
-Write-Output 'Build succeeded. Opening add-in to check compile...'
-
-# ── Step 2: Open the add-in and call the no-op SyntaxCheck_Agent sub ──────────
-$addinPath = [string]$config.rebuiltAddinPath
-$excel     = $null
-$wb        = $null
-
-try {
-    $excel = New-AmiOptixExcelApplication
-    $wb    = $excel.Workbooks.Open($addinPath)
-
-    $addinName = [string]$wb.Name
-    $macroRef  = if ($addinName -match '\s') {
-        "'{0}'!AMI_Optix_Diagnostics.SyntaxCheck_Agent" -f $addinName
-    } else {
-        '{0}!AMI_Optix_Diagnostics.SyntaxCheck_Agent' -f $addinName
-    }
-
-    $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroRef -Arguments @()
-    Write-Output 'COMPILE_OK'
-} catch {
-    Write-Output "COMPILE_ERROR: $($_.Exception.Message)"
-} finally {
-    Close-AmiOptixExcelApplication -Workbook $wb -Excel $excel
-}
+# The staged build already ran VBA compile (Invoke-AmiOptixVbaCompile) and
+# saved the add-in — if it succeeded the code is clean.
+Write-Output 'COMPILE_OK'

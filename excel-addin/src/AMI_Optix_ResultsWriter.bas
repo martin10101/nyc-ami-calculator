@@ -2170,6 +2170,7 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
         On Error GoTo 0
     End If
 
+    row = WriteMihSquareFootageSummary(ws, row, scenario)
     row = WriteUtilitySettings(ws, row)
     row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
     row = row + 1
@@ -2201,6 +2202,111 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
 
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
     WriteManualScenarioBlockFromResult = row
+End Function
+
+Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long, scenario As Object) As Long
+    ' Writes a square footage summary at the top of the results page showing
+    ' total building SF and per-AMI-band SF so the 40% AMI cap is obvious.
+    Dim row As Long
+    Dim metrics As Object
+    Dim bandMix As Object
+    Dim totalSf As Double
+    Dim idx As Long
+    Dim bm As Object
+    Dim bandVal As Double
+    Dim netSf As Double
+    Dim bandLabel As String
+
+    row = startRow
+    WriteMihSquareFootageSummary = row
+
+    If scenario Is Nothing Then Exit Function
+
+    Set metrics = Nothing
+    On Error Resume Next
+    Set metrics = scenario("metrics")
+    On Error GoTo 0
+    If metrics Is Nothing Then Exit Function
+
+    Set bandMix = Nothing
+    On Error Resume Next
+    Set bandMix = metrics("band_mix")
+    On Error GoTo 0
+    If bandMix Is Nothing Then Exit Function
+
+    ' Calculate total building SF from band_mix
+    totalSf = 0#
+    For idx = 1 To bandMix.Count
+        Set bm = bandMix(idx)
+        If Not bm Is Nothing Then
+            If bm.Exists("net_sf") Then totalSf = totalSf + CDbl(bm("net_sf"))
+        End If
+    Next idx
+    If totalSf <= 0# Then Exit Function
+
+    ' Section header
+    ws.Cells(row, 1).Value = "SQUARE FOOTAGE SUMMARY"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 13
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 245, 255)
+    row = row + 1
+
+    ' Total building SF
+    ws.Cells(row, 1).Value = "Total Building Net SF:"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 2).Value = totalSf
+    ws.Cells(row, 2).NumberFormat = "#,##0.00"
+    ws.Cells(row, 2).Font.Bold = True
+    row = row + 1
+
+    ' Column headers
+    ws.Cells(row, 1).Value = "AMI Band"
+    ws.Cells(row, 2).Value = "Net SF"
+    ws.Cells(row, 3).Value = "% of Total Building SF"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Interior.Color = RGB(220, 235, 250)
+    row = row + 1
+
+    ' Per-band rows
+    For idx = 1 To bandMix.Count
+        Set bm = bandMix(idx)
+        If Not bm Is Nothing Then
+            bandVal = 0#
+            bandLabel = ""
+            If bm.Exists("band") Then
+                If IsNumeric(bm("band")) Then
+                    bandVal = CDbl(bm("band"))
+                    bandLabel = Format$(bandVal, "0") & "% AMI"
+                Else
+                    bandLabel = CStr(bm("band")) & "% AMI"
+                End If
+                ws.Cells(row, 1).Value = bandLabel
+            End If
+
+            netSf = 0#
+            If bm.Exists("net_sf") Then
+                netSf = CDbl(bm("net_sf"))
+                ws.Cells(row, 2).Value = netSf
+                ws.Cells(row, 2).NumberFormat = "#,##0.00"
+            End If
+
+            If totalSf > 0# And netSf > 0# Then
+                ws.Cells(row, 3).Value = netSf / totalSf
+                ws.Cells(row, 3).NumberFormat = "0.00%"
+
+                ' Highlight 40% AMI row for easy cap comparison
+                If bandVal = 40 Then
+                    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Interior.Color = RGB(255, 255, 200)
+                    ws.Cells(row, 3).Font.Bold = True
+                End If
+            End If
+
+            row = row + 1
+        End If
+    Next idx
+
+    row = row + 1
+    WriteMihSquareFootageSummary = row
 End Function
 
 Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResult As Object, Optional headerLabel As String = "SCENARIO MANUAL (LIVE SYNC)") As Long
@@ -2259,6 +2365,7 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
         End If
     End If
 
+    row = WriteMihSquareFootageSummary(ws, row, scenario)
     row = WriteUtilitySettings(ws, row)
     row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
     row = row + 1

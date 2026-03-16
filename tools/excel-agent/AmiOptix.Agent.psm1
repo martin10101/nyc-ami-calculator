@@ -1149,4 +1149,7 @@ Export-ModuleMember -Function `
     Get-AmiOptixDependencyClassification, `
     Test-AmiOptixEnvironment, `
     Invoke-AmiOptixStagedBuild, `
-    Invoke-AmiOptixAcceptanceSuite
+    Invoke-AmiOptixAcceptanceSuite, `
+    New-AmiOptixExcelApplication, `
+    Close-AmiOptixExcelApplication, `
+    Invoke-AmiOptixExcelMacro

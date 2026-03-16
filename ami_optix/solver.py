@@ -461,7 +461,12 @@ def find_max_revenue_scenario(
         try:
             share_denominators['residential'] = int(float(optimization_rules['residential_sf']) * 100)
         except (TypeError, ValueError):
-            share_denominators = {}
+            pass
+    if optimization_rules.get('total_building_sf') is not None:
+        try:
+            share_denominators['total_building'] = int(float(optimization_rules['total_building_sf']) * 100)
+        except (TypeError, ValueError):
+            pass
 
     dev_preferences = copy.deepcopy(config['developer_preferences'])
     if solver_overrides.get('premium_weights'):
@@ -613,7 +618,12 @@ def find_optimal_scenarios(
         try:
             share_denominators['residential'] = int(float(optimization_rules['residential_sf']) * 100)
         except (TypeError, ValueError):
-            share_denominators = {}
+            pass
+    if optimization_rules.get('total_building_sf') is not None:
+        try:
+            share_denominators['total_building'] = int(float(optimization_rules['total_building_sf']) * 100)
+        except (TypeError, ValueError):
+            pass
 
     dev_preferences = copy.deepcopy(config['developer_preferences'])
     if solver_overrides.get('premium_weights'):

@@ -171,6 +171,19 @@ Private Sub RunOptimizationAgentCore(program As String)
     Dim projectOverridesJson As String
     projectOverridesJson = ""
 
+    ' MIH 40% AMI SF constraint: total SF of 40% AMI units must be 10-11% of building SF
+    If programNorm = "MIH" Then
+        Dim totalBuildingSf As Double
+        totalBuildingSf = 0#
+        Dim sfIdx As Long
+        For sfIdx = 1 To units.Count
+            totalBuildingSf = totalBuildingSf + CDbl(units(sfIdx)("net_sf"))
+        Next sfIdx
+        If totalBuildingSf > 0# Then
+            projectOverridesJson = BuildMIH40AmiSfOverrideJson(totalBuildingSf)
+        End If
+    End If
+
     Application.StatusBar = "AMI Optix: Building request..."
     payload = BuildAPIPayloadV2(units, utilities, programNorm, mihOption, mihResidentialSF, mihMaxBandPercent, projectOverridesJson, compareBaseline)
 
@@ -359,4 +372,30 @@ Private Function TryFindNetFloorAreaQuietForAutomation(wsMIH As Worksheet, ByRef
 
 Fail:
     TryFindNetFloorAreaQuietForAutomation = False
+End Function
+
+Private Function BuildMIH40AmiSfOverrideJson(totalBuildingSf As Double) As String
+    ' Builds project_overrides JSON for the 40% AMI SF constraint.
+    ' The solver will ensure 40% AMI units occupy 10-11% of total building SF (target 10.01%).
+    Const MIN_SHARE As Double = 0.1
+    Const MAX_SHARE As Double = 0.11
+    Const TARGET_SHARE As Double = 0.1001
+
+    On Error GoTo Fail
+
+    Dim j As String
+    j = "{""mih_40_ami_sf_constraint"": {"
+    j = j & """enabled"": true"
+    j = j & ", ""ami_band_percent"": 40"
+    j = j & ", ""min_share"": 0.10"
+    j = j & ", ""max_share"": 0.11"
+    j = j & ", ""target_share"": 0.1001"
+    j = j & ", ""total_building_net_sf"": " & Trim$(Str$(totalBuildingSf))
+    j = j & "}}"
+
+    BuildMIH40AmiSfOverrideJson = j
+    Exit Function
+
+Fail:
+    BuildMIH40AmiSfOverrideJson = ""
 End Function

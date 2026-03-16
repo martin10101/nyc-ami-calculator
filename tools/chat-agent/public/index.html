@@ -251,6 +251,28 @@
   #send-btn:disabled { background: #374151; cursor: not-allowed; }
   #send-btn svg { width: 15px; height: 15px; fill: white; }
   #hint { font-size: 11px; color: #374151; margin-top: 7px; text-align: center; }
+
+  /* Image attach button */
+  #file-input { display: none; }
+
+  #attach-btn {
+    background: transparent; border: none; cursor: pointer;
+    color: #6b7280; padding: 4px; display: flex; align-items: center;
+    align-self: flex-end; border-radius: 6px; transition: color 0.15s;
+  }
+  #attach-btn:hover { color: #9ca3af; }
+  #attach-btn svg { width: 18px; height: 18px; }
+  #image-preview {
+    display: none; margin-bottom: 6px; position: relative; width: fit-content;
+  }
+  #image-preview img { max-height: 80px; border-radius: 6px; border: 1px solid #2a2d36; }
+  #image-preview .remove-img {
+    position: absolute; top: -6px; right: -6px;
+    background: #374151; border: none; color: #9ca3af; border-radius: 50%;
+    width: 18px; height: 18px; cursor: pointer; font-size: 11px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .msg-image { max-width: 220px; border-radius: 8px; margin-top: 6px; display: block; }
 </style>
 </head>
 <body>
@@ -275,13 +297,21 @@
 </div>
 
 <div id="input-area">
+  <div id="image-preview">
+    <img id="preview-img" src="" alt="preview">
+    <button class="remove-img" id="remove-img-btn" title="Remove image">✕</button>
+  </div>
   <div id="input-row">
+    <button id="attach-btn" title="Attach image">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+    </button>
+    <input type="file" id="file-input" accept="image/*" title="Attach image" aria-label="Attach image">
     <textarea id="msg-input" rows="1" placeholder="Describe the issue..."></textarea>
     <button id="send-btn" title="Send">
       <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
     </button>
   </div>
-  <p id="hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+  <p id="hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; 📎 attach image</p>
 </div>
 
 <script>
@@ -295,6 +325,65 @@ let history    = [];
 let busy       = false;
 let currentSessionId = null;
 let abortCtrl  = null;
+let pendingImage = null; // base64 data URL of attached image
+
+// ── Image attach ──────────────────────────────────────────────────────────────
+const attachBtn    = document.getElementById('attach-btn');
+const fileInput    = document.getElementById('file-input');
+const imagePreview = document.getElementById('image-preview');
+const previewImg   = document.getElementById('preview-img');
+const removeImgBtn = document.getElementById('remove-img-btn');
+
+attachBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    pendingImage = e.target.result;
+    previewImg.src = pendingImage;
+    imagePreview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+  fileInput.value = '';
+});
+removeImgBtn.addEventListener('click', () => {
+  pendingImage = null;
+  previewImg.src = '';
+  imagePreview.style.display = 'none';
+});
+
+// ── Load persisted history on startup ────────────────────────────────────────
+(async () => {
+  try {
+    const data = await fetch('/api/history').then(r => r.json());
+    if (Array.isArray(data) && data.length) {
+      removeWelcome();
+      for (const msg of data) {
+        if (msg.role === 'user')      appendUserMsg(msg.content || '');
+        else if (msg.role === 'assistant') appendHistoryAgentMsg(msg.content || '');
+      }
+      history = data.filter(m => m.role === 'user' || m.role === 'assistant')
+                    .map(m => ({ role: m.role, content: m.content }));
+    }
+  } catch {}
+})();
+
+function appendHistoryAgentMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+  const av = document.createElement('div');
+  av.className = 'avatar'; av.textContent = '⚡';
+  const bub = document.createElement('div');
+  bub.className = 'bubble';
+  const t = document.createElement('div');
+  t.className = 'msg-text';
+  t.innerHTML = renderText(text);
+  bub.appendChild(t);
+  div.appendChild(av); div.appendChild(bub);
+  chatEl.appendChild(div);
+  scrollBottom();
+}
 
 const TOOL_LABELS = {
   run_acceptance_tests: { icon: '🧪', label: 'Running acceptance tests…' },
@@ -352,10 +441,11 @@ function renderText(text) {
     .replace(/\n/g, '<br>');
 }
 
-function appendUserMsg(text) {
+function appendUserMsg(text, img) {
   const div = document.createElement('div');
   div.className = 'msg user';
-  div.innerHTML = `<div class="avatar">👤</div><div class="bubble">${esc(text).replace(/\n/g,'<br>')}</div>`;
+  const imgHtml = img ? `<img class="msg-image" src="${img}" alt="attached">` : '';
+  div.innerHTML = `<div class="avatar">👤</div><div class="bubble">${esc(text).replace(/\n/g,'<br>')}${imgHtml}</div>`;
   chatEl.appendChild(div);
   scrollBottom();
 }
@@ -409,8 +499,13 @@ async function sendMessage() {
   inputEl.value = '';
   inputEl.style.height = 'auto';
 
+  const imgData = pendingImage;
+  pendingImage = null;
+  previewImg.src = '';
+  imagePreview.style.display = 'none';
+
   removeWelcome();
-  appendUserMsg(text);
+  appendUserMsg(text, imgData);
 
   const { bubble, toolStrip, textNode, dots } = createAgentBubble();
   const activePills = {};
@@ -423,7 +518,7 @@ async function sendMessage() {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history }),
+      body: JSON.stringify({ message: text, image: imgData || undefined, history }),
       signal: abortCtrl.signal
     });
 

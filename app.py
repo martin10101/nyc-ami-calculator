@@ -764,6 +764,22 @@ def optimize_units():
         timing["unit_count"] = int(len(df_units))
         timing["parse_validation_ms"] = int(round((time.perf_counter() - request_start) * 1000))
 
+        # MIH 40% AMI SF constraint: inject into optimization_rules so the solver
+        # constrains 40% AMI units to 10-11% of total building SF.
+        if project_overrides and isinstance(project_overrides.get('mih_40_ami_sf_constraint'), dict):
+            mih_sf = project_overrides['mih_40_ami_sf_constraint']
+            if mih_sf.get('enabled'):
+                rules = config.setdefault('optimization_rules', {})
+                total_building_sf = mih_sf.get('total_building_net_sf')
+                if total_building_sf is not None and float(total_building_sf) > 0:
+                    rules['share_thresholds'] = [{
+                        'band_threshold': int(mih_sf.get('ami_band_percent', 40)),
+                        'min_share': float(mih_sf.get('min_share', 0.10)),
+                        'max_share': float(mih_sf.get('max_share', 0.11)),
+                        'denominator': 'total_building',
+                    }]
+                    rules['total_building_sf'] = float(total_building_sf)
+
         solver_start = time.perf_counter()
 
         # Run the strict solver (optionally with project overrides for premium weights / unit rules).

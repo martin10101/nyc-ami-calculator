@@ -17,6 +17,26 @@ const PORT       = parseInt(process.env.PORT || '3000', 10);
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
+// ── Conversation history (persisted to disk) ──────────────────────────────────
+const HISTORY_FILE = path.join(AGENT_ROOT, 'state', 'chat-history.json');
+
+function loadHistory() {
+  try {
+    if (fs.existsSync(HISTORY_FILE)) return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+  } catch {}
+  return [];
+}
+
+function saveHistory(history) {
+  try {
+    const dir = path.dirname(HISTORY_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history.slice(-200), null, 2), 'utf8');
+  } catch {}
+}
+
+app.get('/api/history', (req, res) => res.json(loadHistory()));
+
 // ── Session state ─────────────────────────────────────────────────────────────
 const sessions = new Map();
 
@@ -113,6 +133,22 @@ const TOOLS = [
         required: ['question']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'flag_server_change',
+      description: 'Flag that a server-side file (app.py, solver.py, etc.) needs updating. This machine cannot push to GitHub. The user will coordinate the push from their dev machine. Use this whenever you identify a bug or needed change in server-side Python code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path:    { type: 'string', description: 'Server-side file that needs changing (e.g. app.py, ami_optix/solver.py)' },
+          description:  { type: 'string', description: 'What needs to change and why' },
+          severity:     { type: 'string', enum: ['blocker', 'important', 'nice-to-have'], description: 'How urgent is this change' }
+        },
+        required: ['file_path', 'description', 'severity']
+      }
+    }
   }
 ];
 
@@ -177,6 +213,16 @@ function runPowershell(scriptPath, args, sessionId, timeoutMs, send) {
   });
 }
 
+// ── Kill lingering Excel processes ────────────────────────────────────────────
+function killExcel() {
+  return new Promise(resolve => {
+    const ps = spawn('powershell', ['-NoProfile', '-Command',
+      'Get-Process -Name EXCEL -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 800']);
+    ps.on('close', resolve);
+    setTimeout(() => { try { ps.kill(); } catch {} resolve(); }, 5000);
+  });
+}
+
 // ── File helpers ──────────────────────────────────────────────────────────────
 function walkDir(dir, repoRoot, results) {
   if (!fs.existsSync(dir)) return;
@@ -207,14 +253,16 @@ async function executeTool(name, args, sessionId, send) {
     case 'run_acceptance_tests': {
       const script = path.join(AGENT_ROOT, 'scripts', 'Invoke-AmiOptixAcceptance.ps1');
       if (!fs.existsSync(script)) return 'Acceptance script not found. Run a full refresh first.';
-      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 60000, send);
+      await killExcel();
+      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 300000, send);
       return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
     }
 
     case 'compile_check': {
       const script = path.join(AGENT_ROOT, 'scripts', 'Invoke-AmiOptixCompileCheck.ps1');
       if (!fs.existsSync(script)) return 'Compile check script not found. Run a full refresh first to bootstrap the workspace.';
-      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 60000, send);
+      await killExcel();
+      const r = await runPowershell(script, ['-AgentRoot', AGENT_ROOT], sessionId, 120000, send);
       return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
     }
 
@@ -224,7 +272,8 @@ async function executeTool(name, args, sessionId, send) {
         : path.join(AGENT_ROOT, 'scripts', 'Refresh-AmiOptixAgent.ps1');
       const psArgs = ['-AgentRoot', AGENT_ROOT];
       if (REPO_ROOT) psArgs.push('-RepoRoot', REPO_ROOT);
-      const r = await runPowershell(repoScript, psArgs, sessionId, 60000, send);
+      await killExcel();
+      const r = await runPowershell(repoScript, psArgs, sessionId, 600000, send);
       return (r.stdout + (r.stderr ? '\nSTDERR: ' + r.stderr : '')).trim();
     }
 
@@ -273,46 +322,89 @@ async function executeTool(name, args, sessionId, send) {
       catch (e) { return 'No build results found: ' + e.message; }
     }
 
+    case 'flag_server_change': {
+      const entry = {
+        timestamp: new Date().toISOString(),
+        file: args.file_path,
+        description: args.description,
+        severity: args.severity || 'important'
+      };
+      const flagFile = path.join(AGENT_ROOT, 'state', 'pending-server-changes.json');
+      let existing = [];
+      try { existing = JSON.parse(fs.readFileSync(flagFile, 'utf8')); } catch {}
+      existing.push(entry);
+      try {
+        const dir = path.dirname(flagFile);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(flagFile, JSON.stringify(existing, null, 2), 'utf8');
+      } catch {}
+      send('server_change_flagged', entry);
+      return `Flagged: ${args.file_path} (${args.severity}) — "${args.description}". The user has been notified and will push this change via GitHub.`;
+    }
+
     default:
       return 'Unknown tool: ' + name;
   }
 }
 
+// ── Load full project context ────────────────────────────────────────────────
+let AGENT_CONTEXT_TEXT = '';
+try {
+  const ctxPath = path.join(__dirname, 'AGENT_CONTEXT.md');
+  if (fs.existsSync(ctxPath)) {
+    AGENT_CONTEXT_TEXT = fs.readFileSync(ctxPath, 'utf8');
+  }
+} catch {}
+
 // ── System prompt ─────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are an autonomous repair agent for AMI Optix — a NYC affordable housing AMI calculator implemented as a VBA Excel add-in with a PowerShell automation layer.
+const SYSTEM_PROMPT = `You are an autonomous repair and development agent for AMI Optix — a NYC affordable housing AMI calculator built as a VBA Excel add-in with a PowerShell automation layer.
 
-IMPORTANT — narrate every step out loud as you work. Before each action write one sentence: what you are about to do and why. After each tool result write one sentence: what you found. The user must never be in the dark about what you are doing.
+NARRATE every step before you take it: one sentence saying what you will do and why. After each result, one sentence on what you found.
 
-Example narration style:
-"I'm going to run the acceptance tests to see what is currently failing."
-"Tests show the MIH optimization is failing with a compile error in WriteMihSquareFootageSummary — that function is missing."
-"I'm reading AMI_Optix_ResultsWriter.bas to find where to add the missing function."
-"Found the call site at line 420. I'm going to add the function definition above it."
-"Edit applied. Running a full refresh to verify the fix."
+══════════════════════════════════════════
+GOLDEN RULE: Never run acceptance tests while there is a known compile error.
+Fix compile → COMPILE_OK → then test.
+══════════════════════════════════════════
 
-When the test result includes '[Excel dialog auto-dismissed. Error text: ...]', that text tells you exactly what compile error Excel threw — use it to diagnose the problem.
+LOOP FOR EVERY TASK:
+1. Run compile_check first (fast, ~30s). If COMPILE_ERROR → jump to step 3.
+2. Run acceptance tests. If all pass → summarize and stop.
+3. Read the full error message. Find the exact file and line. Fix it with edit_source_file.
+4. Run compile_check. If still COMPILE_ERROR → back to step 3 with the new error.
+5. When compile_check returns COMPILE_OK → back to step 2.
+6. Same error appears 3 times in a row without any change → call ask_user.
 
-Autonomous work loop:
-1. Narrate → run acceptance tests to see what is failing
-2. Narrate → read relevant source files to find root cause
-3. Narrate → edit source files to fix
-4. Narrate → call compile_check (fast: rebuilds + verifies compile, ~30s) — fix any COMPILE_ERROR before proceeding
-5. Narrate → run full refresh only once compile is clean
-6. If same error repeats after a fix attempt → call ask_user (do NOT keep retrying)
-7. When all tests pass → report success with a clear summary
+COMPILE ERRORS — how to handle:
+- "Variable not defined: X" → find where X is used before its Dim declaration. Either move the Dim earlier, or remove the premature use. Read the file first to see the actual code.
+- "Sub or Function not defined: X" → X is called but doesn't exist. Add the function, or remove the call.
+- "Type mismatch" or "Object required" → wrong type assigned; check Set vs plain assignment for objects.
+- When test output contains "[Excel dialog auto-dismissed. Error text: X]" → X is the real error. Fix the code that caused X, then run compile_check.
+- After any edit, ALWAYS run compile_check before running tests.
 
-IMPORTANT: Always call compile_check after editing VBA source files. Do not call run_full_refresh until compile_check returns COMPILE_OK. This catches missing functions, undefined variables, and syntax errors in seconds instead of minutes.
+EXCEL & FILE LOCKS — you never need to ask the user:
+- Excel is automatically killed before every tool call. You do not need to ask the user to close Excel.
+- If you see a file lock error, just run compile_check again — it kills Excel first.
+- Never ask the user to open Task Manager or close processes.
 
-Rules:
-- Never make the same edit twice if it failed — try a different approach or ask_user
-- Call ask_user only when you truly cannot proceed without information only the user can provide
-- When tests pass, stop and summarize what was broken and what you fixed
+ask_user — only for genuine decisions:
+- Business rules, numbers, or decisions only the user can make.
+- NOT for Excel errors, file locks, compile errors, or anything you can fix by reading code.
+- NOT when you already know what's wrong from the error text.
 
-Codebase:
-- VBA source: excel-addin/src/*.bas, *.cls
-- PowerShell agent: tools/excel-agent/*.ps1, *.psm1
-- Workbook roles: "uap", "mih"
-- Key modules: AMI_Optix_Automation, AMI_Optix_VerifyManualRents, AMI_Optix_RentCalcTables, AMI_Optix_ResultsWriter, AMI_Optix_Diagnostics
+SERVER-SIDE FILES — you CANNOT deploy these:
+- app.py, ami_optix/*.py, rules_config.yml are SERVER-SIDE files deployed to Render via GitHub.
+- This machine does NOT have GitHub access.
+- If you find a bug in a server-side file, use flag_server_change to report it.
+- The user will coordinate the GitHub push from their dev machine.
+- NEVER silently edit server-side files without flagging. The user MUST know.
+
+${AGENT_CONTEXT_TEXT}
+
+CODEBASE:
+- VBA: excel-addin/src/*.bas, *.cls
+- PowerShell: tools/excel-agent/*.ps1, *.psm1
+- Programs: "uap" = UAP; "mih" = MIH (DIFFERENT RULES — see context above)
+- Key modules: AMI_Optix_Automation, AMI_Optix_ResultsWriter, AMI_Optix_RentCalcTables, AMI_Optix_Diagnostics, AMI_Optix_VerifyManualRents
 - Tests: Diagnostics smoke, Run UAP optimization, Run MIH optimization, Verify Manual Rents (API)`;
 
 // ── Resume / Abort endpoints ──────────────────────────────────────────────────
@@ -339,7 +431,7 @@ app.post('/api/abort/:sessionId', (req, res) => {
 
 // ── Chat endpoint (SSE + streaming OpenAI) ────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
-  const { message, history = [] } = req.body;
+  const { message, image, history = [] } = req.body;
   const sessionId = crypto.randomUUID();
 
   sessions.set(sessionId, { aborted: false, activeProcess: null, resolvePause: null, rejectPause: null });
@@ -362,10 +454,27 @@ app.post('/api/chat', async (req, res) => {
     }
   });
 
+  // Merge persisted history with any history sent by client (client wins for recent msgs)
+  const persisted = loadHistory();
+  const combined = persisted.slice(-40).concat(history.slice(-10));
+  // Deduplicate by keeping last occurrence of each role+content pair
+  const seen = new Set();
+  const dedupedHistory = combined.filter(m => {
+    const key = m.role + '|' + (typeof m.content === 'string' ? m.content.slice(0, 80) : '');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-20);
+
+  // Build user message — with optional image
+  const userContent = image
+    ? [{ type: 'text', text: message }, { type: 'image_url', image_url: { url: image } }]
+    : message;
+
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
-    ...history.slice(-10),
-    { role: 'user', content: message }
+    ...dedupedHistory,
+    { role: 'user', content: userContent }
   ];
 
   try {
@@ -439,10 +548,11 @@ app.post('/api/chat', async (req, res) => {
         const result = await executeTool(toolName, toolArgs, sessionId, send);
         send('tool_done', toolName);
 
-        // Same-error escalation
-        if (toolName === 'run_acceptance_tests' || toolName === 'run_full_refresh') {
-          const m = String(result).match(/code-failure[^\n]*/);
-          const currentError = m ? m[0] : null;
+        // Same-error escalation (acceptance tests + compile_check)
+        if (toolName === 'run_acceptance_tests' || toolName === 'run_full_refresh' || toolName === 'compile_check') {
+          const r = String(result);
+          const m = r.match(/COMPILE_ERROR[^\n]*/) || r.match(/code-failure[^\n]*/) || r.match(/Variable not defined[^\n]*/);
+          const currentError = m ? m[0].slice(0, 200) : null;
           if (currentError && currentError === lastError) {
             sameErrorStrikes++;
             if (sameErrorStrikes >= 2) {
@@ -472,6 +582,14 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // Save conversation to disk
+    try {
+      const hist = loadHistory();
+      hist.push({ role: 'user', content: typeof userContent === 'string' ? userContent : message, ts: new Date().toISOString() });
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && typeof m.content === 'string');
+      if (lastAssistant) hist.push({ role: 'assistant', content: lastAssistant.content, ts: new Date().toISOString() });
+      saveHistory(hist);
+    } catch {}
     send('done', null);
   } catch (err) {
     if (!err.message.includes('borted') && !err.message.includes('disconnected')) {
