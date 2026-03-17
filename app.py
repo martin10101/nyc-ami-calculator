@@ -766,6 +766,7 @@ def optimize_units():
 
         # MIH 40% AMI SF constraint: inject into optimization_rules so the solver
         # constrains 40% AMI units to 10-11% of total building SF.
+        mih_constraint_injected = False
         if project_overrides and isinstance(project_overrides.get('mih_40_ami_sf_constraint'), dict):
             mih_sf = project_overrides['mih_40_ami_sf_constraint']
             if mih_sf.get('enabled'):
@@ -779,6 +780,11 @@ def optimize_units():
                         'denominator': 'total_building',
                     }]
                     rules['total_building_sf'] = float(total_building_sf)
+                    mih_constraint_injected = True
+                    app.logger.info("MIH 40%% AMI SF constraint injected: total_building_sf=%.2f, share_thresholds=%s",
+                                    float(total_building_sf), rules['share_thresholds'])
+        if project_overrides and not mih_constraint_injected:
+            app.logger.info("MIH constraint NOT injected. project_overrides keys: %s", list(project_overrides.keys()) if isinstance(project_overrides, dict) else type(project_overrides))
 
         solver_start = time.perf_counter()
 
