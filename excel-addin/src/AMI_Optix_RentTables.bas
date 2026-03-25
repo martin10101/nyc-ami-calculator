@@ -308,6 +308,7 @@ Private Sub BuildRentTablesCache(year As Long, sourcePath As String, fingerprint
     Exit Sub
 
 Fail:
+    Dim failDesc As String: failDesc = Err.Description
     On Error Resume Next
     If openedHere Then
         If Not rentWb Is Nothing Then rentWb.Close SaveChanges:=False
@@ -319,7 +320,7 @@ Fail:
               "Workbook: " & sourcePath & vbCrLf & _
               "Fingerprint: " & fingerprint & vbCrLf & _
               "Cache folder: " & cacheFolder & vbCrLf & vbCrLf & _
-              "Error: " & Err.Description
+              "Error: " & failDesc
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -461,7 +462,35 @@ Public Function ExtractUtilityAllowances(rentWb As Workbook, Optional year As Lo
 
     Dim lastCol As Long
     lastCol = ws.Cells(15, ws.Columns.Count).End(xlToLeft).Column
+    Dim lastCol16 As Long
+    lastCol16 = ws.Cells(16, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol16 > lastCol Then lastCol = lastCol16
     If lastCol < 1 Then lastCol = 1
+
+    ' Detect layout variant:
+    '   2025 -> category headers at row 15 ("Apartment Electricity only", etc.),
+    '           option labels at rows 16-17, data at rows 18-23
+    '   2024 -> option labels at row 15 ("Electric Stove", etc.),
+    '           selection states at row 16, data at rows 17-22
+    Dim hasCategoryHeaders As Boolean
+    hasCategoryHeaders = False
+    Dim probeCol As Long
+    For probeCol = 1 To Application.Min(lastCol, 200)
+        Dim probeVal As String
+        probeVal = LCase$(Trim$(CStr(ws.Cells(15, probeCol).Value)))
+        Select Case probeVal
+            Case "apartment electricity only", "cooking", "heat", "hot water"
+                hasCategoryHeaders = True
+                Exit For
+        End Select
+    Next probeCol
+
+    Dim firstDataRow As Long
+    If hasCategoryHeaders Then
+        firstDataRow = 18
+    Else
+        firstDataRow = 17
+    End If
 
     Dim col As Long
     For col = 1 To Application.Min(lastCol, 200)
@@ -472,9 +501,14 @@ Public Function ExtractUtilityAllowances(rentWb As Workbook, Optional year As Lo
         headerCat = UtilityCategoryFromHeaderValue(headerVal)
         If headerCat <> "" Then currentCat = headerCat
 
+        ' Option label: row 15 for 2024 (if recognized), rows 16/17 for 2025
         Dim optionVal As Variant
-        optionVal = ws.Cells(16, col).Value
-        If Trim$(CStr(optionVal)) = "" Then optionVal = ws.Cells(17, col).Value
+        If (Not hasCategoryHeaders) And UtilityCategoryFromOptionLabel(headerVal) <> "" Then
+            optionVal = headerVal
+        Else
+            optionVal = ws.Cells(16, col).Value
+            If Trim$(CStr(optionVal)) = "" Then optionVal = ws.Cells(17, col).Value
+        End If
 
         Dim optionLabel As String
         optionLabel = Trim$(CStr(optionVal))
@@ -493,7 +527,7 @@ Public Function ExtractUtilityAllowances(rentWb As Workbook, Optional year As Lo
         Dim i As Long
         For i = LBound(bedLabels) To UBound(bedLabels)
             Dim amtVal As Variant
-            amtVal = ws.Cells(18 + i, col).Value ' rows 18..23
+            amtVal = ws.Cells(firstDataRow + i, col).Value
 
             Dim amt As Double
             amt = 0#

@@ -1695,7 +1695,31 @@ Private Function LoadLocalRentLookups(rentWs As Worksheet, ByRef tradeoffs As Co
 
     Dim lastCol As Long
     lastCol = rentWs.Cells(15, rentWs.Columns.Count).End(xlToLeft).Column
+    Dim lastCol16 As Long
+    lastCol16 = rentWs.Cells(16, rentWs.Columns.Count).End(xlToLeft).Column
+    If lastCol16 > lastCol Then lastCol = lastCol16
     If lastCol < 1 Then lastCol = 1
+
+    ' Detect layout variant (same logic as RentTables cache builder)
+    Dim hasCategoryHeaders As Boolean
+    hasCategoryHeaders = False
+    Dim probeCol As Long
+    For probeCol = 1 To Application.Min(lastCol, 200)
+        Dim probeVal As String
+        probeVal = LCase$(Trim$(CStr(rentWs.Cells(15, probeCol).Value)))
+        Select Case probeVal
+            Case "apartment electricity only", "cooking", "heat", "hot water"
+                hasCategoryHeaders = True
+                Exit For
+        End Select
+    Next probeCol
+
+    Dim firstDataRow As Long
+    If hasCategoryHeaders Then
+        firstDataRow = 18
+    Else
+        firstDataRow = 17
+    End If
 
     Dim col As Long
     For col = 1 To Application.Min(lastCol, 200)
@@ -1707,8 +1731,12 @@ Private Function LoadLocalRentLookups(rentWs As Worksheet, ByRef tradeoffs As Co
         If headerCat <> "" Then currentCat = headerCat
 
         Dim optionVal As Variant
-        optionVal = rentWs.Cells(16, col).Value
-        If Trim$(CStr(optionVal)) = "" Then optionVal = rentWs.Cells(17, col).Value
+        If (Not hasCategoryHeaders) And UtilityCategoryFromOptionLabel(headerVal) <> "" Then
+            optionVal = headerVal
+        Else
+            optionVal = rentWs.Cells(16, col).Value
+            If Trim$(CStr(optionVal)) = "" Then optionVal = rentWs.Cells(17, col).Value
+        End If
 
         Dim optionLabel As String
         optionLabel = Trim$(CStr(optionVal))
@@ -1738,7 +1766,7 @@ Private Function LoadLocalRentLookups(rentWs As Worksheet, ByRef tradeoffs As Co
         Dim i As Long
         For i = LBound(bedLabels) To UBound(bedLabels)
             Dim amtVal As Variant
-            amtVal = rentWs.Cells(18 + i, col).Value ' rows 18..23
+            amtVal = rentWs.Cells(firstDataRow + i, col).Value
 
             Dim amt As Double
             amt = 0#
