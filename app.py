@@ -1608,8 +1608,8 @@ def manual_calculate_assignment():
         assignments = df_units.to_dict(orient='records')
         metrics = _build_metrics_from_assignments(assignments)
 
+        rent_calc_path, rent_meta = _resolve_rent_calculator_for_request(data)
         rent_schedule = None
-        rent_calc_path = _get_active_rent_calculator_path()
         if rent_calc_path:
             rent_schedule, _cache_hit = _load_rent_schedule_cached(rent_calc_path)
 
@@ -1622,7 +1622,7 @@ def manual_calculate_assignment():
             except Exception:
                 pass
 
-        return jsonify({
+        resp = {
             "success": True,
             "is_valid": bool(is_valid),
             "tradeoffs": [] if is_valid else errors[:12],
@@ -1634,7 +1634,9 @@ def manual_calculate_assignment():
             "program": program,
             "mih_option": mih_option,
             "mih_residential_sf": mih_residential_sf,
-        })
+        }
+        resp.update(rent_meta)
+        return jsonify(resp)
 
     except Exception as e:
         app.logger.exception("manual_calculate_assignment failed: %s", e)
