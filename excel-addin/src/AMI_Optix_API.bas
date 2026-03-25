@@ -110,17 +110,7 @@ Fail:
 End Function
 
 Private Function GetSelectedRentRollYearSetting() As Long
-    ' Auto-detect from workbook first; fall back to registry; default to 2025.
-    Dim detected As Long
-    detected = 0
-    On Error Resume Next
-    detected = DetectWorkbookDeclaredRentRollYear()
-    On Error GoTo 0
-    If detected >= RENTROLL_YEAR_MIN And detected <= RENTROLL_YEAR_MAX Then
-        GetSelectedRentRollYearSetting = detected
-        Exit Function
-    End If
-
+    ' Uses the ribbon dropdown selection (registry). Defaults to 2025 if not set.
     Dim raw As String
     raw = GetSetting(AMI_OPTIX_REGISTRY_PATH, RENTROLL_YEAR_REG_SECTION, RENTROLL_YEAR_REG_KEY_SELECTED, CStr(RENTROLL_YEAR_DEFAULT))
 
