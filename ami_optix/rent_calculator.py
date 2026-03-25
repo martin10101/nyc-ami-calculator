@@ -148,6 +148,21 @@ def load_rent_schedule(workbook_path: str) -> RentSchedule:
 def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, float]]]:
     allowances: Dict[str, Dict[str, Dict[str, float]]] = {}
     current_category = None
+
+    # Detect layout variant (0-indexed rows):
+    #   2025: category headers at row 14 ("Apartment Electricity only", etc.),
+    #         option labels at rows 15-16, data at rows 17-22
+    #   2024: option labels at row 14 ("Electric Stove", etc.),
+    #         selection states at row 15, data at rows 16-21
+    has_category_headers = False
+    for ci in range(sheet.shape[1]):
+        val = sheet.iloc[14, ci]
+        if isinstance(val, str) and val.strip().lower() in HEADER_TO_CATEGORY:
+            has_category_headers = True
+            break
+
+    first_data_row = 17 if has_category_headers else 16  # pandas 0-indexed
+
     for col_idx in range(sheet.shape[1]):
         header = sheet.iloc[14, col_idx]
         if isinstance(header, str):
@@ -162,10 +177,14 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
                     if option_category:
                         current_category = option_category
 
-        option = sheet.iloc[15, col_idx]
-        if not isinstance(option, str) or not option.strip():
-            fallback_option = sheet.iloc[16, col_idx] if sheet.shape[0] > 16 else None
-            option = fallback_option if isinstance(fallback_option, str) else option
+        # Option label: row 14 for 2024 (if recognized), rows 15-16 for 2025
+        if not has_category_headers and isinstance(header, str) and header.strip() and LABEL_TO_CATEGORY.get(header.strip()):
+            option = header  # 2024: row 15 IS the option label
+        else:
+            option = sheet.iloc[15, col_idx]
+            if not isinstance(option, str) or not option.strip():
+                fallback_option = sheet.iloc[16, col_idx] if sheet.shape[0] > 16 else None
+                option = fallback_option if isinstance(fallback_option, str) else option
         if not isinstance(option, str):
             continue
         cleaned_option = option.strip()
@@ -179,7 +198,7 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
         category_bucket = allowances.setdefault(category_key, {})
         bedroom_map = {}
         for offset, bedroom in enumerate(BEDROOM_LABELS):
-            value = sheet.iloc[17 + offset, col_idx]
+            value = sheet.iloc[first_data_row + offset, col_idx]
             numeric = 0.0
             if not pd.isna(value):
                 if isinstance(value, (int, float)):
