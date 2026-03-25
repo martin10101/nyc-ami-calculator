@@ -781,10 +781,11 @@ def optimize_units():
                     }]
                     rules['total_building_sf'] = float(total_building_sf)
                     mih_constraint_injected = True
-                    app.logger.info("MIH 40%% AMI SF constraint injected: total_building_sf=%.2f, share_thresholds=%s",
-                                    float(total_building_sf), rules['share_thresholds'])
-        if project_overrides and not mih_constraint_injected:
-            app.logger.info("MIH constraint NOT injected. project_overrides keys: %s", list(project_overrides.keys()) if isinstance(project_overrides, dict) else type(project_overrides))
+                    print(f"[MIH-DEBUG] INJECTED: total_building_sf={float(total_building_sf):.2f}, thresholds={rules['share_thresholds']}", flush=True)
+        if project_overrides:
+            print(f"[MIH-DEBUG] project_overrides keys={list(project_overrides.keys()) if isinstance(project_overrides, dict) else type(project_overrides)}, injected={mih_constraint_injected}", flush=True)
+        else:
+            print(f"[MIH-DEBUG] project_overrides is None/empty, program={program_norm}", flush=True)
 
         solver_start = time.perf_counter()
 
