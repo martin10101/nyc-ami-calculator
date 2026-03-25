@@ -862,6 +862,7 @@ Public Function ManualCalculateScenario(Optional programOverride As String = "")
     mihMaxBandPercent = 0
     If programNorm = "MIH" Then
         If Not TryReadMIHInputs(mihOption, mihResidentialSF, mihMaxBandPercent) Then Exit Function
+        If mihResidentialSF > 0 Then g_MihTotalBuildingSf = mihResidentialSF
     End If
 
     Dim prevSheet As Worksheet
