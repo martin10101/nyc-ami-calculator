@@ -384,6 +384,8 @@ function Invoke-AmiOptixCacheWarmup {
 
         foreach ($year in $yearList) {
             $refreshSucceeded = [bool](Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments @([int]$year))
+            # Stabilize display after cache refresh macro
+            try { $excel.ScreenUpdating = $true; Start-Sleep -Milliseconds 500 } catch { }
             if ($refreshSucceeded) {
                 $result.details += "Refreshed rent tables cache for year $year."
                 continue
@@ -1073,12 +1075,21 @@ function Invoke-AmiOptixAcceptanceSuite {
             $scenarioStep = "running macro '$macroName'"
             $null = Invoke-AmiOptixExcelMacro -Excel $excel -MacroName $macroName -Arguments $arguments
 
+            # Stabilize display after macro — prevents ScreenConnect disconnection
+            # VBA macros toggle ScreenUpdating off/on which can break remote desktop hooks
+            try {
+                $excel.ScreenUpdating = $true
+                $excel.Visible = $true
+                Start-Sleep -Milliseconds 1500
+            } catch { }
+
             $saveAfterRun = [bool](Get-AmiOptixObjectProperty -InputObject $scenario -Name 'saveAfterRun' -Default $false)
             if ($saveAfterRun -and $workbookRole -and $workbook -and ($workbook -ne $addin)) {
                 $scenarioStep = "saving runtime workbook for role '$workbookRole'"
                 try {
                     $workbook.Save()
                     $lastSavedRuntimeWorkbookByRole[$workbookRole] = $runtimeWorkbookPath
+                    Start-Sleep -Milliseconds 500
                 } catch {
                     # Non-fatal: best-effort save; reuse won't be available for subsequent scenarios
                 }
@@ -1134,6 +1145,21 @@ function Invoke-AmiOptixAcceptanceSuite {
         scenarios = $scenarioArray
         manualActionRequests = $manualActionArray
     }
+
+    # Ensure ScreenConnect client service is still running after acceptance suite.
+    # Excel COM automation + GC can starve or crash the service, locking out remote users.
+    try {
+        $scServices = Get-Service -DisplayName '*ScreenConnect*' -ErrorAction SilentlyContinue
+        if (-not $scServices) {
+            $scServices = Get-Service -Name '*ScreenConnect*' -ErrorAction SilentlyContinue
+        }
+        foreach ($svc in $scServices) {
+            if ($svc.Status -ne 'Running') {
+                Start-Service -Name $svc.Name -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 2000
+            }
+        }
+    } catch { }
 
     if ($ResultPath) {
         Write-AmiOptixJsonFile -Path $ResultPath -InputObject $result
