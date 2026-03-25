@@ -107,6 +107,22 @@ DEFAULT_RENT_CALCULATOR_FILENAME = "2025 AMI Rent Calculator Unlocked.xlsx"
 RENT_CALC_REMOTE_PREFIX = "AMI_Optix_Rent_Calculator_"
 RENT_CALC_REMOTE_SUFFIX = ".xlsx"
 
+# Auto-seed bundled rent calculators into RENT_CALCULATORS_DIR on startup
+BUNDLED_RENT_CALCULATORS_DIR = os.path.join(os.path.dirname(__file__), 'tools', 'excel-agent', 'assets', 'rent-roll-years')
+if os.path.isdir(BUNDLED_RENT_CALCULATORS_DIR):
+    for _year_dir in os.listdir(BUNDLED_RENT_CALCULATORS_DIR):
+        _year_path = os.path.join(BUNDLED_RENT_CALCULATORS_DIR, _year_dir)
+        if not os.path.isdir(_year_path):
+            continue
+        _src = os.path.join(_year_path, f"RentCalculator_{_year_dir}.xlsx")
+        _dst = os.path.join(RENT_CALCULATORS_DIR, f"{RENT_CALC_REMOTE_PREFIX}{_year_dir}{RENT_CALC_REMOTE_SUFFIX}")
+        if os.path.isfile(_src) and not os.path.isfile(_dst):
+            try:
+                shutil.copy2(_src, _dst)
+                print(f"[STARTUP] Seeded rent calculator: {os.path.basename(_dst)}", flush=True)
+            except Exception as _e:
+                print(f"[STARTUP] Warning: could not seed {os.path.basename(_dst)}: {_e}", flush=True)
+
 # API Key for Excel Add-in authentication
 # Set this in environment variable: AMI_OPTIX_API_KEY
 API_KEY = os.environ.get('AMI_OPTIX_API_KEY', '')

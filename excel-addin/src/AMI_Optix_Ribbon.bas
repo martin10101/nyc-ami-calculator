@@ -1660,7 +1660,7 @@ Private Sub MaybeWarnRentRollYearMismatch(selectedYear As Long)
 Fail:
 End Sub
 
-Private Function DetectWorkbookDeclaredRentRollYear() As Long
+Public Function DetectWorkbookDeclaredRentRollYear() As Long
     ' Best-effort detection: workbook name -> rent roll sheet name -> small top-of-sheet scan.
     On Error GoTo Fail
 
