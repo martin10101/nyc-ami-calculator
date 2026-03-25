@@ -71,8 +71,8 @@ if (Test-Path -LiteralPath $rebuiltAddinPath) {
         Copy-Item -LiteralPath $rebuiltAddinPath -Destination $installedAddinPath -Force
         Write-Host "Deployed rebuilt add-in to $installedAddinPath"
     } catch {
-        Write-Host "Warning: Could not deploy add-in to $installedAddinPath — $($_.Exception.Message)"
-        Write-Host "If Excel is open, close it and copy manually:"
-        Write-Host "  Copy-Item '$rebuiltAddinPath' '$installedAddinPath' -Force"
+        Write-Host "Warning: Could not deploy add-in to $installedAddinPath - $($_.Exception.Message)"
+        Write-Host "If Excel is open, close it and copy manually from:"
+        Write-Host "  $rebuiltAddinPath"
     }
 }
