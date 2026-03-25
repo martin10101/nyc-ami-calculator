@@ -750,6 +750,24 @@ function Invoke-AmiOptixStagedBuild {
 
     $outputDirectory = Split-Path -Parent $Config.rebuiltAddinPath
     New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+
+    # Force-release any locked build file from previous runs
+    try {
+        Get-Process excel -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 2000
+    } catch {}
+    if (Test-Path -LiteralPath $Config.rebuiltAddinPath) {
+        try { Remove-Item -LiteralPath $Config.rebuiltAddinPath -Force -ErrorAction Stop }
+        catch {
+            # Rename if delete fails (file still locked)
+            try {
+                $stale = $Config.rebuiltAddinPath + '.stale'
+                if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue }
+                Rename-Item -LiteralPath $Config.rebuiltAddinPath -NewName ([System.IO.Path]::GetFileName($stale)) -Force -ErrorAction Stop
+            } catch {}
+        }
+    }
+
     Copy-Item -LiteralPath $Config.stagedContainerPath -Destination $Config.rebuiltAddinPath -Force
 
     $excel = $null

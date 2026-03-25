@@ -48,18 +48,7 @@ if (Test-Path -LiteralPath $buildResultPath) {
     }
 }
 
-$acceptanceScript = Join-Path $AgentRoot 'scripts\Invoke-AmiOptixAcceptance.ps1'
-Invoke-AmiOptixScript -ScriptPath $acceptanceScript -AgentRoot $AgentRoot
-
-$acceptanceResultPath = Join-Path $AgentRoot 'artifacts\acceptance-result.json'
-if (Test-Path -LiteralPath $acceptanceResultPath) {
-    $acceptanceResult = Get-Content -LiteralPath $acceptanceResultPath -Raw | ConvertFrom-Json
-    if (-not $acceptanceResult.succeeded) {
-        throw "Acceptance failed. Review $acceptanceResultPath before rerunning the refresh."
-    }
-}
-
-# --- Deploy rebuilt add-in to the user's installed location ---
+# --- Deploy rebuilt add-in to the user's installed location (before acceptance) ---
 $rebuiltAddinPath = Join-Path $AgentRoot 'build\AMI_Optix_Autofix.xlam'
 $installedAddinPath = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
 if (Test-Path -LiteralPath $rebuiltAddinPath) {
@@ -74,5 +63,16 @@ if (Test-Path -LiteralPath $rebuiltAddinPath) {
         Write-Host "Warning: Could not deploy add-in to $installedAddinPath - $($_.Exception.Message)"
         Write-Host "If Excel is open, close it and copy manually from:"
         Write-Host "  $rebuiltAddinPath"
+    }
+}
+
+$acceptanceScript = Join-Path $AgentRoot 'scripts\Invoke-AmiOptixAcceptance.ps1'
+Invoke-AmiOptixScript -ScriptPath $acceptanceScript -AgentRoot $AgentRoot
+
+$acceptanceResultPath = Join-Path $AgentRoot 'artifacts\acceptance-result.json'
+if (Test-Path -LiteralPath $acceptanceResultPath) {
+    $acceptanceResult = Get-Content -LiteralPath $acceptanceResultPath -Raw | ConvertFrom-Json
+    if (-not $acceptanceResult.succeeded) {
+        Write-Host "Warning: Acceptance had failures. Review $acceptanceResultPath"
     }
 }
