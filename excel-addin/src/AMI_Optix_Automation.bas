@@ -171,16 +171,11 @@ Private Sub RunOptimizationAgentCore(program As String)
     Dim projectOverridesJson As String
     projectOverridesJson = ""
 
-    ' MIH 40% AMI SF constraint: total SF of 40% AMI units must be 10-11% of building SF
+    ' MIH 40% AMI SF constraint: total SF of 40% AMI units must be 10-11% of total building SF.
+    ' mihResidentialSF = Net Floor Area from MIH sheet = entire building, NOT just affordable units.
     If programNorm = "MIH" Then
-        Dim totalBuildingSf As Double
-        totalBuildingSf = 0#
-        Dim sfIdx As Long
-        For sfIdx = 1 To units.Count
-            totalBuildingSf = totalBuildingSf + CDbl(units(sfIdx)("net_sf"))
-        Next sfIdx
-        If totalBuildingSf > 0# Then
-            projectOverridesJson = BuildMIH40AmiSfOverrideJson(totalBuildingSf)
+        If mihResidentialSF > 0# Then
+            projectOverridesJson = BuildMIH40AmiSfOverrideJson(mihResidentialSF)
         End If
     End If
 
