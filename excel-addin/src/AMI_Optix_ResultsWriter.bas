@@ -12,6 +12,8 @@ Private Const MANUAL_CLEAR_FALLBACK_HEIGHT As Long = 250
 Public g_AMIOptixLastManualScenarioInvalid As Boolean
 ' Last error encountered while building the "AMI Scenarios" sheet (blank if OK).
 Public g_AMIOptixLastScenariosSheetBuildError As String
+' Total building SF for MIH — used by BuildBandMix to compute share of building SF.
+Public g_MihTotalBuildingSf As Double
 
 '-------------------------------------------------------------------------------
 ' LOCAL RENT CALC CACHE (Fix-06)
@@ -269,6 +271,20 @@ Public Sub CreateScenariosSheet(result As Object)
     If result Is Nothing Then GoTo ErrorHandler
     If Not result.Exists("scenarios") Then GoTo ErrorHandler
     Set scenarios = result("scenarios")
+
+    ' Extract total building SF for MIH share-of-building display
+    g_MihTotalBuildingSf = 0#
+    On Error Resume Next
+    If result.Exists("project_summary") Then
+        Dim projSummary As Object
+        Set projSummary = result("project_summary")
+        If Not projSummary Is Nothing Then
+            If projSummary.Exists("total_building_sf") Then
+                g_MihTotalBuildingSf = CDbl(projSummary("total_building_sf"))
+            End If
+        End If
+    End If
+    On Error GoTo ErrorHandler
 
     ' Manual block at top (live sync area)
     Dim manualEndRow As Long
@@ -1085,7 +1101,7 @@ AfterRent:
 
     Dim metrics As Object
     Set metrics = CreateObject("Scripting.Dictionary")
-    metrics("band_mix") = BuildBandMix(assignments)
+    Set metrics("band_mix") = BuildBandMix(assignments, g_MihTotalBuildingSf)
 
     Dim scenario As Object
     Set scenario = CreateObject("Scripting.Dictionary")
@@ -2019,7 +2035,7 @@ NextA:
     Set ComputeBandsUsed = bands
 End Function
 
-Private Function BuildBandMix(assignments As Collection) As Collection
+Private Function BuildBandMix(assignments As Collection, Optional totalBuildingSf As Double = 0#) As Collection
     Dim totalSf As Double
     totalSf = 0#
 
@@ -2094,8 +2110,10 @@ NextA:
         bm("band") = CLng(keys(j))
         bm("units") = CLng(agg2("units"))
         bm("net_sf") = CDbl(agg2("net_sf"))
-        If totalSf > 0# Then
-            bm("share_of_sf") = CDbl(agg2("net_sf")) / totalSf
+        Dim denomSf As Double
+        denomSf = IIf(totalBuildingSf > 0#, totalBuildingSf, totalSf)
+        If denomSf > 0# Then
+            bm("share_of_sf") = CDbl(agg2("net_sf")) / denomSf
         Else
             bm("share_of_sf") = 0#
         End If
@@ -2578,7 +2596,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ws.Cells(row, 1).Value = "Band"
             ws.Cells(row, 2).Value = "Units"
             ws.Cells(row, 3).Value = "Net SF"
-            ws.Cells(row, 4).Value = "Share of SF"
+            ws.Cells(row, 4).Value = IIf(g_MihTotalBuildingSf > 0#, "Share of Building SF", "Share of SF")
             ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Font.Bold = True
             ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 230, 230)
             ws.Cells(row, 1).HorizontalAlignment = xlRight

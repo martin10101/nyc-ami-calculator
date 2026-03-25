@@ -1348,18 +1348,22 @@ def optimize_units():
         # Build response
         response_start = time.perf_counter()
         safe_scenarios = _sanitize_for_json(scenarios)
-        response = {
-            "success": True,
-            "scenarios": safe_scenarios,
-            "notes": notes,
-            "project_summary": {
+        project_summary = {
                 "total_units": len(df_units),
                 "total_sf": float(df_units['net_sf'].sum()),
                 "utility_selections": utilities_clean,
                 "program": (program or 'UAP'),
                 "mih_option": mih_option,
                 "mih_residential_sf": mih_residential_sf,
-            }
+        }
+        if mih_constraint_injected:
+            project_summary["total_building_sf"] = total_building_sf
+
+        response = {
+            "success": True,
+            "scenarios": safe_scenarios,
+            "notes": notes,
+            "project_summary": project_summary,
         }
 
         if learning_info:
