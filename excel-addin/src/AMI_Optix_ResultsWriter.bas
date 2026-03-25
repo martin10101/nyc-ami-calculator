@@ -1076,6 +1076,7 @@ NextAssignment:
 
 RentFail:
     rentError = Err.Description
+    Debug.Print "RefreshManualWorkingCopyLocalRents RentFail: " & rentError
     On Error GoTo ErrorHandler
     rentOk = False
     Call ClearLocalRentComputedFields(assignments, True)

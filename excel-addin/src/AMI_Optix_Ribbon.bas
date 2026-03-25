@@ -754,6 +754,13 @@ Public Sub Ribbon_SelectRentRollYear(control As IRibbonControl, id As String, in
     ' Best-effort: ensure the API uses the selected year (rent calculator activation is server-global).
     Call EnsureSelectedRentRollYearActive(True)
 
+    ' Warm local rent tables cache for the selected year so live sync can compute
+    ' rents locally without requiring "Refresh Rent Tables" first.
+    On Error Resume Next
+    Dim warmSrc As String, warmCf As String, warmFp As String
+    EnsureRentTablesCache year, False, warmSrc, warmCf, warmFp
+    On Error GoTo 0
+
     Call MaybeWarnRentRollYearMismatch(year)
 
     ' Update the "Rent Tables Status" label to reflect the selected year.
