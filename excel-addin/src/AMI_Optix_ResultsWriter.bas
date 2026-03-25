@@ -929,6 +929,9 @@ Public Function ManualCalculateScenario(Optional programOverride As String = "")
 
     Call WriteManualScenarioBlockFromEvaluate(ws, evalResult, headerLabel)
 
+    ' Recalculate rents for all solver scenario blocks with the selected year.
+    RecalculateSolverScenarioRents ws, programNorm, utilities, mihOption, mihResidentialSF, mihMaxBandPercent
+
     Application.ScreenUpdating = prevScreenUpdating
     Application.EnableEvents = prevEnableEvents
 
@@ -2433,6 +2436,181 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     row = WriteScenarioSummaryAndTable(ws, row, scenario)
     WriteManualScenarioBlockFromEvaluate = row
 End Function
+
+'-------------------------------------------------------------------------------
+' SOLVER SCENARIO RENT RECALCULATION
+'-------------------------------------------------------------------------------
+
+Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As String, _
+    utilities As Object, mihOption As String, mihResidentialSF As Double, _
+    mihMaxBandPercent As Long)
+    ' Recalculates rents for all solver scenario blocks on the AMI Scenarios sheet
+    ' using the currently selected rent roll year.  Keeps AMI assignments intact;
+    ' only gross rent, net rent, annual rent, and totals are updated.
+    On Error GoTo Cleanup
+
+    If ws Is Nothing Then Exit Sub
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 10 Then Exit Sub
+
+    ' Phase 1: Find all solver-scenario table header rows.
+    ' A table header has: col1="Unit", col5="AMI", col6="Gross Rent".
+    ' We skip the Manual block's table by only considering rows that appear
+    ' after the first "SCENARIO N:" header that is NOT a MANUAL header.
+    Dim tableHeaderRows As Collection
+    Set tableHeaderRows = New Collection
+
+    Dim r As Long
+    Dim inSolverSection As Boolean
+    inSolverSection = False
+    Dim cellA As String
+
+    For r = 1 To lastRow
+        cellA = Trim$(CStr(ws.Cells(r, 1).Value))
+        If Left$(cellA, 9) = "SCENARIO " And InStr(1, cellA, "MANUAL", vbTextCompare) = 0 Then
+            inSolverSection = True
+        End If
+        If inSolverSection And cellA = "Unit" And _
+           Trim$(CStr(ws.Cells(r, 5).Value)) = "AMI" And _
+           Trim$(CStr(ws.Cells(r, 6).Value)) = "Gross Rent" Then
+            tableHeaderRows.Add r
+        End If
+    Next r
+
+    If tableHeaderRows.Count = 0 Then Exit Sub
+
+    ' Phase 2: For each solver table, read assignments, call API, update rents.
+    Dim tIdx As Long
+    Dim headerRow As Long
+    Dim dataRow As Long
+    Dim units As Collection
+    Dim unit As Object
+    Dim unitVal As Variant
+    Dim bedroomsVal As Variant
+    Dim sfVal As Variant
+    Dim rawAmi As Variant
+    Dim amiVal As Double
+    Dim payload As String
+    Dim response As String
+    Dim evalResult As Object
+    Dim apiAssignments As Object
+    Dim apiAssign As Object
+    Dim rentTotals As Object
+    Dim assignRow As Long
+    Dim scanRow As Long
+    Dim scanVal As String
+    Dim maxA As Long
+    Dim a As Long
+
+    For tIdx = 1 To tableHeaderRows.Count
+        headerRow = tableHeaderRows(tIdx)
+
+        Application.StatusBar = "Recalculating rents for scenario " & tIdx & " of " & tableHeaderRows.Count & "..."
+
+        ' -- Read assignments from the table --
+        Set units = New Collection
+        dataRow = headerRow + 1
+
+        Do While dataRow <= lastRow
+            unitVal = ws.Cells(dataRow, 1).Value
+            If IsEmpty(unitVal) Or Trim$(CStr(unitVal)) = "" Then Exit Do
+
+            Set unit = CreateObject("Scripting.Dictionary")
+            unit("unit_id") = CStr(unitVal)
+
+            bedroomsVal = ws.Cells(dataRow, 2).Value
+            If IsNumeric(bedroomsVal) Then
+                unit("bedrooms") = CDbl(bedroomsVal)
+            Else
+                unit("bedrooms") = 0
+            End If
+
+            sfVal = ws.Cells(dataRow, 3).Value
+            If IsNumeric(sfVal) Then
+                unit("net_sf") = CDbl(sfVal)
+            Else
+                unit("net_sf") = 0
+            End If
+
+            amiVal = 0#
+            rawAmi = ws.Cells(dataRow, 5).Value
+            If IsNumeric(rawAmi) Then amiVal = CDbl(rawAmi)
+            unit("client_ami") = amiVal
+
+            units.Add unit
+            dataRow = dataRow + 1
+        Loop
+
+        If units.Count = 0 Then GoTo NextTable
+
+        ' -- Call API for this scenario's assignments --
+        payload = BuildEvaluatePayloadV2(units, utilities, programNorm, _
+            mihOption, mihResidentialSF, mihMaxBandPercent)
+
+        response = CallManualCalculateAPI(payload)
+        If response = "" Then GoTo NextTable
+
+        Set evalResult = ParseJSON(response)
+        If evalResult Is Nothing Then GoTo NextTable
+
+        ' -- Update rent cells in place --
+        If evalResult.Exists("assignments") Then
+            Set apiAssignments = evalResult("assignments")
+            maxA = apiAssignments.Count
+            If maxA > units.Count Then maxA = units.Count
+
+            For a = 1 To maxA
+                assignRow = headerRow + a
+                Set apiAssign = apiAssignments(a)
+
+                If apiAssign.Exists("gross_rent") Then
+                    ws.Cells(assignRow, 6).Value = CDbl(apiAssign("gross_rent"))
+                    ws.Cells(assignRow, 6).NumberFormat = "$#,##0"
+                End If
+                If apiAssign.Exists("monthly_rent") Then
+                    ws.Cells(assignRow, 7).Value = CDbl(apiAssign("monthly_rent"))
+                    ws.Cells(assignRow, 7).NumberFormat = "$#,##0"
+                End If
+                If apiAssign.Exists("annual_rent") Then
+                    ws.Cells(assignRow, 8).Value = CDbl(apiAssign("annual_rent"))
+                    ws.Cells(assignRow, 8).NumberFormat = "$#,##0"
+                End If
+            Next a
+        End If
+
+        ' -- Update rent totals (scan backward from table header) --
+        If evalResult.Exists("rent_totals") Then
+            Set rentTotals = Nothing
+            On Error Resume Next
+            Set rentTotals = evalResult("rent_totals")
+            On Error GoTo Cleanup
+
+            If Not rentTotals Is Nothing Then
+                For scanRow = headerRow - 1 To Application.Max(1, headerRow - 20) Step -1
+                    scanVal = Trim$(CStr(ws.Cells(scanRow, 1).Value))
+                    If scanVal = "Total Monthly Rent:" Then
+                        If rentTotals.Exists("net_monthly") Then
+                            ws.Cells(scanRow, 2).Value = CDbl(rentTotals("net_monthly"))
+                            ws.Cells(scanRow, 2).NumberFormat = "$#,##0"
+                        End If
+                    ElseIf scanVal = "Total Annual Rent:" Then
+                        If rentTotals.Exists("net_annual") Then
+                            ws.Cells(scanRow, 2).Value = CDbl(rentTotals("net_annual"))
+                            ws.Cells(scanRow, 2).NumberFormat = "$#,##0"
+                        End If
+                    End If
+                Next scanRow
+            End If
+        End If
+
+NextTable:
+    Next tIdx
+
+Cleanup:
+    Application.StatusBar = False
+End Sub
 
 '-------------------------------------------------------------------------------
 ' MANUAL BLOCK REFRESH (FROM A KNOWN SCENARIO)
