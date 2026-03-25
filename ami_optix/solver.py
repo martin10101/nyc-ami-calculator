@@ -894,15 +894,10 @@ def find_optimal_scenarios(
 
         return best
 
-    absolute_best = _pick_from_list(three_band_results)
+    # absolute_best: highest WAAMI scenario regardless of band count.
+    absolute_best = _pick_from_list(sorted_results)
     if not absolute_best:
-        absolute_best = _pick_from_list(multi_band_results)
-        if absolute_best:
-            notes.append("No 3-band configuration met the constraints; using the best available multi-band scenario.")
-    if not absolute_best:
-        absolute_best = _pick_from_list(sorted_results)
-        if absolute_best:
-            notes.append("Only single-band configurations satisfied the constraints; presenting the top-scoring outcome.")
+        notes.append("No scenario met the constraints.")
     _register('absolute_best', absolute_best)
 
     best_3_band = _pick_from_list(three_band_results)
