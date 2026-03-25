@@ -58,3 +58,21 @@ if (Test-Path -LiteralPath $acceptanceResultPath) {
         throw "Acceptance failed. Review $acceptanceResultPath before rerunning the refresh."
     }
 }
+
+# --- Deploy rebuilt add-in to the user's installed location ---
+$rebuiltAddinPath = Join-Path $AgentRoot 'build\AMI_Optix_Autofix.xlam'
+$installedAddinPath = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
+if (Test-Path -LiteralPath $rebuiltAddinPath) {
+    try {
+        $installedFolder = Split-Path $installedAddinPath -Parent
+        if (-not (Test-Path -LiteralPath $installedFolder)) {
+            New-Item -ItemType Directory -Force -Path $installedFolder | Out-Null
+        }
+        Copy-Item -LiteralPath $rebuiltAddinPath -Destination $installedAddinPath -Force
+        Write-Host "Deployed rebuilt add-in to $installedAddinPath"
+    } catch {
+        Write-Host "Warning: Could not deploy add-in to $installedAddinPath — $($_.Exception.Message)"
+        Write-Host "If Excel is open, close it and copy manually:"
+        Write-Host "  Copy-Item '$rebuiltAddinPath' '$installedAddinPath' -Force"
+    }
+}
