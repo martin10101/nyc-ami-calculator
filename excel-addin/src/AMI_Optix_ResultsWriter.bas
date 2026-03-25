@@ -2635,9 +2635,11 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
                         ws.Cells(row, 4).Value = bm("share_of_sf")
                         ws.Cells(row, 4).NumberFormat = "0.00%"
                     End If
-                    If hasBuildingSfCol And bm.Exists("share_of_building_sf") Then
-                        ws.Cells(row, 5).Value = bm("share_of_building_sf")
-                        ws.Cells(row, 5).NumberFormat = "0.00%"
+                    If hasBuildingSfCol And bm.Exists("net_sf") Then
+                        If g_MihTotalBuildingSf > 0# Then
+                            ws.Cells(row, 5).Value = CDbl(bm("net_sf")) / g_MihTotalBuildingSf
+                            ws.Cells(row, 5).NumberFormat = "0.00%"
+                        End If
                     End If
                     row = row + 1
                 End If
