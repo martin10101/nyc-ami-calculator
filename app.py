@@ -198,8 +198,10 @@ def _build_program_config(
             {'band_threshold': 90, 'min_share': 0.10, 'denominator': 'residential'},
         ]
 
-    # MIH does not use a WAAMI floor constraint by default.
-    rules['waami_floor'] = None
+    # MIH uses the same WAAMI floor as UAP (59.1%).
+    # Without a floor, infeasible band combos (e.g. 2-band [40,70] with MIH SF constraint)
+    # produce scenarios with WAAMI below 59% that should not be shown.
+    rules['waami_floor'] = 0.591
 
     # Provide the denominator for residential-share constraints.
     rules['residential_sf'] = float(mih_residential_sf)
