@@ -218,11 +218,14 @@ Public Function EnsureRentTablesCache(year As Long, Optional forceRefresh As Boo
     Exit Function
 
 Fail:
+    Dim errNum As Long: errNum = Err.Number
+    Dim errSrc As String: errSrc = Err.Source
+    Dim errDesc As String: errDesc = Err.Description
     On Error Resume Next
     Application.ScreenUpdating = prevScreenUpdating
     Application.EnableEvents = prevEnableEvents
     On Error GoTo 0
-    Err.Raise Err.Number, Err.Source, Err.Description
+    If errNum <> 0 Then Err.Raise errNum, errSrc, errDesc
 End Function
 
 '-------------------------------------------------------------------------------

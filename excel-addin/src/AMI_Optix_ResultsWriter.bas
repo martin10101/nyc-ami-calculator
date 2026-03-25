@@ -1440,20 +1440,23 @@ Public Function ValidateLocalRentWorkbookLayout(rentWs As Worksheet, ByRef finge
         Exit Function
     End If
 
-    ' --- Allowance headers row 15 ---
+    ' --- Allowance headers rows 15-16 ---
     Dim catCols As Object
     Set catCols = CreateObject("Scripting.Dictionary") ' category -> first col index
 
     Dim col As Long
-    For col = 1 To 200
-        Dim hv As String
-        hv = Trim$(CStr(rentWs.Cells(15, col).Value))
-        Dim cat As String
-        cat = UtilityCategoryFromHeaderValue(hv)
-        If cat <> "" Then
-            If Not catCols.Exists(cat) Then catCols(cat) = col
-        End If
-    Next col
+    Dim hRow As Long
+    For hRow = 15 To 16
+        For col = 1 To 200
+            Dim hv As String
+            hv = Trim$(CStr(rentWs.Cells(hRow, col).Value))
+            Dim cat As String
+            cat = UtilityCategoryFromHeaderValue(hv)
+            If cat <> "" Then
+                If Not catCols.Exists(cat) Then catCols(cat) = col
+            End If
+        Next col
+    Next hRow
 
     Dim missingCats As String
     missingCats = ""
@@ -1462,7 +1465,7 @@ Public Function ValidateLocalRentWorkbookLayout(rentWs As Worksheet, ByRef finge
     If Not catCols.Exists("heat") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "heat"
     If Not catCols.Exists("hot_water") Then missingCats = missingCats & IIf(missingCats <> "", ", ", "") & "hot_water"
     If missingCats <> "" Then
-        reason = "Missing expected allowance headers in row 15: " & missingCats
+        reason = "Missing expected allowance headers in rows 15-16: " & missingCats
     End If
 
     ' --- Gross table: find first "of AMI" marker in col D with numeric AMI in col C ---
