@@ -1785,7 +1785,11 @@ Private Function LoadLocalRentLookups(rentWs As Worksheet, ByRef tradeoffs As Co
 NextCol:
     Next col
 
-    LoadLocalRentLookups = (Not m_LocalGrossRents Is Nothing And m_LocalGrossRents.Count > 0)
+    If m_LocalGrossRents Is Nothing Then
+        LoadLocalRentLookups = False
+    Else
+        LoadLocalRentLookups = (m_LocalGrossRents.Count > 0)
+    End If
     If Not LoadLocalRentLookups Then
         tradeoffs.Add "Local rent calc: could not parse gross rent table from 'AMI & Rent'."
     End If

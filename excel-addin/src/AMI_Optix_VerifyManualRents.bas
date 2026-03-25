@@ -881,20 +881,22 @@ Private Function BuildVerifySummaryMessage( _
             Dim top As Collection
             Set top = GetTopMismatches(mismatches, 5)
 
-            If Not top Is Nothing And top.Count > 0 Then
-                buf = buf & vbCrLf & "Top mismatches (unit_id | local | api | Δ):" & vbCrLf
+            If Not top Is Nothing Then
+                If top.Count > 0 Then
+                    buf = buf & vbCrLf & "Top mismatches (unit_id | local | api | Δ):" & vbCrLf
 
-                Dim i As Long
-                For i = 1 To top.Count
-                    Dim m As Object
-                    Set m = top(i)
-                    If Not m Is Nothing Then
-                        buf = buf & "- " & CStr(m("unit_id")) & " | " & _
-                              FormatMaybeCurrency(m("local_monthly_rent")) & " | " & _
-                              FormatMaybeCurrency(m("api_monthly_rent")) & " | " & _
-                              FormatMaybeCurrency(m("delta")) & vbCrLf
-                    End If
-                Next i
+                    Dim i As Long
+                    For i = 1 To top.Count
+                        Dim m As Object
+                        Set m = top(i)
+                        If Not m Is Nothing Then
+                            buf = buf & "- " & CStr(m("unit_id")) & " | " & _
+                                  FormatMaybeCurrency(m("local_monthly_rent")) & " | " & _
+                                  FormatMaybeCurrency(m("api_monthly_rent")) & " | " & _
+                                  FormatMaybeCurrency(m("delta")) & vbCrLf
+                        End If
+                    Next i
+                End If
             End If
         End If
 
