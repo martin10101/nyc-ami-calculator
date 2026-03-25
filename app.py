@@ -715,10 +715,13 @@ def optimize_units():
 
     try:
         program = (data.get('program') or 'UAP')
+        print(f"[MIH-DEBUG] payload top-level keys={list(data.keys())}", flush=True)
         mih_option = data.get('mih_option')
         mih_residential_sf = data.get('mih_residential_sf')
         mih_max_band_percent = data.get('mih_max_band_percent')
-        project_overrides = data.get('project_overrides') if isinstance(data.get('project_overrides'), dict) else None
+        raw_po = data.get('project_overrides')
+        print(f"[MIH-DEBUG] raw project_overrides type={type(raw_po).__name__}, value={str(raw_po)[:200]}", flush=True)
+        project_overrides = raw_po if isinstance(raw_po, dict) else None
         compare_baseline = bool(data.get('compare_baseline')) if data.get('compare_baseline') is not None else False
 
         # Convert units to DataFrame (same format parser produces)
