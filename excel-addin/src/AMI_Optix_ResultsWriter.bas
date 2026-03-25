@@ -2110,12 +2110,13 @@ NextA:
         bm("band") = CLng(keys(j))
         bm("units") = CLng(agg2("units"))
         bm("net_sf") = CDbl(agg2("net_sf"))
-        Dim denomSf As Double
-        denomSf = IIf(totalBuildingSf > 0#, totalBuildingSf, totalSf)
-        If denomSf > 0# Then
-            bm("share_of_sf") = CDbl(agg2("net_sf")) / denomSf
+        If totalSf > 0# Then
+            bm("share_of_sf") = CDbl(agg2("net_sf")) / totalSf
         Else
             bm("share_of_sf") = 0#
+        End If
+        If totalBuildingSf > 0# Then
+            bm("share_of_building_sf") = CDbl(agg2("net_sf")) / totalBuildingSf
         End If
         mix.Add bm
     Next j
@@ -2596,9 +2597,18 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ws.Cells(row, 1).Value = "Band"
             ws.Cells(row, 2).Value = "Units"
             ws.Cells(row, 3).Value = "Net SF"
-            ws.Cells(row, 4).Value = IIf(g_MihTotalBuildingSf > 0#, "Share of Building SF", "Share of SF")
-            ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Font.Bold = True
-            ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 230, 230)
+            ws.Cells(row, 4).Value = "Share of SF"
+            Dim hasBuildingSfCol As Boolean
+            hasBuildingSfCol = (g_MihTotalBuildingSf > 0#)
+            Dim headerEndCol As Long
+            If hasBuildingSfCol Then
+                ws.Cells(row, 5).Value = "Share of Building SF"
+                headerEndCol = 5
+            Else
+                headerEndCol = 4
+            End If
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, headerEndCol)).Font.Bold = True
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, headerEndCol)).Interior.Color = RGB(230, 230, 230)
             ws.Cells(row, 1).HorizontalAlignment = xlRight
             row = row + 1
 
@@ -2624,6 +2634,10 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
                     If bm.Exists("share_of_sf") Then
                         ws.Cells(row, 4).Value = bm("share_of_sf")
                         ws.Cells(row, 4).NumberFormat = "0.00%"
+                    End If
+                    If hasBuildingSfCol And bm.Exists("share_of_building_sf") Then
+                        ws.Cells(row, 5).Value = bm("share_of_building_sf")
+                        ws.Cells(row, 5).NumberFormat = "0.00%"
                     End If
                     row = row + 1
                 End If
