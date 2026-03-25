@@ -1054,11 +1054,12 @@ def optimize_units():
                     )
 
                     if program_norm == 'UAP':
-                        # Edge 1: relax max share at <=40% (try 22% -> 30%).
+                        # Edge 1: relax max share at <=40% (try 22% -> 23%, kept tight to avoid
+                        # obviously non-compliant scenarios like 47% at 40% AMI band).
                         strict_min_share = strict_rules.get('deep_affordability_min_share')
                         strict_max_share = strict_rules.get('deep_affordability_max_share')
                         if len(edge_keys_added) < target_edge_count:
-                            for max_share in (0.22, 0.23, 0.24, 0.25, 0.26, 0.28, 0.3):
+                            for max_share in (0.22, 0.23):
                                 if strict_max_share is not None and float(max_share) <= float(strict_max_share) + 1e-12:
                                     continue
                                 edge_cfg = copy.deepcopy(config)
@@ -1072,9 +1073,10 @@ def optimize_units():
                                 ):
                                     break
 
-                        # Edge 2: relax min share at <=40% (try 19.9% down to 15%).
+                        # Edge 2: relax min share at <=40% (try 19.9% down to 19%, kept tight
+                        # to avoid scenarios like 16.96% at 40% AMI band).
                         if len(edge_keys_added) < target_edge_count:
-                            for min_share in (0.199, 0.198, 0.195, 0.19, 0.185, 0.18, 0.175, 0.17, 0.165, 0.16, 0.15):
+                            for min_share in (0.199, 0.198, 0.195, 0.19):
                                 if strict_min_share is not None and float(min_share) >= float(strict_min_share) - 1e-12:
                                     continue
                                 edge_cfg = copy.deepcopy(config)
@@ -1101,20 +1103,6 @@ def optimize_units():
                                     waami_floor=float(floor),
                                     edge_settings={"mode": "rent_max", "relaxed": True, "waami_floor": float(floor)},
                                 )
-
-                        # Edge 4: disable deep affordability share constraints entirely.
-                        if len(edge_keys_added) < target_edge_count:
-                            edge_cfg = copy.deepcopy(config)
-                            edge_cfg_rules = edge_cfg.get('optimization_rules', {}) or {}
-                            edge_cfg_rules['deep_affordability_min_share'] = None
-                            edge_cfg_rules['deep_affordability_max_share'] = None
-                            edge_cfg['optimization_rules'] = edge_cfg_rules
-                            _maybe_add_edge(
-                                "edge_no_deep_aff_share",
-                                edge_cfg,
-                                waami_floor=strict_floor,
-                                edge_settings={"mode": "rent_max", "relaxed": True, "deep_affordability_share": None},
-                            )
                     elif program_norm == 'MIH':
                         # MIH relaxed scenarios: keep share rules fixed; only relax WAAMI floor down to 58%.
                         if len(edge_keys_added) < target_edge_count:
