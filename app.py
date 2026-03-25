@@ -767,28 +767,28 @@ def optimize_units():
         timing["unit_count"] = int(len(df_units))
         timing["parse_validation_ms"] = int(round((time.perf_counter() - request_start) * 1000))
 
-        # MIH 40% AMI SF constraint: inject into optimization_rules so the solver
-        # constrains 40% AMI units to 10-11% of total building SF.
+        # MIH 40% AMI SF constraint: when program is MIH and we have mih_residential_sf,
+        # constrain 40% AMI units to 10-11% of total building SF.
+        # Uses mih_residential_sf directly from payload — no project_overrides needed.
         mih_constraint_injected = False
-        if project_overrides and isinstance(project_overrides.get('mih_40_ami_sf_constraint'), dict):
-            mih_sf = project_overrides['mih_40_ami_sf_constraint']
-            if mih_sf.get('enabled'):
+        if program_norm == 'MIH' and mih_residential_sf is not None:
+            try:
+                total_building_sf = float(mih_residential_sf)
+            except (TypeError, ValueError):
+                total_building_sf = 0.0
+            if total_building_sf > 0:
                 rules = config.setdefault('optimization_rules', {})
-                total_building_sf = mih_sf.get('total_building_net_sf')
-                if total_building_sf is not None and float(total_building_sf) > 0:
-                    rules['share_thresholds'] = [{
-                        'band_threshold': int(mih_sf.get('ami_band_percent', 40)),
-                        'min_share': float(mih_sf.get('min_share', 0.10)),
-                        'max_share': float(mih_sf.get('max_share', 0.11)),
-                        'denominator': 'total_building',
-                    }]
-                    rules['total_building_sf'] = float(total_building_sf)
-                    mih_constraint_injected = True
-                    print(f"[MIH-DEBUG] INJECTED: total_building_sf={float(total_building_sf):.2f}, thresholds={rules['share_thresholds']}", flush=True)
-        if project_overrides:
-            print(f"[MIH-DEBUG] project_overrides keys={list(project_overrides.keys()) if isinstance(project_overrides, dict) else type(project_overrides)}, injected={mih_constraint_injected}", flush=True)
-        else:
-            print(f"[MIH-DEBUG] project_overrides is None/empty, program={program_norm}", flush=True)
+                rules['share_thresholds'] = [{
+                    'band_threshold': 40,
+                    'min_share': 0.10,
+                    'max_share': 0.11,
+                    'denominator': 'total_building',
+                }]
+                rules['total_building_sf'] = total_building_sf
+                mih_constraint_injected = True
+                print(f"[MIH-DEBUG] INJECTED: total_building_sf={total_building_sf:.2f}, thresholds={rules['share_thresholds']}", flush=True)
+        if not mih_constraint_injected:
+            print(f"[MIH-DEBUG] constraint NOT injected: program={program_norm}, mih_residential_sf={mih_residential_sf}", flush=True)
 
         solver_start = time.perf_counter()
 
