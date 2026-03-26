@@ -737,6 +737,12 @@ Private Function TryReadMIHUtilities(ByRef utils As Object) As Boolean
     utils("heat") = "na"
     utils("hot_water") = "na"
 
+    ' currentCategory tracks the active category header across columns so that
+    ' merged / multi-column groups (e.g. "Hot Water" spanning cols 9-12) are
+    ' recognised even when only the first column of the merge has text.
+    Dim currentCategory As String
+    currentCategory = ""
+
     For col = 1 To lastCol
         Dim header As String
         Dim optionLabel As String
@@ -745,19 +751,33 @@ Private Function TryReadMIHUtilities(ByRef utils As Object) As Boolean
         optionLabel = UCase(Trim(CStr(ws.Cells(15, col).Value)))
         selected = ws.Cells(16, col).Value
 
+        ' Always update the current category from the header (before checking
+        ' the selection state) so that subsequent blank-header columns inherit
+        ' the category from the group leader.
+        If InStr(header, "APARTMENT ELECTRICITY") > 0 Then
+            currentCategory = "electricity"
+        ElseIf header = "COOKING" Then
+            currentCategory = "cooking"
+        ElseIf header = "HEAT" Then
+            currentCategory = "heat"
+        ElseIf InStr(header, "HOT WATER") > 0 Then
+            currentCategory = "hot_water"
+        End If
+
         If Not IsTenantPays(selected) Then
             GoTo NextCol
         End If
 
-        If InStr(header, "APARTMENT ELECTRICITY") > 0 Then
+        Select Case currentCategory
+        Case "electricity"
             utils("electricity") = "tenant_pays"
-        ElseIf header = "COOKING" Then
+        Case "cooking"
             If InStr(optionLabel, "ELECTRIC") > 0 Then
                 utils("cooking") = "electric"
             ElseIf InStr(optionLabel, "GAS") > 0 Then
                 utils("cooking") = "gas"
             End If
-        ElseIf header = "HEAT" Then
+        Case "heat"
             If InStr(optionLabel, "CCASHP") > 0 Then
                 utils("heat") = "electric_ccashp"
             ElseIf InStr(optionLabel, "ELECTRIC") > 0 Then
@@ -767,7 +787,7 @@ Private Function TryReadMIHUtilities(ByRef utils As Object) As Boolean
             ElseIf InStr(optionLabel, "OIL") > 0 Then
                 utils("heat") = "oil"
             End If
-        ElseIf InStr(header, "HOT WATER") > 0 Then
+        Case "hot_water"
             If InStr(optionLabel, "HEAT PUMP") > 0 Then
                 utils("hot_water") = "electric_heat_pump"
             ElseIf InStr(optionLabel, "ELECTRIC") > 0 Then
@@ -777,7 +797,7 @@ Private Function TryReadMIHUtilities(ByRef utils As Object) As Boolean
             ElseIf InStr(optionLabel, "OIL") > 0 Then
                 utils("hot_water") = "oil"
             End If
-        End If
+        End Select
 
 NextCol:
     Next col
