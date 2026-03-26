@@ -132,6 +132,45 @@ def load_excel_file(file_path: str):
     )
 
 
+_IF_FORMULA_RE = re.compile(r'=IF\s*\([^,]+,\s*([\d.]+)\s*,\s*0\s*\)')
+
+
+def _extract_if_formula_values(workbook_path: str) -> Dict[Tuple[int, int], float]:
+    """Extract true-branch values from ``=IF(..., VALUE, 0)`` formulas.
+
+    Rent calculator workbooks use conditional formulas so that unselected
+    utility options display 0.  When loaded with ``data_only=True`` the cached
+    result is 0, making the server think the allowance is zero.  This function
+    loads the workbook *without* ``data_only`` and pulls the actual numeric
+    value out of each IF formula, keyed by ``(pandas_0row, pandas_0col)``.
+    """
+    # openpyxl cannot read .xlsb formulas.
+    if workbook_path.lower().endswith('.xlsb'):
+        return {}
+    try:
+        wb = load_workbook(workbook_path, data_only=False, keep_links=False)
+        ws = wb['AMI & Rent']
+    except Exception:
+        return {}
+
+    values: Dict[Tuple[int, int], float] = {}
+    try:
+        max_row = min(ws.max_row or 0, 30)
+        max_col = min(ws.max_column or 0, 20)
+        for row_1 in range(1, max_row + 1):
+            for col_1 in range(1, max_col + 1):
+                cell_val = ws.cell(row=row_1, column=col_1).value
+                if isinstance(cell_val, str) and cell_val.startswith('='):
+                    m = _IF_FORMULA_RE.search(cell_val)
+                    if m:
+                        values[(row_1 - 1, col_1 - 1)] = float(m.group(1))
+    except Exception:
+        pass
+    finally:
+        wb.close()
+    return values
+
+
 def load_rent_schedule(workbook_path: str) -> RentSchedule:
     if not os.path.exists(workbook_path):
         raise FileNotFoundError(f"Rent calculator workbook not found: {workbook_path}")
@@ -139,13 +178,21 @@ def load_rent_schedule(workbook_path: str) -> RentSchedule:
     engine = _pandas_engine_for(workbook_path)
     sheet = pd.read_excel(workbook_path, sheet_name="AMI & Rent", header=None, engine=engine)
 
-    allowances = _parse_allowances(sheet)
+    # Rent calculator workbooks use IF formulas that cache 0 for unselected
+    # utility options.  Extract the actual values from the formula text so
+    # every option has a real allowance regardless of the saved selection.
+    formula_values = _extract_if_formula_values(workbook_path)
+
+    allowances = _parse_allowances(sheet, formula_values=formula_values)
     gross_rents = _parse_ami_rent_table(sheet)
 
     return RentSchedule(gross_rents=gross_rents, allowances=allowances)
 
 
-def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, float]]]:
+def _parse_allowances(
+    sheet: pd.DataFrame,
+    formula_values: Dict[Tuple[int, int], float] | None = None,
+) -> Dict[str, Dict[str, Dict[str, float]]]:
     allowances: Dict[str, Dict[str, Dict[str, float]]] = {}
     current_category = None
 
@@ -217,6 +264,13 @@ def _parse_allowances(sheet: pd.DataFrame) -> Dict[str, Dict[str, Dict[str, floa
                             numeric = float(value_str)
                         except ValueError:
                             numeric = 0.0
+            # Fallback: if cached formula result is 0, use the actual value
+            # extracted from the IF formula text (see _extract_if_formula_values).
+            if numeric == 0.0 and formula_values:
+                extracted = formula_values.get((first_data_row + offset, col_idx))
+                if extracted is not None and extracted > 0.0:
+                    numeric = extracted
+
             bedroom_map[bedroom] = numeric
         category_bucket[cleaned_option] = bedroom_map
     return allowances
