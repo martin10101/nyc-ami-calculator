@@ -2270,6 +2270,7 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     Dim metrics As Object
     Dim bandMix As Object
     Dim totalSf As Double
+    Dim buildingSf As Double
     Dim idx As Long
     Dim bm As Object
     Dim bandVal As Double
@@ -2303,6 +2304,10 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     Next idx
     If totalSf <= 0# Then Exit Function
 
+    ' Use actual building SF for denominator; fall back to affordable total.
+    buildingSf = g_MihTotalBuildingSf
+    If buildingSf <= 0# Then buildingSf = totalSf
+
     ' Section header
     ws.Cells(row, 1).Value = "SQUARE FOOTAGE SUMMARY"
     ws.Cells(row, 1).Font.Bold = True
@@ -2310,8 +2315,16 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Interior.Color = RGB(230, 245, 255)
     row = row + 1
 
-    ' Total building SF
+    ' Total building SF (actual building, not just affordable units)
     ws.Cells(row, 1).Value = "Total Building Net SF:"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 2).Value = buildingSf
+    ws.Cells(row, 2).NumberFormat = "#,##0.00"
+    ws.Cells(row, 2).Font.Bold = True
+    row = row + 1
+
+    ' Affordable-only SF subtotal
+    ws.Cells(row, 1).Value = "Affordable Net SF:"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 2).Value = totalSf
     ws.Cells(row, 2).NumberFormat = "#,##0.00"
@@ -2349,8 +2362,8 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
                 ws.Cells(row, 2).NumberFormat = "#,##0.00"
             End If
 
-            If totalSf > 0# And netSf > 0# Then
-                ws.Cells(row, 3).Value = netSf / totalSf
+            If buildingSf > 0# And netSf > 0# Then
+                ws.Cells(row, 3).Value = netSf / buildingSf
                 ws.Cells(row, 3).NumberFormat = "0.00%"
 
                 ' Highlight 40% AMI row for easy cap comparison
