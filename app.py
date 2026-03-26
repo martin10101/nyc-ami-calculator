@@ -785,10 +785,10 @@ def optimize_units():
         timing["unit_count"] = int(len(df_units))
         timing["parse_validation_ms"] = int(round((time.perf_counter() - request_start) * 1000))
 
-        # MIH 40% AMI SF constraint: when program is MIH and we have mih_residential_sf,
-        # constrain 40% AMI units to 10-11% of total building SF.
-        # Uses mih_residential_sf directly from payload — no project_overrides needed.
+        # MIH total_building_sf: store for project_summary display (Share of Building SF column).
+        # Share thresholds are already set correctly by _build_program_config() — do NOT overwrite them.
         mih_constraint_injected = False
+        total_building_sf = 0.0
         if program_norm == 'MIH' and mih_residential_sf is not None:
             try:
                 total_building_sf = float(mih_residential_sf)
@@ -796,17 +796,11 @@ def optimize_units():
                 total_building_sf = 0.0
             if total_building_sf > 0:
                 rules = config.setdefault('optimization_rules', {})
-                rules['share_thresholds'] = [{
-                    'band_threshold': 40,
-                    'min_share': 0.10,
-                    'max_share': 0.11,
-                    'denominator': 'total_building',
-                }]
                 rules['total_building_sf'] = total_building_sf
                 mih_constraint_injected = True
-                print(f"[MIH-DEBUG] INJECTED: total_building_sf={total_building_sf:.2f}, thresholds={rules['share_thresholds']}", flush=True)
+                print(f"[MIH-DEBUG] total_building_sf={total_building_sf:.2f}, share_thresholds (from _build_program_config)={rules.get('share_thresholds')}", flush=True)
         if not mih_constraint_injected:
-            print(f"[MIH-DEBUG] constraint NOT injected: program={program_norm}, mih_residential_sf={mih_residential_sf}", flush=True)
+            print(f"[MIH-DEBUG] total_building_sf NOT set: program={program_norm}, mih_residential_sf={mih_residential_sf}", flush=True)
 
         solver_start = time.perf_counter()
 
