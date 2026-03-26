@@ -516,11 +516,20 @@ def find_max_revenue_scenario(
                 continue
         band_combos = filtered
 
-    # Prefer checking higher-band mixes first for rent maximization (usually finds good solutions faster).
+    # Pre-filter combos where the lowest band already exceeds the WAAMI cap
+    # (identical to the filter in find_optimal_scenarios).  For MIH Option 1
+    # with cap=60, this removes combos like [70,80,90] that can never achieve
+    # WAAMI ≤ 60%.
+    waami_cap = float(optimization_rules.get('waami_cap_percent', 60))
+    band_combos = [combo for combo in band_combos if min(combo) <= waami_cap]
+
+    # Sort combos whose average band is closest to the WAAMI cap first.
+    # For tight caps (e.g. MIH Option 1 at 60%) this dramatically improves
+    # the chance of finding the best revenue combo within the check budget,
+    # instead of wasting attempts on high-band combos that are infeasible.
     band_combos = sorted(
         band_combos,
-        key=lambda combo: (max(combo), sum(combo) / len(combo), -min(combo)),
-        reverse=True,
+        key=lambda combo: (abs(sum(combo) / len(combo) - waami_cap), -max(combo), min(combo)),
     )
 
     max_combo_checks = optimization_rules.get('max_revenue_combo_checks')
