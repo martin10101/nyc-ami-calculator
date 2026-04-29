@@ -1568,6 +1568,8 @@ Private Function FormatScenarioNameForPicker(key As String) As String
     Select Case key
         Case "absolute_best"
             FormatScenarioNameForPicker = "Absolute Best"
+        Case "best_rent_roll"
+            FormatScenarioNameForPicker = "Best Rent Roll"
         Case "max_revenue"
             FormatScenarioNameForPicker = "Max Revenue (Rent-Max)"
         Case "best_3_band"
@@ -1577,7 +1579,10 @@ Private Function FormatScenarioNameForPicker(key As String) As String
         Case "alternative"
             FormatScenarioNameForPicker = "Alternative"
         Case "client_oriented"
-            FormatScenarioNameForPicker = "Client Oriented (Max Revenue)"
+            ' Suffix "(Max Revenue)" removed 2026-04 because client_oriented
+            ' is not necessarily the highest-revenue scenario when a
+            ' best_rent_roll exists.
+            FormatScenarioNameForPicker = "Client Oriented"
         Case Else
             If Left$(key, 15) = "edge_max_share_" Then
                 FormatScenarioNameForPicker = "Edge: 40% Max Share " & Mid$(key, 16) & "%"

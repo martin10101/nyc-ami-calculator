@@ -3022,6 +3022,8 @@ Private Function FormatScenarioName(key As String) As String
     Select Case key
         Case "absolute_best"
             FormatScenarioName = "ABSOLUTE BEST"
+        Case "best_rent_roll"
+            FormatScenarioName = "BEST RENT ROLL"
         Case "best_3_band"
             FormatScenarioName = "BEST 3-BAND"
         Case "best_2_band"
@@ -3029,7 +3031,10 @@ Private Function FormatScenarioName(key As String) As String
         Case "alternative"
             FormatScenarioName = "ALTERNATIVE"
         Case "client_oriented"
-            FormatScenarioName = "CLIENT ORIENTED (MAX REVENUE)"
+            ' Note: not actually max revenue when there are higher-revenue
+            ' scenarios such as best_rent_roll; suffix removed 2026-04 to
+            ' avoid the misleading label.
+            FormatScenarioName = "CLIENT ORIENTED"
         Case Else
             FormatScenarioName = UCase(Replace(key, "_", " "))
     End Select

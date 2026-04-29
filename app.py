@@ -1192,12 +1192,48 @@ def optimize_units():
                     notes.append(f"Warning: Could not compute edge scenarios: {str(e)}")
                 timing["edge_scenarios_ms"] = int(round((time.perf_counter() - edge_start) * 1000))
 
+        # --- Promote "Best Rent Roll" scenario (client request 2026-04) ---
+        # Find the highest annual-rent scenario across ALL scenarios. If the
+        # winner is currently keyed as edge_waami_floor_*, promote it to
+        # best_rent_roll: clear its tradeoffs (the client wants this; not a
+        # tradeoff), tag tier='rent_max', and delete the original edge key
+        # to avoid duplicate display. If a strict scenario already has the
+        # highest revenue, no promotion needed.
+        try:
+            best_rent_key = None
+            best_rent_value = -1.0
+            for _key, _scen in (scenarios or {}).items():
+                if not _scen:
+                    continue
+                _rt = _scen.get("rent_totals") or {}
+                _annual = float(_rt.get("net_annual") or _rt.get("total_annual_rent") or 0.0)
+                if _annual > best_rent_value:
+                    best_rent_value = _annual
+                    best_rent_key = _key
+            if best_rent_key and best_rent_key.startswith("edge_waami_floor_"):
+                if "best_rent_roll" not in scenarios:
+                    promoted = copy.deepcopy(scenarios[best_rent_key])
+                    promoted["tradeoffs"] = []
+                    promoted["tier"] = "rent_max"
+                    promoted_settings = promoted.get("edge_settings") or {}
+                    promoted_settings["promoted_to_best_rent_roll"] = True
+                    promoted["edge_settings"] = promoted_settings
+                    scenarios["best_rent_roll"] = promoted
+                    del scenarios[best_rent_key]
+                    waami_pct = float(promoted.get("waami") or 0.0) * 100
+                    notes.append(
+                        f"Promoted relaxed-floor scenario (WAAMI {waami_pct:.2f}%) to 'best_rent_roll' — annual rent ${best_rent_value:,.0f}."
+                    )
+        except Exception as e:
+            notes.append(f"Warning: best_rent_roll promotion failed: {str(e)}")
+
         # --- Fix-02: De-dupe outcome-identical scenarios (post-processing) ---
         # Only remove scenarios when they are truly identical in outputs (band mix + rent totals),
         # then keep the best "placement" (40% units lower floors; higher AMI/higher rent higher floors).
         try:
             scenario_priority = [
                 "absolute_best",
+                "best_rent_roll",
                 "best_3_band",
                 "best_2_band",
                 "alternative",
