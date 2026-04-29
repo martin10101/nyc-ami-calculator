@@ -55,7 +55,11 @@ def test_optimize_without_overrides_does_not_require_learning_fields():
     assert "learning" not in data
 
 
-def test_optimize_mih_option1_never_exceeds_40_band_max_share():
+def test_optimize_mih_option1_meets_40_band_min_share_floor():
+    """MIH Option 1: every returned scenario must have AT LEAST 10% of
+    residential SF at <=40% AMI (rule flipped from max ceiling to min floor
+    on 2026-04 per client request).
+    """
     client = app.test_client()
     units = []
     for i in range(1, 11):
@@ -76,16 +80,56 @@ def test_optimize_mih_option1_never_exceeds_40_band_max_share():
     assert data["success"] is True
     assert "scenarios" in data and data["scenarios"]
 
-    for scenario in data["scenarios"].values():
+    residential_sf = 1000.0
+    required = 0.10 * residential_sf
+    for name, scenario in data["scenarios"].items():
         assignments = scenario.get("assignments") or []
-        total_sf = 0.0
         low_sf = 0.0
         for a in assignments:
             sf = float(a.get("net_sf") or 0.0)
             ami = float(a.get("assigned_ami") or 0.0)
-            total_sf += sf
             if ami <= 0.4 + 1e-12:
                 low_sf += sf
-        if total_sf > 0:
-            assert (low_sf / total_sf) <= 0.10 + 1e-9
+        assert low_sf + 1e-9 >= required, (
+            f"Scenario '{name}' has {low_sf} SF at <=40 band; "
+            f"required >= {required} (10% of residential SF)"
+        )
+
+
+def test_optimize_mih_option4_meets_40_band_min_share_floor():
+    """MIH Option 4 also requires AT LEAST 10% at <=40 AMI band (added 2026-04)."""
+    client = app.test_client()
+    units = []
+    for i in range(1, 11):
+        units.append({"unit_id": f"U{i}", "bedrooms": 1, "net_sf": 100, "floor": i, "balcony": False})
+
+    payload = {
+        "program": "MIH",
+        "mih_option": "Option 4",
+        "mih_residential_sf": 1000,
+        "mih_max_band_percent": 135,
+        "utilities": {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"},
+        "units": units,
+    }
+
+    resp = client.post("/api/optimize", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert "scenarios" in data and data["scenarios"]
+
+    residential_sf = 1000.0
+    required = 0.10 * residential_sf
+    for name, scenario in data["scenarios"].items():
+        assignments = scenario.get("assignments") or []
+        low_sf = 0.0
+        for a in assignments:
+            sf = float(a.get("net_sf") or 0.0)
+            ami = float(a.get("assigned_ami") or 0.0)
+            if ami <= 0.4 + 1e-12:
+                low_sf += sf
+        assert low_sf + 1e-9 >= required, (
+            f"Option 4 scenario '{name}' has {low_sf} SF at <=40 band; "
+            f"required >= {required} (10% of residential SF)"
+        )
 

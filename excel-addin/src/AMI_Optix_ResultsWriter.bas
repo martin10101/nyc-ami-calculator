@@ -2777,12 +2777,12 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             ws.Cells(row, 1).Value = "Band"
             ws.Cells(row, 2).Value = "Units"
             ws.Cells(row, 3).Value = "Net SF"
-            ws.Cells(row, 4).Value = "Share of SF"
+            ws.Cells(row, 4).Value = "Share of SF AMI"
             Dim hasBuildingSfCol As Boolean
             hasBuildingSfCol = (g_MihTotalBuildingSf > 0#)
             Dim headerEndCol As Long
             If hasBuildingSfCol Then
-                ws.Cells(row, 5).Value = "Share of Building SF"
+                ws.Cells(row, 5).Value = "Share of Full Building SF"
                 headerEndCol = 5
             Else
                 headerEndCol = 4

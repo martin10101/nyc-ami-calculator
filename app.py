@@ -198,18 +198,24 @@ def _build_program_config(
         raise ValueError("MIH requires mih_residential_sf > 0 (from MIH!J21).")
 
     # Configure MIH constraints.
+    # Note: the 40% AMI band must hit AT LEAST 10% of residential SF for both
+    # Option 1 and Option 4 (client rule, 2026-04). The /api/optimize MIH path
+    # walks this floor up in 0.1% steps if the strict 10% floor produces no
+    # scenarios — see the floor-walking loop near find_optimal_scenarios.
     if option_norm == 'OPTION 1':
         rules['waami_cap_percent'] = 60.0
         rules['max_bands_per_scenario'] = 3
         rules['share_thresholds'] = [
-            # MIH Option 1: at-most 10% of residential SF may be at <=40% AMI.
-            {'band_threshold': 40, 'max_share': 0.10, 'denominator': 'residential'},
+            # MIH Option 1: at-LEAST 10% of residential SF must be at <=40% AMI.
+            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
         ]
     else:
         rules['waami_cap_percent'] = 115.0
         rules['max_bands_per_scenario'] = 4
-        # Based on client workbook formulas: >=5% at <=70 and >=10% at <=90.
+        # MIH Option 4: same 40% floor as Option 1, plus client-workbook
+        # formulas requiring >=5% at <=70 and >=10% at <=90.
         rules['share_thresholds'] = [
+            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
             {'band_threshold': 70, 'min_share': 0.05, 'denominator': 'residential'},
             {'band_threshold': 90, 'min_share': 0.10, 'denominator': 'residential'},
         ]
@@ -805,7 +811,43 @@ def optimize_units():
         solver_start = time.perf_counter()
 
         # Run the strict solver (optionally with project overrides for premium weights / unit rules).
-        solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
+        # MIH: walk the 40 AMI band min_share floor UP in 0.1% steps if the strict 10% floor
+        # produces no scenarios; cap at 15%. Per client spec 2026-04: keep returning scenarios
+        # even when 10% exact is infeasible — walk the constraint up and rerun the optimizer.
+        # Mirrors the UAP widening pattern below. After the walk settles, config is mutated
+        # so the same final floor flows into find_max_revenue_scenario later in the request.
+        if program_norm == 'MIH':
+            mih_floor_start = 0.100
+            mih_floor_max = 0.150
+            mih_floor_step = 0.001
+            mih_walk_results = None
+            mih_walk_last = None
+            mih_walk_value = mih_floor_start
+
+            while mih_walk_value <= mih_floor_max + 1e-9:
+                for _t in (config.get('optimization_rules', {}) or {}).get('share_thresholds', []):
+                    if int(_t.get('band_threshold', 0)) == 40:
+                        _t['min_share'] = mih_walk_value
+                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
+                mih_walk_last = _trial
+                if (_trial.get('scenarios') or {}).get('absolute_best'):
+                    mih_walk_results = _trial
+                    if mih_walk_value > mih_floor_start + 1e-9:
+                        mih_walk_results.setdefault('notes', []).append(
+                            f"40% AMI floor walked from {mih_floor_start*100:.1f}% up to {mih_walk_value*100:.1f}% to find feasible scenarios for this building."
+                        )
+                    break
+                mih_walk_value = round(mih_walk_value + mih_floor_step, 5)
+
+            if mih_walk_results is None:
+                solver_results = mih_walk_last or {'scenarios': {}, 'notes': []}
+                solver_results.setdefault('notes', []).append(
+                    f"No feasible MIH scenarios found at 40% AMI floors from {mih_floor_start*100:.1f}% to {mih_floor_max*100:.1f}%."
+                )
+            else:
+                solver_results = mih_walk_results
+        else:
+            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
 
