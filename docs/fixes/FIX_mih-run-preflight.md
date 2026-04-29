@@ -10,16 +10,16 @@
 
 | Step | When | Result |
 |---|---|---|
-| Committed locally | 2026-04-29 — sha `_pending_` | ⏳ |
-| Pushed `fix/mih-run-preflight` | _pending_ | ⏳ |
-| Fast-forward merged into `feature/excel-agent-foundation` | _pending_ | ⏳ |
-| Pushed `feature/excel-agent-foundation` (triggers Render auto-deploy) | _pending_ | ⏳ |
-| Render deploy triggered | _pending — not waiting per workflow_ | ⏳ |
-| Client PC refreshed via PS agent | _pending — user runs the one-liner_ | ⏳ |
-| Manual test passed on client PC | _pending — user follows the test checklist below_ | ⏳ |
-| Approved by client | _pending_ | ⏳ |
+| Committed locally | 2026-04-29 — sha `2510b90` | ✅ |
+| Pushed `fix/mih-run-preflight` | 2026-04-29 ~11:30Z | ✅ |
+| Fast-forward merged into `feature/excel-agent-foundation` | 2026-04-29 ~11:30Z | ✅ |
+| Pushed `feature/excel-agent-foundation` (triggers Render auto-deploy) | 2026-04-29 ~11:30Z | ✅ |
+| Render deploy triggered (VBA-only — server functionally unchanged) | 2026-04-29 | ✅ |
+| Client PC refreshed via PS agent | 2026-04-29 — `Refresh-AmiOptixAgentFromGitHub.ps1` ran clean: build + acceptance passed (4/4 scenarios) | ✅ |
+| Manual test passed on client PC | 2026-04-29 — popup appears on Run MIH; YES proceeds, NO cancels and shows reminder | ✅ |
+| Approved by client | 2026-04-29 — "ok it worked lets move straight to d" | ✅ |
 
-This change is VBA-only — Render serves the Python backend, which is unchanged.
+**Fix A closed out.** This change is VBA-only — Render serves the Python backend, which was unchanged.
 
 ## Problem
 
