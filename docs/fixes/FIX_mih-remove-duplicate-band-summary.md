@@ -10,20 +10,31 @@
 
 | Step | When | Result |
 |---|---|---|
-| Committed locally | 2026-04-29 — sha `1e9acec` | ✅ |
-| Pushed `fix/mih-remove-duplicate-band-summary` | _pending_ | ⏳ |
-| Fast-forward merged into `feature/excel-agent-foundation` | _pending_ | ⏳ |
-| Pushed `feature/excel-agent-foundation` (triggers Render auto-deploy) | _pending_ | ⏳ |
-| Render deploy live | _pending_ | ⏳ |
+| Committed locally | 2026-04-29 — sha `cfc6bbc` (amended from `1e9acec` to include this Status table) | ✅ |
+| Pushed `fix/mih-remove-duplicate-band-summary` | 2026-04-29 ~11:00Z | ✅ |
+| Fast-forward merged into `feature/excel-agent-foundation` | 2026-04-29 ~11:01Z | ✅ |
+| Pushed `feature/excel-agent-foundation` (triggers Render auto-deploy) | 2026-04-29 ~11:02Z | ✅ |
+| Render deploy live (sha `cfc6bbc`) | 2026-04-29 11:05:51Z (~3 min build) | ✅ |
 | Client PC refreshed via PS agent | _pending — user runs the one-command_ | ⏳ |
 | Manual test passed on client PC | _pending — user follows the test checklist below_ | ⏳ |
 | Approved by client | _pending_ | ⏳ |
 
-This table is updated as the deploy chain progresses. Note: the change is
-VBA-only — Render serves the Python backend, which is unchanged. The
-Render deploy step is for keeping `feature/excel-agent-foundation`
-in sync as the source of truth, not because Render's runtime behavior
-changes.
+Note: the change is VBA-only — Render serves the Python backend, which
+is unchanged. The Render deploy step kept `feature/excel-agent-foundation`
+in sync as the source of truth; Render's runtime behavior did not
+change.
+
+## One-line PowerShell command for client-PC update
+
+Run on the client PC (cmd.exe, Run dialog, or PowerShell):
+
+```
+powershell -ExecutionPolicy Bypass -Command "& 'C:\AMI_Optix_Agent\scripts\Refresh-AmiOptixAgentFromGitHub.ps1' -AgentRoot C:\AMI_Optix_Agent; & 'C:\AMI_Optix_Agent\scripts\Run-AmiOptixAutofix.ps1' -AgentRoot C:\AMI_Optix_Agent"
+```
+
+This is the standard one-liner for every fix in this project. It pulls
+the latest `feature/excel-agent-foundation` from GitHub, then rebuilds
+the staged `.xlam` and runs acceptance.
 
 ## Problem
 
