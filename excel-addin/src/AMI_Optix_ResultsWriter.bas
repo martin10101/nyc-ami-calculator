@@ -2264,8 +2264,9 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
 End Function
 
 Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long, scenario As Object) As Long
-    ' Writes a square footage summary at the top of the results page showing
-    ' total building SF and per-AMI-band SF so the 40% AMI cap is obvious.
+    ' Writes total building SF and affordable SF totals at the top of the
+    ' MIH results sheet. Per-AMI-band breakdown lives in the Scenario Manual
+    ' "Band Mix" table below; do not duplicate it here.
     Dim row As Long
     Dim metrics As Object
     Dim bandMix As Object
@@ -2273,9 +2274,6 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     Dim buildingSf As Double
     Dim idx As Long
     Dim bm As Object
-    Dim bandVal As Double
-    Dim netSf As Double
-    Dim bandLabel As String
 
     row = startRow
     WriteMihSquareFootageSummary = row
@@ -2330,52 +2328,6 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     ws.Cells(row, 2).NumberFormat = "#,##0.00"
     ws.Cells(row, 2).Font.Bold = True
     row = row + 1
-
-    ' Column headers
-    ws.Cells(row, 1).Value = "AMI Band"
-    ws.Cells(row, 2).Value = "Net SF"
-    ws.Cells(row, 3).Value = "% of Total Building SF"
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Font.Bold = True
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Interior.Color = RGB(220, 235, 250)
-    row = row + 1
-
-    ' Per-band rows
-    For idx = 1 To bandMix.Count
-        Set bm = bandMix(idx)
-        If Not bm Is Nothing Then
-            bandVal = 0#
-            bandLabel = ""
-            If bm.Exists("band") Then
-                If IsNumeric(bm("band")) Then
-                    bandVal = CDbl(bm("band"))
-                    bandLabel = Format$(bandVal, "0") & "% AMI"
-                Else
-                    bandLabel = CStr(bm("band")) & "% AMI"
-                End If
-                ws.Cells(row, 1).Value = bandLabel
-            End If
-
-            netSf = 0#
-            If bm.Exists("net_sf") Then
-                netSf = CDbl(bm("net_sf"))
-                ws.Cells(row, 2).Value = netSf
-                ws.Cells(row, 2).NumberFormat = "#,##0.00"
-            End If
-
-            If buildingSf > 0# And netSf > 0# Then
-                ws.Cells(row, 3).Value = netSf / buildingSf
-                ws.Cells(row, 3).NumberFormat = "0.00%"
-
-                ' Highlight 40% AMI row for easy cap comparison
-                If bandVal = 40 Then
-                    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3)).Interior.Color = RGB(255, 255, 200)
-                    ws.Cells(row, 3).Font.Bold = True
-                End If
-            End If
-
-            row = row + 1
-        End If
-    Next idx
 
     row = row + 1
     WriteMihSquareFootageSummary = row
