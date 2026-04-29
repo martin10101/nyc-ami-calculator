@@ -88,6 +88,22 @@ Public Sub Ribbon_RunSolverUAP(control As IRibbonControl)
 End Sub
 
 Public Sub Ribbon_RunSolverMIH(control As IRibbonControl)
+    ' Pre-flight reminder before running MIH: confirm Option 1/4 selected
+    ' and Utilities filled in. Pure reminder - does not auto-detect; the
+    ' client confirms manually so they get the prompt every time.
+    Dim msg As String
+    msg = "Before running MIH, please confirm:" & vbCrLf & vbCrLf & _
+          "  [ ]  Option 1 or Option 4 is selected on the MIH sheet" & vbCrLf & _
+          "  [ ]  Utilities are filled in (Settings > Utilities)" & vbCrLf & vbCrLf & _
+          "Click YES if both are done - MIH will run." & vbCrLf & _
+          "Click NO to cancel and complete the missing item(s)."
+    If MsgBox(msg, vbYesNo + vbInformation, "Run MIH - Pre-flight") = vbNo Then
+        MsgBox "Please select Option 1 or 4 and fill in Utilities, then click Run MIH again.", _
+               vbInformation, "Run MIH cancelled"
+        EnsureAMIOptixTabActive
+        Exit Sub
+    End If
+
     RunOptimizationForProgram "MIH"
     EnsureAMIOptixTabActive
 End Sub
