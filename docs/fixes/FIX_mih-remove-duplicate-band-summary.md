@@ -15,9 +15,11 @@
 | Fast-forward merged into `feature/excel-agent-foundation` | 2026-04-29 ~11:01Z | ✅ |
 | Pushed `feature/excel-agent-foundation` (triggers Render auto-deploy) | 2026-04-29 ~11:02Z | ✅ |
 | Render deploy live (sha `cfc6bbc`) | 2026-04-29 11:05:51Z (~3 min build) | ✅ |
-| Client PC refreshed via PS agent | _pending — user runs the one-command_ | ⏳ |
-| Manual test passed on client PC | _pending — user follows the test checklist below_ | ⏳ |
-| Approved by client | _pending_ | ⏳ |
+| Client PC refreshed via PS agent | 2026-04-29 ~11:15Z — `Refresh-AmiOptixAgentFromGitHub.ps1` ran clean: preflight passed, build succeeded, `.xlam` deployed to `AppData\Roaming\Microsoft\AddIns\AMI_Optix.xlam`, all 4 acceptance scenarios passed (Diagnostics smoke, Run UAP, Run MIH, Verify Manual Rents API) | ✅ |
+| Manual test passed on client PC | 2026-04-29 — visually confirmed in Excel | ✅ |
+| Approved by client | 2026-04-29 — "ok it worked" | ✅ |
+
+**Fix C closed out. Final SHA on `feature/excel-agent-foundation`: `2d68328`** (the actual code change was at `cfc6bbc`; `2d68328` is this Status update).
 
 Note: the change is VBA-only — Render serves the Python backend, which
 is unchanged. The Render deploy step kept `feature/excel-agent-foundation`
@@ -29,12 +31,18 @@ change.
 Run on the client PC (cmd.exe, Run dialog, or PowerShell):
 
 ```
-powershell -ExecutionPolicy Bypass -Command "& 'C:\AMI_Optix_Agent\scripts\Refresh-AmiOptixAgentFromGitHub.ps1' -AgentRoot C:\AMI_Optix_Agent; & 'C:\AMI_Optix_Agent\scripts\Run-AmiOptixAutofix.ps1' -AgentRoot C:\AMI_Optix_Agent"
+powershell -ExecutionPolicy Bypass -File C:\AMI_Optix_Agent\scripts\Refresh-AmiOptixAgentFromGitHub.ps1 -AgentRoot C:\AMI_Optix_Agent
 ```
 
 This is the standard one-liner for every fix in this project. It pulls
-the latest `feature/excel-agent-foundation` from GitHub, then rebuilds
-the staged `.xlam` and runs acceptance.
+the latest `feature/excel-agent-foundation` from GitHub, runs preflight,
+rebuilds the staged `.xlam`, deploys it to `AppData\Roaming\Microsoft\AddIns\`,
+and runs the acceptance suite — all in one shot.
+
+(Earlier we chained `Run-AmiOptixAutofix.ps1` on the end; that's redundant
+because Refresh already does preflight + build + acceptance + deploy
+internally, and Autofix's manual-package gate produced misleading
+"Blocked" output for pre-existing `.frm` / ribbon-XML flags.)
 
 ## Problem
 
