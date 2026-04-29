@@ -795,9 +795,58 @@ Public Sub Ribbon_SelectRentRollYear(control As IRibbonControl, id As String, in
 
     Call MaybeWarnRentRollYearMismatch(year)
 
+    ' Recalculate all scenario rents (5 solver scenarios + Scenario Manual) using
+    ' the new year x current utility selections. Skip silently if scenarios are
+    ' not yet on the sheet (first-time year change before any Run MIH/UAP) or if
+    ' the API key is unset, so we don't fire surprise popups for what is just a
+    ' dropdown change.
+    On Error Resume Next
+    If HasAPIKey() Then
+        If HasExistingSolverScenarios() Then
+            Call ManualCalculateScenario(DetectProgramFromWorkbook())
+        End If
+    End If
+    On Error GoTo 0
+
     ' Update the "Rent Tables Status" label to reflect the selected year.
     Call InvalidateRibbonControl("lblRentTablesStatus")
 End Sub
+
+Private Function HasExistingSolverScenarios() As Boolean
+    ' Returns True if the "AMI Scenarios" sheet exists and contains at least one
+    ' "SCENARIO N:" header that is not the Manual block. Used to gate the
+    ' year-change auto-recalc so we don't trigger setup popups before the user
+    ' has run the optimizer at least once.
+    On Error GoTo Fail
+
+    HasExistingSolverScenarios = False
+    If ActiveWorkbook Is Nothing Then Exit Function
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    Set ws = ActiveWorkbook.Worksheets("AMI Scenarios")
+    On Error GoTo Fail
+    If ws Is Nothing Then Exit Function
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 1 Then Exit Function
+
+    Dim r As Long
+    Dim cellA As String
+    For r = 1 To lastRow
+        cellA = Trim$(CStr(ws.Cells(r, 1).Value))
+        If Left$(cellA, 9) = "SCENARIO " And InStr(1, cellA, "MANUAL", vbTextCompare) = 0 Then
+            HasExistingSolverScenarios = True
+            Exit Function
+        End If
+    Next r
+    Exit Function
+
+Fail:
+    HasExistingSolverScenarios = False
+End Function
 
 Public Sub Ribbon_GetRentRollYearCount(control As IRibbonControl, ByRef returnedVal)
     ' NOTE: RibbonX passes this ByRef as a Variant; keep it untyped to avoid "Type mismatch".
