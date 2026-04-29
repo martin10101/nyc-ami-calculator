@@ -615,31 +615,20 @@ Private Function GetUtilitySelections() As Object
 End Function
 
 Public Function GetUtilitySelectionsForProgram(program As String) As Object
-    ' Returns utility selections from workbook (if present) or stored settings.
+    ' Source of truth: the user's picks in the Utilities ribbon dialog, persisted
+    ' to the Windows Registry by frmUtilities.btnSave_Click and the ribbon
+    ' InputBox path. The previous workbook-sheet precedence silently overrode
+    ' form picks with whatever was in the property workbook's utility cells; that
+    ' has been removed. To change utilities, the user reopens the Utilities
+    ' dialog, changes picks, and clicks Run MIH/UAP again.
+    ' (Program argument retained for signature compatibility; not currently used.)
     Dim utils As Object
     Set utils = CreateObject("Scripting.Dictionary")
 
-    Dim programNorm As String
-    programNorm = UCase(Trim(program))
-
-    Dim readFromWorkbook As Boolean
-    readFromWorkbook = False
-
-    If programNorm = "MIH" Then
-        readFromWorkbook = TryReadMIHUtilities(utils)
-    Else
-        readFromWorkbook = TryReadUAPUtilities(utils)
-    End If
-
-    If Not readFromWorkbook Then
-        utils("electricity") = GetSetting("AMI_Optix", "Utilities", "electricity", "na")
-        utils("cooking") = GetSetting("AMI_Optix", "Utilities", "cooking", "na")
-        utils("heat") = GetSetting("AMI_Optix", "Utilities", "heat", "na")
-        utils("hot_water") = GetSetting("AMI_Optix", "Utilities", "hot_water", "na")
-    Else
-        ' Persist so the user sees consistent choices if workbook detection isn't available next time.
-        SaveUtilitySelections CStr(utils("electricity")), CStr(utils("cooking")), CStr(utils("heat")), CStr(utils("hot_water"))
-    End If
+    utils("electricity") = GetSetting("AMI_Optix", "Utilities", "electricity", "na")
+    utils("cooking") = GetSetting("AMI_Optix", "Utilities", "cooking", "na")
+    utils("heat") = GetSetting("AMI_Optix", "Utilities", "heat", "na")
+    utils("hot_water") = GetSetting("AMI_Optix", "Utilities", "hot_water", "na")
 
     Set GetUtilitySelectionsForProgram = utils
 End Function
