@@ -83,6 +83,22 @@ Public Sub Ribbon_RunSolver(control As IRibbonControl)
 End Sub
 
 Public Sub Ribbon_RunSolverUAP(control As IRibbonControl)
+    ' Pre-flight reminder before running UAP: confirm Utilities filled in.
+    ' Pure reminder - does not auto-detect; the client confirms manually
+    ' so they get the prompt every time. Mirrors the MIH preflight (Fix A)
+    ' but only checks Utilities (UAP has no Option 1/4 selection).
+    Dim msg As String
+    msg = "Before running UAP, please confirm:" & vbCrLf & vbCrLf & _
+          "  [ ]  Utilities are filled in (Settings > Utilities)" & vbCrLf & vbCrLf & _
+          "Click YES if done - UAP will run." & vbCrLf & _
+          "Click NO to cancel and complete the missing item."
+    If MsgBox(msg, vbYesNo + vbInformation, "Run UAP - Pre-flight") = vbNo Then
+        MsgBox "Please fill in Utilities, then click Run UAP again.", _
+               vbInformation, "Run UAP cancelled"
+        EnsureAMIOptixTabActive
+        Exit Sub
+    End If
+
     RunOptimizationForProgram "UAP"
     EnsureAMIOptixTabActive
 End Sub

@@ -82,6 +82,10 @@ def test_optimize_mih_option1_meets_40_band_min_share_floor():
 
     residential_sf = 1000.0
     required = 0.10 * residential_sf
+    # Ceiling at 12.5% (added 2026-04 to keep 40 band close to 10%);
+    # the floor-walking loop may slide the window up to a max ceiling
+    # of 15% + 2.5% = 17.5% if the strict window is infeasible.
+    walked_ceiling = 0.175 * residential_sf
     for name, scenario in data["scenarios"].items():
         assignments = scenario.get("assignments") or []
         low_sf = 0.0
@@ -93,6 +97,10 @@ def test_optimize_mih_option1_meets_40_band_min_share_floor():
         assert low_sf + 1e-9 >= required, (
             f"Scenario '{name}' has {low_sf} SF at <=40 band; "
             f"required >= {required} (10% of residential SF)"
+        )
+        assert low_sf <= walked_ceiling + 1e-9, (
+            f"Scenario '{name}' has {low_sf} SF at <=40 band; "
+            f"exceeds {walked_ceiling} (17.5% walked-up ceiling)"
         )
 
 
@@ -120,6 +128,7 @@ def test_optimize_mih_option4_meets_40_band_min_share_floor():
 
     residential_sf = 1000.0
     required = 0.10 * residential_sf
+    walked_ceiling = 0.175 * residential_sf
     for name, scenario in data["scenarios"].items():
         assignments = scenario.get("assignments") or []
         low_sf = 0.0
@@ -131,5 +140,9 @@ def test_optimize_mih_option4_meets_40_band_min_share_floor():
         assert low_sf + 1e-9 >= required, (
             f"Option 4 scenario '{name}' has {low_sf} SF at <=40 band; "
             f"required >= {required} (10% of residential SF)"
+        )
+        assert low_sf <= walked_ceiling + 1e-9, (
+            f"Option 4 scenario '{name}' has {low_sf} SF at <=40 band; "
+            f"exceeds {walked_ceiling} (17.5% walked-up ceiling)"
         )
 

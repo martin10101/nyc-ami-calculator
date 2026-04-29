@@ -1,10 +1,27 @@
-# FIX: MIH — 40% AMI band must hit ≥10% of full residential building SF
+# FIX: MIH — 40% AMI band window [10.0%, 12.5%] of full residential building SF
 
-**Branch:** `fix/mih-40-ami-floor-10pct`
+**Branch:** `fix/mih-40-ami-floor-10pct` + `fix/mih-band-ceiling-and-uap-popup` (refinement D.2)
 **Cut from:** `feature/excel-agent-foundation` @ `2510b90`
 **Date:** 2026-04-29
 **Author:** client request via remote session
 **Risk:** Medium-High (changes solver behavior for MIH, affects scenario output)
+
+## Refinement D.2 — added 12.5% ceiling (2026-04-29)
+
+Initial Fix D test on the 230 Kent building showed scenarios at 14-17% on the 40% band — the optimizer was overshooting the 10% floor to enable high-revenue band mixes (40+80+90, 40+80+110). Per the client's original spec (*"It just jumps in very small increments up. It doesn't just try to automatically jump to 14%"*), we added an **upper bound at 12.5%** to keep the 40 band close to 10%.
+
+**Change:**
+- `app.py _build_program_config`: added `'max_share': 0.125` to the 40-band entry for both Option 1 and Option 4. Window is now [10.0%, 12.5%].
+- Walking loop in `app.py /api/optimize` MIH path: now SLIDES the whole window up (both min and max) keeping the 2.5% width constant. So [10.0%, 12.5%] → [10.1%, 12.6%] → ... up to [15.0%, 17.5%] if no scenarios fit.
+
+**Effect on 230 Kent (the screenshot building):**
+- Before D.2: scenarios at 12.11%, 12.24%, 12.65%, 14.65%, 15.82%, 17.23% (max revenue ~$215K).
+- After D.2: scenarios should land tightly in [10.0%, 12.5%] using lower-AMI band mixes. Lower per-scenario revenue but tighter to the 10% target. Test on this building to confirm and adjust the width if needed.
+
+**Knobs to tighten/loosen** (one-line edits in `app.py`):
+- `mih_window_width = 0.025` — drop to 0.015 for stricter (window 10-11.5%), raise to 0.05 for looser (10-15%).
+- `mih_floor_step = 0.001` — coarsen to 0.005 to limit walking to 11 iterations max if perf bites.
+- `mih_floor_max = 0.150` — change cap if 15% min_share isn't enough.
 
 ## Status
 

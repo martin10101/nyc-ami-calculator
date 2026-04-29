@@ -198,24 +198,27 @@ def _build_program_config(
         raise ValueError("MIH requires mih_residential_sf > 0 (from MIH!J21).")
 
     # Configure MIH constraints.
-    # Note: the 40% AMI band must hit AT LEAST 10% of residential SF for both
-    # Option 1 and Option 4 (client rule, 2026-04). The /api/optimize MIH path
-    # walks this floor up in 0.1% steps if the strict 10% floor produces no
-    # scenarios — see the floor-walking loop near find_optimal_scenarios.
+    # Note: the 40% AMI band is constrained to a NARROW WINDOW [10.0%, 12.5%]
+    # of residential SF for both Option 1 and Option 4 (client rule, 2026-04).
+    # Floor at 10% prevents below-spec scenarios; ceiling at 12.5% prevents the
+    # optimizer from overshooting (e.g., piling SF into 40% to balance high
+    # bands like 90/110, which produced 14-17% scenarios). The /api/optimize
+    # MIH path SLIDES this window UP in 0.1% steps if no scenarios fit the
+    # initial window — see the floor-walking loop near find_optimal_scenarios.
     if option_norm == 'OPTION 1':
         rules['waami_cap_percent'] = 60.0
         rules['max_bands_per_scenario'] = 3
         rules['share_thresholds'] = [
-            # MIH Option 1: at-LEAST 10% of residential SF must be at <=40% AMI.
-            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
+            # MIH Option 1: 40% band must be in [10.0%, 12.5%] of residential SF.
+            {'band_threshold': 40, 'min_share': 0.10, 'max_share': 0.125, 'denominator': 'residential'},
         ]
     else:
         rules['waami_cap_percent'] = 115.0
         rules['max_bands_per_scenario'] = 4
-        # MIH Option 4: same 40% floor as Option 1, plus client-workbook
+        # MIH Option 4: same 40% window as Option 1, plus client-workbook
         # formulas requiring >=5% at <=70 and >=10% at <=90.
         rules['share_thresholds'] = [
-            {'band_threshold': 40, 'min_share': 0.10, 'denominator': 'residential'},
+            {'band_threshold': 40, 'min_share': 0.10, 'max_share': 0.125, 'denominator': 'residential'},
             {'band_threshold': 70, 'min_share': 0.05, 'denominator': 'residential'},
             {'band_threshold': 90, 'min_share': 0.10, 'denominator': 'residential'},
         ]
@@ -811,15 +814,18 @@ def optimize_units():
         solver_start = time.perf_counter()
 
         # Run the strict solver (optionally with project overrides for premium weights / unit rules).
-        # MIH: walk the 40 AMI band min_share floor UP in 0.1% steps if the strict 10% floor
-        # produces no scenarios; cap at 15%. Per client spec 2026-04: keep returning scenarios
-        # even when 10% exact is infeasible — walk the constraint up and rerun the optimizer.
-        # Mirrors the UAP widening pattern below. After the walk settles, config is mutated
-        # so the same final floor flows into find_max_revenue_scenario later in the request.
+        # MIH: SLIDE the 40 AMI band window [min_share, max_share] UP in 0.1% steps if no
+        # scenarios fit the initial window [10.0%, 12.5%]. Window WIDTH stays constant (2.5%)
+        # so each step is e.g. [10.1%, 12.6%], [10.2%, 12.7%]... Cap at min_share=15%. Per
+        # client spec 2026-04: keep returning scenarios even when the strict window is
+        # infeasible — slide the window up and rerun the optimizer. Mirrors the UAP widening
+        # pattern below. After the walk settles, config is mutated so the same final window
+        # flows into find_max_revenue_scenario later in the request.
         if program_norm == 'MIH':
             mih_floor_start = 0.100
             mih_floor_max = 0.150
             mih_floor_step = 0.001
+            mih_window_width = 0.025  # max_share = min_share + 2.5%
             mih_walk_results = None
             mih_walk_last = None
             mih_walk_value = mih_floor_start
@@ -828,21 +834,24 @@ def optimize_units():
                 for _t in (config.get('optimization_rules', {}) or {}).get('share_thresholds', []):
                     if int(_t.get('band_threshold', 0)) == 40:
                         _t['min_share'] = mih_walk_value
+                        _t['max_share'] = round(mih_walk_value + mih_window_width, 5)
                 _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
                 mih_walk_last = _trial
                 if (_trial.get('scenarios') or {}).get('absolute_best'):
                     mih_walk_results = _trial
                     if mih_walk_value > mih_floor_start + 1e-9:
+                        _max_pct = (mih_walk_value + mih_window_width) * 100
                         mih_walk_results.setdefault('notes', []).append(
-                            f"40% AMI floor walked from {mih_floor_start*100:.1f}% up to {mih_walk_value*100:.1f}% to find feasible scenarios for this building."
+                            f"40% AMI window slid up to [{mih_walk_value*100:.1f}%, {_max_pct:.1f}%] to find feasible scenarios for this building."
                         )
                     break
                 mih_walk_value = round(mih_walk_value + mih_floor_step, 5)
 
             if mih_walk_results is None:
                 solver_results = mih_walk_last or {'scenarios': {}, 'notes': []}
+                _max_pct = (mih_floor_max + mih_window_width) * 100
                 solver_results.setdefault('notes', []).append(
-                    f"No feasible MIH scenarios found at 40% AMI floors from {mih_floor_start*100:.1f}% to {mih_floor_max*100:.1f}%."
+                    f"No feasible MIH scenarios found with 40% AMI window slid from [{mih_floor_start*100:.1f}%, {(mih_floor_start+mih_window_width)*100:.1f}%] up to [{mih_floor_max*100:.1f}%, {_max_pct:.1f}%]."
                 )
             else:
                 solver_results = mih_walk_results
