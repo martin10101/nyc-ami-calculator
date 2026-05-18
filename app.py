@@ -231,10 +231,17 @@ def _build_program_config(
     # Provide the denominator for residential-share constraints.
     rules['residential_sf'] = float(mih_residential_sf)
 
-    # Band cap is enforced by limiting potential bands.
+    # Band cap. Client decision 2026-05-18: MIH must NEVER use bands above 100% AMI
+    # (Option 1 AND Option 4). We hard-cap on the server regardless of what the
+    # client workbook sends, so we don't have to re-edit every property workbook
+    # in the field - existing workbooks may still set 130 or 135 in the Prog sheet
+    # and we silently floor that to 100.
+    # To intentionally allow a LOWER cap (e.g. 80) the workbook can still send a
+    # smaller mih_max_band_percent; only the upper bound is enforced.
+    MIH_HARD_BAND_CAP = 100
     if mih_max_band_percent is None:
-        mih_max_band_percent = 135
-    max_band = int(mih_max_band_percent)
+        mih_max_band_percent = MIH_HARD_BAND_CAP
+    max_band = min(int(mih_max_band_percent), MIH_HARD_BAND_CAP)
     candidate_bands = [40, 60, 70, 80, 90, 100, 110, 120, 130, 135]
     rules['potential_bands'] = [b for b in candidate_bands if b <= max_band and b != 50]
 
