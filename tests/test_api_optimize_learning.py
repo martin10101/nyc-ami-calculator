@@ -146,3 +146,37 @@ def test_optimize_mih_option4_meets_40_band_min_share_floor():
             f"exceeds {walked_ceiling} (17.5% walked-up ceiling)"
         )
 
+
+def test_optimize_mih_caps_bands_at_100_regardless_of_payload():
+    """MIH band cap. Client decision 2026-05-18: even if the client workbook
+    still sends mih_max_band_percent >= 110 (Option 1 OR Option 4), the server
+    must hard-cap returned scenarios at 100% AMI. No assignment in any returned
+    scenario may have assigned_ami > 1.00.
+    """
+    client = app.test_client()
+    units = [
+        {"unit_id": f"U{i}", "bedrooms": 1, "net_sf": 100, "floor": i, "balcony": False}
+        for i in range(1, 11)
+    ]
+    for option in ("Option 1", "Option 4"):
+        payload = {
+            "program": "MIH",
+            "mih_option": option,
+            "mih_residential_sf": 1000,
+            "mih_max_band_percent": 135,  # Old default; server should cap to 100.
+            "utilities": {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"},
+            "units": units,
+        }
+        resp = client.post("/api/optimize", json=payload)
+        assert resp.status_code == 200, f"{option}: HTTP {resp.status_code}"
+        data = resp.get_json()
+        assert data.get("success") is True, f"{option}: {data}"
+        scenarios = data.get("scenarios") or {}
+        for name, scenario in scenarios.items():
+            for a in (scenario.get("assignments") or []):
+                ami = float(a.get("assigned_ami") or 0.0)
+                assert ami <= 1.00 + 1e-9, (
+                    f"{option} scenario '{name}' contains assigned_ami={ami} "
+                    f"(unit {a.get('unit_id')}) - exceeds 100% cap"
+                )
+
