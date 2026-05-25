@@ -238,6 +238,17 @@ def _parse_allowances(
         if not cleaned_option or cleaned_option.lower() == "select -->>":
             continue
 
+        # The "Apartment Electricity only" column has no per-option label row (it's
+        # the column's only paid option). When the dropdown in row 17 happens to
+        # read "N/A or owner pays" (default state of a fresh HPD template), the
+        # fallback above pulls that string in as if it were the option name —
+        # which causes the column's allowance values to land under the wrong
+        # category. Force the canonical "Tenant Pays" label when we recognise
+        # the electricity category header but the option string came back as
+        # the dropdown sentinel.
+        if current_category == 'electricity' and cleaned_option == 'N/A or owner pays':
+            cleaned_option = 'Tenant Pays'
+
         category_key = LABEL_TO_CATEGORY.get(cleaned_option) or current_category
         if not category_key:
             continue
