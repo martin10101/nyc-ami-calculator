@@ -349,12 +349,12 @@ NextScenarioKey:
     '   cells get truncated visually but the full text is still in the cell.
     ws.Columns("B:K").AutoFit
     ws.Columns("A:A").ColumnWidth = 22
-    Dim _capCol As Long
-    For _capCol = 2 To 11   ' B to K
-        If ws.Columns(_capCol).ColumnWidth > 20 Then
-            ws.Columns(_capCol).ColumnWidth = 20
+    Dim capCol As Long
+    For capCol = 2 To 11   ' B to K
+        If ws.Columns(capCol).ColumnWidth > 20 Then
+            ws.Columns(capCol).ColumnWidth = 20
         End If
-    Next _capCol
+    Next capCol
 
     ' Freeze the top row and jump to the scenarios so users immediately see the scenario list.
     On Error Resume Next
