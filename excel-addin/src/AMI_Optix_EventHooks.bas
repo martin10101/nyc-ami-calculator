@@ -68,9 +68,10 @@ End Sub
 Public Sub StopAMIOptixEventHooks()
     On Error Resume Next
     Call AMI_Optix_CancelEnsureSheetsVisible
-    ' Release the Ctrl+Z intercept so Excel's default Ctrl+Z behavior is
-    ' restored when the add-in unloads.
+    ' Release both key intercepts so Excel's default shortcuts are restored
+    ' when the add-in unloads.
     Application.OnKey "^z"
+    Application.OnKey "^+z"
     If Not g_AMIOptixAppEvents Is Nothing Then
         Set g_AMIOptixAppEvents.App = Nothing
     End If
@@ -174,14 +175,17 @@ SafeExit:
 End Sub
 
 Public Sub AMI_Optix_ArmCtrlZIntercept()
-    ' Registers a global Ctrl+Z intercept that routes through our handler.
-    ' Our handler decides: restore the cached AMI cell if we have one, OR
-    ' pass through to Excel's native undo. Application.OnKey is reliable
-    ' from add-ins (unlike Application.OnUndo).
+    ' Registers TWO key intercepts that route through our undo handler:
+    '   Ctrl+Z  - tries to override Excel's native Ctrl+Z (may not always
+    '             stick depending on Excel config, but worth attempting)
+    '   Ctrl+Shift+Z - guaranteed backup. Excel doesn't use this shortcut
+    '             natively (Ctrl+Y is redo), so OnKey is rock-solid here.
+    ' Tell users: "if Ctrl+Z doesn't undo your AMI edit, use Ctrl+Shift+Z."
     On Error Resume Next
     Dim procRef As String
     procRef = "'" & ThisWorkbook.Name & "'!AMI_Optix_HandleCtrlZ"
     Application.OnKey "^z", procRef
+    Application.OnKey "^+z", procRef
 End Sub
 
 Public Sub AMI_Optix_HandleCtrlZ()
