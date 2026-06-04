@@ -132,12 +132,12 @@ Private Sub RefreshManualWorkingCopyFromProgramInputs(programNorm As String, con
 
     Call RefreshManualWorkingCopyLocalRents(programNorm)
 
-    ' Best-effort restore user context (avoid disrupting selection/focus).
+    ' Best-effort restore the user's sheet view (in case the refresh activated
+    ' another sheet). DO NOT re-select contextTarget — Excel has already moved
+    ' the cursor naturally (e.g., Enter advances to the next row), and forcing
+    ' selection back to the edited cell would override that.
     If Not contextSheet Is Nothing Then
         contextSheet.Activate
-        If Not contextTarget Is Nothing Then
-            contextTarget.Cells(1, 1).Select
-        End If
     End If
 
 SafeExit:
@@ -178,12 +178,12 @@ Private Sub ApplyManualAmiChangesAndRefresh(programNorm As String, changes As Ob
 
     Call RefreshManualWorkingCopyLocalRents(programNorm)
 
-    ' Best-effort restore user context (avoid disrupting selection/focus).
+    ' Best-effort restore the user's sheet view (in case the refresh activated
+    ' another sheet). DO NOT re-select contextTarget — Excel has already moved
+    ' the cursor naturally (e.g., Enter advances to the next row), and forcing
+    ' selection back to the edited cell would override that.
     If Not contextSheet Is Nothing Then
         contextSheet.Activate
-        If Not contextTarget Is Nothing Then
-            contextTarget.Cells(1, 1).Select
-        End If
     End If
 
 SafeExit:

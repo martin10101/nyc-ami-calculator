@@ -520,6 +520,17 @@ Public Function ExtractUtilityAllowances(rentWb As Workbook, Optional year As Lo
         If optionCat = "" Then optionCat = currentCat
         If optionCat = "" Then GoTo NextCol
 
+        ' "Apartment Electricity only" column has no per-option label row (it's
+        ' a single-option binary). On a fresh HPD template the dropdown in
+        ' row 17 defaults to "N/A or owner pays" which the fallback above
+        ' picks up as the option label, causing the column's allowance values
+        ' to land under the wrong key. Force the canonical "Tenant Pays" so
+        ' electricity|tenant_pays|<bedroom> rows get populated.
+        ' Matches the parser fix in ami_optix/rent_calculator.py.
+        If optionCat = "electricity" And LCase$(optionLabel) = "n/a or owner pays" Then
+            optionLabel = "Tenant Pays"
+        End If
+
         Dim variantCode As String
         variantCode = UtilityVariantCodeFromOptionLabel(optionCat, optionLabel)
         If variantCode = "" Then GoTo NextCol ' ignore N/A/owner-pays option columns
