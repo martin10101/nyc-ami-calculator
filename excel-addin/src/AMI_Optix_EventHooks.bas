@@ -156,8 +156,20 @@ Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, pro
     g_AMIOptixUndoProgramNorm = CStr(programNorm)
     g_AMIOptixUndoArmed = True
 
+    ' Application.OnUndo requires the procedure name fully qualified when the
+    ' code lives in an add-in (.xlam) and the active workbook is a different
+    ' file. Without the "'AMI_Optix.xlam'!" prefix, Excel silently fails to
+    ' resolve the procedure when the user presses Ctrl+Z.
+    Dim addinName As String
+    addinName = ThisWorkbook.Name
+    Dim procRef As String
+    procRef = "'" & addinName & "'!AMI_Optix_UndoLastAmiEdit"
+
     On Error Resume Next
-    Application.OnUndo "Undo AMI change", "AMI_Optix_UndoLastAmiEdit"
+    Application.OnUndo "Undo AMI change", procRef
+    ' Log for diagnostics so we can confirm the registration in the debug log.
+    On Error Resume Next
+    DebugLog "OnUndo armed: " & procRef & " for " & wb & "!" & ws & "!" & target.Address(False, False) & " (old=" & CStr(oldValue) & ")", True
 
 SafeExit:
 End Sub
@@ -165,6 +177,8 @@ End Sub
 Public Sub AMI_Optix_UndoLastAmiEdit()
     ' Restores the most recently edited AMI cell to its pre-edit value. Called
     ' by Excel via Application.OnUndo when the user presses Ctrl+Z.
+    On Error Resume Next
+    DebugLog "OnUndo fired: armed=" & CStr(g_AMIOptixUndoArmed) & " sheet=" & g_AMIOptixUndoSheetName & " addr=" & g_AMIOptixUndoAddress & " old=" & CStr(g_AMIOptixUndoOldValue), True
     On Error GoTo SafeExit
     If Not g_AMIOptixUndoArmed Then Exit Sub
     If g_AMIOptixUndoSheetName = "" Or g_AMIOptixUndoAddress = "" Then Exit Sub
