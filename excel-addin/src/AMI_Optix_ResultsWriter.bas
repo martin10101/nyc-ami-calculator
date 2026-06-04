@@ -2859,6 +2859,39 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
         End If
     End If
 
+    ' 3% cap (100% AMI haircut) summary. Only shown when at least one unit
+    ' was capped. Lets the client see at a glance how many units the 3%
+    ' regulatory cap applies to and the dollar reduction it represents.
+    If scenario.Exists("assignments") Then
+        Dim hcCount As Long
+        Dim hcPre As Double
+        Dim hcPost As Double
+        hcCount = 0
+        hcPre = 0
+        hcPost = 0
+        Dim hcAssignments As Object
+        Set hcAssignments = scenario("assignments")
+        Dim hcIdx As Long
+        For hcIdx = 1 To hcAssignments.Count
+            Dim hcA As Object
+            Set hcA = hcAssignments(hcIdx)
+            If hcA.Exists("haircut_applied") Then
+                If CBool(hcA("haircut_applied")) Then
+                    hcCount = hcCount + 1
+                    If hcA.Exists("gross_pre_haircut") Then hcPre = hcPre + CDbl(hcA("gross_pre_haircut"))
+                    If hcA.Exists("gross_rent") Then hcPost = hcPost + CDbl(hcA("gross_rent"))
+                End If
+            End If
+        Next hcIdx
+        If hcCount > 0 Then
+            ws.Cells(row, 1).Value = "3% Cap Applied:"
+            ws.Cells(row, 2).Value = hcCount & " unit(s) at 100% AMI; headline $" & Format(hcPre, "#,##0") & "/mo, after cap $" & Format(hcPost, "#,##0") & "/mo, reduction $" & Format(hcPre - hcPost, "#,##0") & "/mo"
+            ws.Cells(row, 1).Font.Italic = True
+            ws.Cells(row, 2).Font.Italic = True
+            row = row + 1
+        End If
+    End If
+
     row = row + 1
 
     ' Assignment table
@@ -2871,8 +2904,9 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     ws.Cells(row, 6).Value = "Gross Rent"
     ws.Cells(row, 7).Value = "Net Rent"
     ws.Cells(row, 8).Value = "Annual Rent"
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Font.Bold = True
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(230, 230, 230)
+    ws.Cells(row, 9).Value = "Headline (pre-3% cap)"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 9)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 9)).Interior.Color = RGB(230, 230, 230)
     ws.Cells(row, 1).HorizontalAlignment = xlRight
     ws.Cells(row, 5).HorizontalAlignment = xlRight
     row = row + 1
@@ -2910,6 +2944,19 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             If assignment.Exists("annual_rent") Then
                 ws.Cells(row, 8).Value = assignment("annual_rent")
                 ws.Cells(row, 8).NumberFormat = "$#,##0"
+            End If
+
+            ' Headline (pre-3% cap) rent — only filled when the 3% cap actually
+            ' applies to this unit (i.e., AMI = 100%). For all other units the
+            ' headline equals the gross_rent already shown in col 6, so we
+            ' leave col 9 blank to keep the table easy to scan.
+            If assignment.Exists("haircut_applied") Then
+                If CBool(assignment("haircut_applied")) Then
+                    If assignment.Exists("gross_pre_haircut") Then
+                        ws.Cells(row, 9).Value = assignment("gross_pre_haircut")
+                        ws.Cells(row, 9).NumberFormat = "$#,##0"
+                    End If
+                End If
             End If
 
             row = row + 1
