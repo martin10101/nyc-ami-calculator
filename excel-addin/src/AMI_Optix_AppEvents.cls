@@ -197,6 +197,19 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
     On Error GoTo SafeExit
 
+    ' Capture the pre-edit value (cached from the selection-change handler)
+    ' and arm the custom Ctrl+Z handler BEFORE we modify the cell or run the
+    ' refresh — both of those clear Excel's native undo stack.
+    Dim oldValueForUndo As Variant
+    If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
+        oldValueForUndo = m_LastSelectionValue
+    Else
+        oldValueForUndo = Empty
+    End If
+    If target.CountLarge = 1 And Not IsEmpty(oldValueForUndo) Then
+        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
+    End If
+
     ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
     ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
     ' Convert raw values > 2 to their fraction (60 -> 0.6) so the displayed
@@ -315,6 +328,13 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
 
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
+
+    ' Arm custom Ctrl+Z handler with the cached pre-edit value (if available).
+    If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
+        If Not IsEmpty(m_LastSelectionValue) Then
+            Call AMI_Optix_ArmUndoForAmiEdit(target, m_LastSelectionValue, programNorm)
+        End If
+    End If
 
     Dim changes As Object
     Set changes = CreateObject("Scripting.Dictionary") ' unit_id -> newAmi

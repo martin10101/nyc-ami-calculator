@@ -10,6 +10,17 @@ Public g_AMIOptixSuppressEvents As Boolean
 Public g_AMIOptixLiveSyncEnabled As Boolean
 Public g_AMIOptixVisibilityWorkbookName As String
 
+' Custom-undo state for AMI cell edits. The live-sync refresh that runs after
+' each AMI edit writes to other cells, which always clears Excel's native undo
+' stack. We register a custom Application.OnUndo handler so Ctrl+Z can still
+' restore the most recently edited AMI cell.
+Public g_AMIOptixUndoWorkbookName As String
+Public g_AMIOptixUndoSheetName As String
+Public g_AMIOptixUndoAddress As String
+Public g_AMIOptixUndoOldValue As Variant
+Public g_AMIOptixUndoProgramNorm As String
+Public g_AMIOptixUndoArmed As Boolean
+
 Private m_LiveSyncInitialized As Boolean
 Private m_EnsureVisibleScheduled As Boolean
 Private m_EnsureVisibleAt As Date
@@ -121,4 +132,89 @@ Public Sub AMI_Optix_CancelEnsureSheetsVisible()
         m_EnsureVisibleScheduled = False
     End If
     On Error GoTo 0
+End Sub
+
+Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, programNorm As String)
+    ' Capture the pre-edit AMI cell state so Ctrl+Z can restore it. Excel's
+    ' native undo stack gets cleared by the live-sync refresh that runs after
+    ' an AMI edit, so we register a custom Application.OnUndo handler that
+    ' fires before the user's next macro-clearing action.
+    On Error GoTo SafeExit
+    If target Is Nothing Then Exit Sub
+
+    Dim wb As String
+    Dim ws As String
+    On Error Resume Next
+    wb = CStr(target.Worksheet.Parent.Name)
+    ws = CStr(target.Worksheet.Name)
+    On Error GoTo SafeExit
+
+    g_AMIOptixUndoWorkbookName = wb
+    g_AMIOptixUndoSheetName = ws
+    g_AMIOptixUndoAddress = target.Address(False, False)
+    g_AMIOptixUndoOldValue = oldValue
+    g_AMIOptixUndoProgramNorm = CStr(programNorm)
+    g_AMIOptixUndoArmed = True
+
+    On Error Resume Next
+    Application.OnUndo "Undo AMI change", "AMI_Optix_UndoLastAmiEdit"
+
+SafeExit:
+End Sub
+
+Public Sub AMI_Optix_UndoLastAmiEdit()
+    ' Restores the most recently edited AMI cell to its pre-edit value. Called
+    ' by Excel via Application.OnUndo when the user presses Ctrl+Z.
+    On Error GoTo SafeExit
+    If Not g_AMIOptixUndoArmed Then Exit Sub
+    If g_AMIOptixUndoSheetName = "" Or g_AMIOptixUndoAddress = "" Then Exit Sub
+
+    Dim wb As Workbook
+    Set wb = Nothing
+    On Error Resume Next
+    Set wb = Application.Workbooks(g_AMIOptixUndoWorkbookName)
+    On Error GoTo SafeExit
+    If wb Is Nothing Then
+        On Error Resume Next
+        Set wb = ActiveWorkbook
+        On Error GoTo SafeExit
+    End If
+    If wb Is Nothing Then Exit Sub
+
+    Dim ws As Worksheet
+    Set ws = Nothing
+    On Error Resume Next
+    Set ws = wb.Worksheets(g_AMIOptixUndoSheetName)
+    On Error GoTo SafeExit
+    If ws Is Nothing Then Exit Sub
+
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
+
+    On Error Resume Next
+    ws.Range(g_AMIOptixUndoAddress).Value = g_AMIOptixUndoOldValue
+    ws.Range(g_AMIOptixUndoAddress).NumberFormat = "0%"
+    On Error GoTo SafeExit
+
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
+
+    ' One-shot — clear so subsequent Ctrl+Z presses don't re-fire the same undo.
+    g_AMIOptixUndoArmed = False
+
+    ' Refresh the Manual Working Copy with the restored AMI value so rents
+    ' reflect the undone state. Best-effort; ignore errors.
+    On Error Resume Next
+    If g_AMIOptixUndoProgramNorm <> "" Then
+        Call RefreshManualWorkingCopyLocalRents(g_AMIOptixUndoProgramNorm)
+    End If
+    On Error GoTo SafeExit
+
+SafeExit:
+    On Error Resume Next
+    Application.EnableEvents = True
 End Sub
