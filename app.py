@@ -1042,6 +1042,88 @@ def optimize_units():
                             f"WAAMI-max scenario preserved as 'closest_to_60' for comparison."
                         )
 
+            # 40%-share variants: give the client an explicit choice between
+            # "minimal 40% allocation" (low_40_share, pinned near the legal
+            # floor — matches what many developers prefer) and "maximal 40%
+            # allocation" (max_40_share, pinned near the ceiling — typically
+            # the rent-max landing zone). Both still use rent-max within the
+            # narrowed window so the trade-off is purely about 40% exposure.
+            if rent_schedule and rent_by_band_cents:
+                def _solve_with_40_window(min_share, max_share):
+                    v_config = copy.deepcopy(config)
+                    v_rules = v_config.get('optimization_rules', {}) or {}
+                    modified = False
+                    thresholds = v_rules.get('share_thresholds')
+                    if isinstance(thresholds, list):
+                        for t in thresholds:
+                            try:
+                                if int(t.get('band_threshold', 0)) <= 40:
+                                    if min_share is not None:
+                                        t['min_share'] = float(min_share)
+                                    if max_share is not None:
+                                        t['max_share'] = float(max_share)
+                                    modified = True
+                            except (TypeError, ValueError):
+                                pass
+                    # UAP path
+                    if v_rules.get('deep_affordability_min_share') is not None and v_rules.get('deep_affordability_max_share') is not None:
+                        if min_share is not None:
+                            v_rules['deep_affordability_min_share'] = float(min_share)
+                        if max_share is not None:
+                            v_rules['deep_affordability_max_share'] = float(max_share)
+                        modified = True
+                    if not modified:
+                        return None
+                    v_results = find_optimal_scenarios(
+                        df_units, v_config,
+                        project_overrides=project_overrides,
+                        rent_by_band_cents=rent_by_band_cents,
+                    )
+                    v_scenarios = v_results.get('scenarios', {}) or {}
+                    best_pick = None
+                    best_pick_rent = -1.0
+                    for k, s in v_scenarios.items():
+                        if not s or 'assignments' not in s:
+                            continue
+                        a, t = compute_rents_for_assignments(rent_schedule, s['assignments'], utilities_clean)
+                        s['assignments'] = a
+                        s['rent_totals'] = t
+                        nm = (t or {}).get('net_monthly')
+                        if nm is not None and float(nm) > best_pick_rent:
+                            best_pick = s
+                            best_pick_rent = float(nm)
+                    return best_pick
+
+                # Read the EFFECTIVE 40% window from the (possibly-mutated) config.
+                # MIH's floor-walk may have slid min_share above 10%; we respect that.
+                eff_min, eff_max = None, None
+                for t in (config.get('optimization_rules', {}) or {}).get('share_thresholds') or []:
+                    try:
+                        if int(t.get('band_threshold', 0)) <= 40:
+                            eff_min = float(t.get('min_share') or 0.10)
+                            eff_max = float(t.get('max_share') or 0.125)
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                if eff_min is None:
+                    eff_min = float((config.get('optimization_rules', {}) or {}).get('deep_affordability_min_share') or 0.10)
+                    eff_max = float((config.get('optimization_rules', {}) or {}).get('deep_affordability_max_share') or 0.125)
+
+                # low_40_share: narrow window at the floor (e.g., [10.0%, 10.5%])
+                window_width = 0.005
+                low_40 = _solve_with_40_window(eff_min, eff_min + window_width)
+                if low_40 and low_40.get('rent_totals'):
+                    scenarios['low_40_share'] = low_40
+
+                # max_40_share: narrow window at the ceiling (e.g., [12.0%, 12.5%])
+                if eff_max > eff_min + window_width + 1e-9:
+                    max_40 = _solve_with_40_window(max(eff_min, eff_max - window_width), eff_max)
+                    if max_40 and max_40.get('rent_totals'):
+                        # Only add if it's distinct from absolute_best
+                        ab_canon = (scenarios.get('absolute_best') or {}).get('canonical_assignments')
+                        if max_40.get('canonical_assignments') != ab_canon:
+                            scenarios['max_40_share'] = max_40
+
             # --- Edge / relaxed scenarios (UAP + MIH) ---
             # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
             # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH
