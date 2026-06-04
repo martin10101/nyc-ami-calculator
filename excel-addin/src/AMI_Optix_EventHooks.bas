@@ -59,12 +59,18 @@ Public Sub StartAMIOptixEventHooks()
     g_AMIOptixVisibilityWorkbookName = ""
     Set g_AMIOptixAppEvents = New AMI_Optix_AppEvents
     Set g_AMIOptixAppEvents.App = Application
+    ' Install global Ctrl+Z intercept so AMI cell edits can be undone even
+    ' after the live-sync refresh clears Excel's native undo stack.
+    Call AMI_Optix_ArmCtrlZIntercept
     On Error GoTo 0
 End Sub
 
 Public Sub StopAMIOptixEventHooks()
     On Error Resume Next
     Call AMI_Optix_CancelEnsureSheetsVisible
+    ' Release the Ctrl+Z intercept so Excel's default Ctrl+Z behavior is
+    ' restored when the add-in unloads.
+    Application.OnKey "^z"
     If Not g_AMIOptixAppEvents Is Nothing Then
         Set g_AMIOptixAppEvents.App = Nothing
     End If
@@ -135,10 +141,11 @@ Public Sub AMI_Optix_CancelEnsureSheetsVisible()
 End Sub
 
 Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, programNorm As String)
-    ' Capture the pre-edit AMI cell state so Ctrl+Z can restore it. Excel's
-    ' native undo stack gets cleared by the live-sync refresh that runs after
-    ' an AMI edit, so we register a custom Application.OnUndo handler that
-    ' fires before the user's next macro-clearing action.
+    ' Capture the pre-edit AMI cell state. Excel's native undo gets cleared by
+    ' the live-sync refresh that runs after an AMI edit, AND Application.OnUndo
+    ' is unreliable from inside an .xlam add-in. So we intercept Ctrl+Z via
+    ' Application.OnKey (registered globally at Auto_Open) and route it through
+    ' our handler which checks this armed state.
     On Error GoTo SafeExit
     If target Is Nothing Then Exit Sub
 
@@ -156,22 +163,44 @@ Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, pro
     g_AMIOptixUndoProgramNorm = CStr(programNorm)
     g_AMIOptixUndoArmed = True
 
-    ' Application.OnUndo requires the procedure name fully qualified when the
-    ' code lives in an add-in (.xlam) and the active workbook is a different
-    ' file. Without the "'AMI_Optix.xlam'!" prefix, Excel silently fails to
-    ' resolve the procedure when the user presses Ctrl+Z.
-    Dim addinName As String
-    addinName = ThisWorkbook.Name
-    Dim procRef As String
-    procRef = "'" & addinName & "'!AMI_Optix_UndoLastAmiEdit"
+    ' Make sure the Ctrl+Z intercept is active (idempotent — safe to call
+    ' repeatedly). If it gets disarmed for some reason this re-establishes it.
+    Call AMI_Optix_ArmCtrlZIntercept
 
     On Error Resume Next
-    Application.OnUndo "Undo AMI change", procRef
-    ' Log for diagnostics so we can confirm the registration in the debug log.
-    On Error Resume Next
-    DebugLog "OnUndo armed: " & procRef & " for " & wb & "!" & ws & "!" & target.Address(False, False) & " (old=" & CStr(oldValue) & ")", True
+    DebugLog "Custom undo armed for " & wb & "!" & ws & "!" & target.Address(False, False) & " (old=" & CStr(oldValue) & ")", True
 
 SafeExit:
+End Sub
+
+Public Sub AMI_Optix_ArmCtrlZIntercept()
+    ' Registers a global Ctrl+Z intercept that routes through our handler.
+    ' Our handler decides: restore the cached AMI cell if we have one, OR
+    ' pass through to Excel's native undo. Application.OnKey is reliable
+    ' from add-ins (unlike Application.OnUndo).
+    On Error Resume Next
+    Dim procRef As String
+    procRef = "'" & ThisWorkbook.Name & "'!AMI_Optix_HandleCtrlZ"
+    Application.OnKey "^z", procRef
+End Sub
+
+Public Sub AMI_Optix_HandleCtrlZ()
+    ' Routes Ctrl+Z: if we have an armed AMI undo, restore the cell. Else
+    ' fall through to Excel's native undo (Application.Undo).
+    On Error GoTo Passthrough
+
+    On Error Resume Next
+    DebugLog "Ctrl+Z intercepted: armed=" & CStr(g_AMIOptixUndoArmed), True
+    On Error GoTo Passthrough
+
+    If g_AMIOptixUndoArmed Then
+        Call AMI_Optix_UndoLastAmiEdit
+        Exit Sub
+    End If
+
+Passthrough:
+    On Error Resume Next
+    Application.Undo
 End Sub
 
 Public Sub AMI_Optix_UndoLastAmiEdit()
