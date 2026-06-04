@@ -221,7 +221,21 @@ Public Function ComputeNetRent(year As Long, program As String, bedrooms As Vari
 
     Dim gross As Double
     If Not m_RentLimits.Exists(rentKey) Then
-        RaiseMissingKey "rent_limits.csv", year, cacheFolder, unitId, rentKey
+        ' Unknown AMI band (user typed a non-standard value like 5%, 6.8%, etc.
+        ' while editing). Don't throw a modal popup — let the user keep editing
+        ' and just return a zero-rent result for this unit. The Manual Calculate
+        ' button (server-side) is authoritative for rents and uses interpolation
+        ' that this local fallback can't replicate.
+        Dim outMiss As Object
+        Set outMiss = CreateObject("Scripting.Dictionary")
+        outMiss("gross_rent") = 0
+        outMiss("allowance_total") = 0
+        outMiss("monthly_rent") = 0
+        outMiss("annual_rent") = 0
+        Set outMiss("allowances") = New Collection
+        outMiss("error") = "AMI band " & amiKey & " not in local rent table (typical for non-standard inputs while editing)"
+        Set ComputeNetRent = outMiss
+        Exit Function
     End If
     gross = CDbl(m_RentLimits(rentKey))
 
@@ -257,10 +271,12 @@ Public Function ComputeNetRent(year As Long, program As String, bedrooms As Vari
 
         If selectionKey <> "" And selectionKey <> "na" Then
             lookupKey = cat & "|" & selectionKey & "|" & bedLabel
-            If Not m_UtilityAllowances.Exists(lookupKey) Then
-                RaiseMissingKey "utility_allowances.csv", year, cacheFolder, unitId, lookupKey
+            If m_UtilityAllowances.Exists(lookupKey) Then
+                amt = CDbl(m_UtilityAllowances(lookupKey))
             End If
-            amt = CDbl(m_UtilityAllowances(lookupKey))
+            ' If the utility allowance lookup is missing, leave amt = 0 (no
+            ' modal popup). This typically only happens during typing/editing.
+            ' Server's Manual Calculate is authoritative for utility allowances.
         End If
 
         Dim item As Object

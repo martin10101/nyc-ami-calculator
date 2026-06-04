@@ -197,6 +197,12 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
     On Error GoTo SafeExit
 
+    ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
+    ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
+    ' Convert raw values > 2 to their fraction (60 -> 0.6) so the displayed
+    ' percentage matches the user's intent and downstream lookups work.
+    Call NormalizeAmiInputCells(target)
+
     Call RefreshManualWorkingCopyFromProgramInputs(programNorm, ws, target)
 
     ' Keep last selection cache consistent for subsequent edits.
@@ -205,6 +211,39 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     m_LastSelectionValue = target.Value
 
 SafeExit:
+End Sub
+
+Private Sub NormalizeAmiInputCells(target As Range)
+    ' Convert raw user-typed AMI values (e.g. 60) to fractions (0.6) and ensure
+    ' the cell shows "0%" format. Suppresses events to avoid recursion.
+    On Error GoTo SafeExit
+    If target Is Nothing Then Exit Sub
+
+    Dim prevEnableEvents As Boolean
+    Dim prevSuppress As Boolean
+    prevEnableEvents = Application.EnableEvents
+    prevSuppress = g_AMIOptixSuppressEvents
+    Application.EnableEvents = False
+    g_AMIOptixSuppressEvents = True
+
+    Dim c As Range
+    For Each c In target.Cells
+        If IsNumeric(c.Value) Then
+            Dim raw As Double
+            raw = CDbl(c.Value)
+            ' Anything > 2 (= 200% AMI) must be a raw percent like "60" or "120".
+            ' Real AMI fractions are 0.3 .. 1.5 territory.
+            If raw > 2# Then
+                c.Value = raw / 100#
+            End If
+            c.NumberFormat = "0%"
+        End If
+    Next c
+
+SafeExit:
+    On Error Resume Next
+    Application.EnableEvents = prevEnableEvents
+    g_AMIOptixSuppressEvents = prevSuppress
 End Sub
 
 Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolean
