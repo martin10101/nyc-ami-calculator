@@ -1608,6 +1608,56 @@ def optimize_units():
         except Exception as _e:
             notes.append(f"Note: WAAMI cap enforcement pass failed: {_e}")
 
+        # "Original Scenario": capture the client's AMI assignments as they were
+        # in the workbook when this request fired, so the Scenarios page shows
+        # one entry that's literally their input ("what I had before running
+        # the program"). Not optimized by the solver — just computed for rent
+        # so they can compare. Added AFTER the WAAMI cap pass so even a
+        # non-compliant pre-saved scenario still appears for visibility.
+        try:
+            if rent_schedule:
+                orig_assignments = []
+                for _idx, _u in df_units.iterrows():
+                    _ami = _u.get('client_ami')
+                    if _ami is None:
+                        continue
+                    try:
+                        _ami_f = float(_ami)
+                    except (TypeError, ValueError):
+                        continue
+                    if _ami_f <= 0:
+                        continue
+                    orig_assignments.append({
+                        'unit_id': str(_u.get('unit_id', '')),
+                        'assigned_ami': _ami_f,
+                        'bedrooms': _u.get('bedrooms'),
+                        'net_sf': float(_u.get('net_sf') or 0.0),
+                    })
+                if orig_assignments:
+                    _enriched, _totals = compute_rents_for_assignments(
+                        rent_schedule, orig_assignments, utilities_clean
+                    )
+                    _orig_total_sf = sum(float(_a.get('net_sf', 0) or 0) for _a in _enriched)
+                    _orig_waami = 0.0
+                    if _orig_total_sf > 0:
+                        _orig_waami = sum(
+                            float(_a.get('net_sf', 0) or 0) * float(_a.get('assigned_ami', 0) or 0)
+                            for _a in _enriched
+                        ) / _orig_total_sf
+                    _orig_bands = sorted(set(int(round(float(_a['assigned_ami']) * 100)) for _a in _enriched))
+                    scenarios['original'] = {
+                        'name': 'Original Scenario',
+                        'description': "Your saved AMI assignments from the workbook (not optimized; shown for comparison).",
+                        'assignments': _enriched,
+                        'rent_totals': _totals,
+                        'waami': _orig_waami,
+                        'bands': _orig_bands,
+                        'status': 'CLIENT_ORIGINAL',
+                        'tier': 'reference',
+                    }
+        except Exception as _e:
+            notes.append(f"Note: could not build Original Scenario: {_e}")
+
         # Build response
         response_start = time.perf_counter()
         safe_scenarios = _sanitize_for_json(scenarios)
