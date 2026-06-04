@@ -386,6 +386,13 @@ def compute_rents_for_assignments(
 
         enriched = dict(unit)
         enriched['gross_rent'] = round(gross, 2)
+        # Surface the pre-haircut headline rent + haircut flag per unit so the
+        # VBA can show both "before 3% cap" and "after 3% cap" side-by-side
+        # for scenarios that include 100% AMI units. Additive only — existing
+        # consumers ignore unknown fields.
+        gross_pre_haircut = float(components.get('gross_pre_haircut', gross) or 0.0)
+        enriched['gross_pre_haircut'] = round(gross_pre_haircut, 2)
+        enriched['haircut_applied'] = bool(components.get('haircut_applied', False))
         enriched['monthly_rent'] = round(net, 2)
         enriched['annual_rent'] = round(net * 12.0, 2)
         enriched['allowance_total'] = round(allowance_total, 2)

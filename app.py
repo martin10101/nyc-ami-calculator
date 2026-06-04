@@ -15,7 +15,7 @@ from main import main as run_ami_optix_analysis, default_converter
 from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 from ami_optix.config_loader import load_config
-from ami_optix.solver import find_optimal_scenarios, find_max_revenue_scenario
+from ami_optix.solver import find_optimal_scenarios, find_max_revenue_scenario, _build_metrics
 from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
 
 app = Flask(__name__)
@@ -1645,6 +1645,13 @@ def optimize_units():
                             for _a in _enriched
                         ) / _orig_total_sf
                     _orig_bands = sorted(set(int(round(float(_a['assigned_ami']) * 100)) for _a in _enriched))
+                    # Compute the same `metrics` shape every other scenario has
+                    # so the VBA renders the "Band Mix" / "Share of SF AMI" /
+                    # "Share of Full Building SF" header table for Original
+                    # exactly like it does for absolute_best, low_40_share, etc.
+                    _orig_metrics = _build_metrics(_enriched)
+                    _orig_metrics['total_monthly_rent'] = float(_totals.get('net_monthly') or 0.0)
+                    _orig_metrics['total_annual_rent'] = float(_totals.get('net_annual') or 0.0)
                     scenarios['original'] = {
                         'name': 'Original Scenario',
                         'description': "Your saved AMI assignments from the workbook (not optimized; shown for comparison).",
@@ -1652,6 +1659,7 @@ def optimize_units():
                         'rent_totals': _totals,
                         'waami': _orig_waami,
                         'bands': _orig_bands,
+                        'metrics': _orig_metrics,
                         'status': 'CLIENT_ORIGINAL',
                         'tier': 'reference',
                     }
