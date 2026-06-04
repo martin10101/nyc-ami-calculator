@@ -87,6 +87,11 @@ def test_optimize_mih_option1_meets_40_band_min_share_floor():
     # of 15% + 2.5% = 17.5% if the strict window is infeasible.
     walked_ceiling = 0.175 * residential_sf
     for name, scenario in data["scenarios"].items():
+        # 'original' is the client's input snapshot, not a solver-generated
+        # scenario — it's intentionally exempt from compliance checks so users
+        # can see what they had even if it violates the rules.
+        if name == "original" or (scenario or {}).get("tier") == "reference":
+            continue
         assignments = scenario.get("assignments") or []
         low_sf = 0.0
         for a in assignments:
@@ -130,6 +135,9 @@ def test_optimize_mih_option4_meets_40_band_min_share_floor():
     required = 0.10 * residential_sf
     walked_ceiling = 0.175 * residential_sf
     for name, scenario in data["scenarios"].items():
+        # 'original' is the client's input snapshot, exempt from compliance.
+        if name == "original" or (scenario or {}).get("tier") == "reference":
+            continue
         assignments = scenario.get("assignments") or []
         low_sf = 0.0
         for a in assignments:
