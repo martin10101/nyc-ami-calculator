@@ -995,6 +995,33 @@ def optimize_units():
                 _apply_rents_to_scenarios(baseline_scenarios)
             timing["rent_apply_ms"] = int(round((time.perf_counter() - rent_apply_start) * 1000))
 
+            # Rent-first re-ranking: switch 'absolute_best' to the scenario with
+            # the highest net monthly rent (which now reflects the 100% AMI
+            # haircut applied in rent_components). Preserve the original
+            # WAAMI-max winner under 'closest_to_60' so the client can compare.
+            # The solver's revenue_score is a WAAMI proxy, not actual rent
+            # dollars — actual rent is only known after _apply_rents_to_scenarios.
+            original_best = scenarios.get('absolute_best')
+            if original_best and original_best.get('rent_totals'):
+                rented = [
+                    (k, v) for k, v in scenarios.items()
+                    if v and isinstance(v.get('rent_totals'), dict)
+                       and v['rent_totals'].get('net_monthly') is not None
+                ]
+                if rented:
+                    best_key, best_scenario = max(
+                        rented,
+                        key=lambda kv: float(kv[1]['rent_totals']['net_monthly'])
+                    )
+                    if best_scenario is not original_best:
+                        scenarios['closest_to_60'] = original_best
+                        scenarios['absolute_best'] = best_scenario
+                        notes.append(
+                            f"Recommended scenario switched from WAAMI-max to rent-max "
+                            f"(higher net monthly rent by ${float(best_scenario['rent_totals']['net_monthly']) - float(original_best['rent_totals']['net_monthly']):.0f}). "
+                            f"WAAMI-max scenario preserved as 'closest_to_60' for comparison."
+                        )
+
             # --- Edge / relaxed scenarios (UAP + MIH) ---
             # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
             # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH

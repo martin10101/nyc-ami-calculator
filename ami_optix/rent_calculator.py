@@ -17,6 +17,13 @@ from openpyxl import load_workbook
 
 BEDROOM_LABELS = ["studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR"]
 
+# NYC HPD regulatory haircut at the 100% AMI band: max collectable rent is
+# 97% of the published 100% AMI rent. Applied to gross rent at the source so
+# every downstream consumer (solver rent objective, display, edge scenarios)
+# uses the corrected number.
+HAIRCUT_BAND_AMI = 1.0
+HAIRCUT_FACTOR = 0.97
+
 COOKING_OPTIONS = {
     "electric": "Electric Stove",
     "gas": "Gas Stove",
@@ -70,7 +77,13 @@ class RentSchedule:
 
     def rent_components(self, ami_percent: float, bedrooms: float, selections: Dict[str, str]) -> Dict[str, Any]:
         bedroom_label = _normalize_bedroom_label(bedrooms)
-        gross = float(self._gross_rents_lookup(ami_percent, bedroom_label))
+        gross_pre_haircut = float(self._gross_rents_lookup(ami_percent, bedroom_label))
+        # Apply the 100% AMI haircut at the source. At exactly 100% AMI the
+        # landlord can collect at most 97% of the headline rent (NYC HPD rule).
+        if abs(ami_percent - HAIRCUT_BAND_AMI) < 1e-6:
+            gross = gross_pre_haircut * HAIRCUT_FACTOR
+        else:
+            gross = gross_pre_haircut
         allowances: Dict[str, Dict[str, Any]] = {}
         total_allowance = 0.0
         for category, options in UTILITY_OPTION_MAP.items():
@@ -86,9 +99,11 @@ class RentSchedule:
         net = max(gross - total_allowance, 0.0)
         return {
             'gross': gross,
+            'gross_pre_haircut': gross_pre_haircut,
             'allowances': allowances,
             'allowance_total': total_allowance,
             'net': net,
+            'haircut_applied': gross != gross_pre_haircut,
         }
 
     def _gross_rents_lookup(self, ami_percent: float, bedroom_label: str) -> float:
