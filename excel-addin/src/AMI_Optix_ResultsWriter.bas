@@ -2533,6 +2533,19 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
         Set evalResult = ParseJSON(response)
         If evalResult Is Nothing Then GoTo NextTable
 
+        ' Track 3% cap totals as we walk the assignments so we can refresh
+        ' both the Pre-Cap column (9) per unit AND the "3% Cap Applied:"
+        ' summary line. The headline rent changes when the user switches
+        ' rent calc year (e.g. 2026 -> 2025) — without this update the
+        ' Pre-Cap col + summary would stay at the year the scenario was
+        ' originally rendered with.
+        Dim hcCount As Long
+        Dim hcPre As Double
+        Dim hcPost As Double
+        hcCount = 0
+        hcPre = 0
+        hcPost = 0
+
         ' -- Update rent cells in place --
         If evalResult.Exists("assignments") Then
             Set apiAssignments = evalResult("assignments")
@@ -2554,6 +2567,27 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
                 If apiAssign.Exists("annual_rent") Then
                     ws.Cells(assignRow, 8).Value = CDbl(apiAssign("annual_rent"))
                     ws.Cells(assignRow, 8).NumberFormat = "$#,##0"
+                End If
+
+                ' Pre-Cap column 9: only show a value when this unit is
+                ' actually subject to the 3% cap (haircut_applied=True,
+                ' i.e. 100% AMI). For everything else, clear the cell so a
+                ' stale 100% value from a previous render doesn't linger.
+                Dim wasHaircut As Boolean
+                wasHaircut = False
+                If apiAssign.Exists("haircut_applied") Then
+                    wasHaircut = CBool(apiAssign("haircut_applied"))
+                End If
+                If wasHaircut Then
+                    If apiAssign.Exists("gross_pre_haircut") Then
+                        ws.Cells(assignRow, 9).Value = CDbl(apiAssign("gross_pre_haircut"))
+                        ws.Cells(assignRow, 9).NumberFormat = "$#,##0"
+                    End If
+                    hcCount = hcCount + 1
+                    If apiAssign.Exists("gross_pre_haircut") Then hcPre = hcPre + CDbl(apiAssign("gross_pre_haircut"))
+                    If apiAssign.Exists("gross_rent") Then hcPost = hcPost + CDbl(apiAssign("gross_rent"))
+                Else
+                    ws.Cells(assignRow, 9).ClearContents
                 End If
             Next a
         End If
@@ -2577,6 +2611,13 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
                         If rentTotals.Exists("net_annual") Then
                             ws.Cells(scanRow, 2).Value = CDbl(rentTotals("net_annual"))
                             ws.Cells(scanRow, 2).NumberFormat = "$#,##0"
+                        End If
+                    ElseIf scanVal = "3% Cap Applied:" Then
+                        ' Refresh the haircut summary with the new totals.
+                        If hcCount > 0 Then
+                            ws.Cells(scanRow, 2).Value = hcCount & " unit(s) at 100% AMI; headline $" & Format(hcPre, "#,##0") & "/mo, after cap $" & Format(hcPost, "#,##0") & "/mo, reduction $" & Format(hcPre - hcPost, "#,##0") & "/mo"
+                        Else
+                            ws.Cells(scanRow, 2).Value = "(no 100% AMI units; cap not applied)"
                         End If
                     End If
                 Next scanRow
