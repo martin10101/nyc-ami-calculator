@@ -342,8 +342,19 @@ NextScenarioKey:
     ' Column sizing:
     ' - Keep column A compact (client requested) so the utilities block and tables don't look like huge boxes.
     ' - AutoFit the numeric columns so rents/SF are still readable.
+    ' - Cap any column that auto-fitted too wide. The Utilities section's "Type"
+    '   column has very long allowance names (e.g., "Electric Heat - Cold
+    '   Climate Air Source Heat Pump (ccASHP)1") which would otherwise push
+    '   the whole table sideways. Capping at 20 keeps things readable; long
+    '   cells get truncated visually but the full text is still in the cell.
     ws.Columns("B:K").AutoFit
     ws.Columns("A:A").ColumnWidth = 22
+    Dim _capCol As Long
+    For _capCol = 2 To 11   ' B to K
+        If ws.Columns(_capCol).ColumnWidth > 20 Then
+            ws.Columns(_capCol).ColumnWidth = 20
+        End If
+    Next _capCol
 
     ' Freeze the top row and jump to the scenarios so users immediately see the scenario list.
     On Error Resume Next
