@@ -21,6 +21,13 @@ Public g_AMIOptixUndoOldValue As Variant
 Public g_AMIOptixUndoProgramNorm As String
 Public g_AMIOptixUndoArmed As Boolean
 
+' Deferred Manual Working Copy refresh. We delay the refresh by ~2 seconds
+' after the last AMI edit so Excel's native Ctrl+Z keeps working during that
+' window. If the user makes another edit before the timer fires, we cancel
+' and reschedule.
+Public g_AMIOptixDeferredRefreshAt As Date
+Public g_AMIOptixDeferredRefreshProgramNorm As String
+
 Private m_LiveSyncInitialized As Boolean
 Private m_EnsureVisibleScheduled As Boolean
 Private m_EnsureVisibleAt As Date
@@ -172,6 +179,48 @@ Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, pro
     DebugLog "Custom undo armed for " & wb & "!" & ws & "!" & target.Address(False, False) & " (old=" & CStr(oldValue) & ")", True
 
 SafeExit:
+End Sub
+
+Public Sub AMI_Optix_ScheduleDeferredRefresh(programNorm As String)
+    ' Debounced Manual Working Copy refresh: cancel any pending refresh,
+    ' schedule a new one ~2 seconds out. The delay gives the user a window
+    ' to press Ctrl+Z natively (Excel's undo stack stays intact as long as
+    ' we haven't written to any cell).
+    On Error Resume Next
+
+    ' Cancel any pending refresh (best effort).
+    If g_AMIOptixDeferredRefreshAt <> 0 Then
+        Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
+                            Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh", _
+                            Schedule:=False
+    End If
+
+    g_AMIOptixDeferredRefreshProgramNorm = CStr(programNorm)
+    g_AMIOptixDeferredRefreshAt = Now + TimeSerial(0, 0, 2)
+    Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
+                        Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh"
+End Sub
+
+Public Sub AMI_Optix_DoDeferredRefresh()
+    ' Fires (via OnTime) ~2 seconds after the last AMI edit. Performs the
+    ' Manual Working Copy refresh that was previously immediate.
+    On Error Resume Next
+    g_AMIOptixDeferredRefreshAt = 0
+    Dim prog As String
+    prog = g_AMIOptixDeferredRefreshProgramNorm
+    If prog <> "" Then
+        Dim prevEnableEvents As Boolean
+        Dim prevSuppress As Boolean
+        prevEnableEvents = Application.EnableEvents
+        prevSuppress = g_AMIOptixSuppressEvents
+        Application.EnableEvents = False
+        g_AMIOptixSuppressEvents = True
+
+        Call RefreshManualWorkingCopyLocalRents(prog)
+
+        Application.EnableEvents = prevEnableEvents
+        g_AMIOptixSuppressEvents = prevSuppress
+    End If
 End Sub
 
 Public Sub AMI_Optix_ArmCtrlZIntercept()

@@ -210,20 +210,27 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
 
     ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
     ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
-    ' Convert raw values > 2 to their fraction (60 -> 0.6) so the displayed
-    ' percentage matches the user's intent and downstream lookups work.
+    ' Only writes when actually needed (raw > 2) to preserve Excel's native
+    ' undo stack for the common case where the user typed correctly.
     Call NormalizeAmiInputCells(target)
 
-    Call RefreshManualWorkingCopyFromProgramInputs(programNorm, ws, target)
+    ' DEFER the Manual Working Copy refresh by 2 seconds. Running the refresh
+    ' immediately writes to other cells, which clears Excel's native Ctrl+Z
+    ' undo stack — that's the root cause of "Ctrl+Z doesn't work after AMI
+    ' edit." By debouncing the refresh, the user gets a 2-second window where
+    ' Ctrl+Z works natively. If they edit another cell within those 2 seconds,
+    ' the timer resets. After the quiet period, the refresh fires and rents
+    ' update.
+    Call AMI_Optix_ScheduleDeferredRefresh(programNorm)
 
     ' Keep last selection cache consistent for subsequent edits.
     m_LastSelectionSheet = CStr(ws.Name)
     m_LastSelectionAddress = target.Address(False, False)
     m_LastSelectionValue = target.Value
 
-    ' Register custom Ctrl+Z handler LAST. Application.OnUndo persists until
-    ' the next user action that would clear it; if we register early, the
-    ' subsequent macro writes (normalize + refresh) will wipe it out.
+    ' Register custom Ctrl+Z fallback (for the edge case where user typed a
+    ' raw value like "60" which triggered our normalization write — Excel's
+    ' native undo was cleared by that write, but our cached state can restore).
     If target.CountLarge = 1 And Not IsEmpty(oldValueForUndo) Then
         Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
     End If
@@ -232,10 +239,27 @@ SafeExit:
 End Sub
 
 Private Sub NormalizeAmiInputCells(target As Range)
-    ' Convert raw user-typed AMI values (e.g. 60) to fractions (0.6) and ensure
-    ' the cell shows "0%" format. Suppresses events to avoid recursion.
+    ' Convert raw user-typed AMI values (e.g. 60) to fractions (0.6).
+    ' CRITICAL: only write to a cell if we actually need to normalize. Any
+    ' VBA write clears Excel's native undo stack — by NOT writing when the
+    ' input is already a valid fraction (60%, 0.6, etc.), Ctrl+Z keeps
+    ' working for those cases.
     On Error GoTo SafeExit
     If target Is Nothing Then Exit Sub
+
+    Dim needsWrite As Boolean
+    needsWrite = False
+    Dim cCheck As Range
+    For Each cCheck In target.Cells
+        If IsNumeric(cCheck.Value) Then
+            If CDbl(cCheck.Value) > 2# Then
+                needsWrite = True
+                Exit For
+            End If
+        End If
+    Next cCheck
+
+    If Not needsWrite Then Exit Sub  ' nothing to do, preserve undo stack
 
     Dim prevEnableEvents As Boolean
     Dim prevSuppress As Boolean
@@ -249,8 +273,6 @@ Private Sub NormalizeAmiInputCells(target As Range)
         If IsNumeric(c.Value) Then
             Dim raw As Double
             raw = CDbl(c.Value)
-            ' Anything > 2 (= 200% AMI) must be a raw percent like "60" or "120".
-            ' Real AMI fractions are 0.3 .. 1.5 territory.
             If raw > 2# Then
                 c.Value = raw / 100#
             End If
