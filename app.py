@@ -1200,6 +1200,23 @@ def optimize_units():
                         candidate['assignments'] = assignments
                         candidate['rent_totals'] = rent_totals
 
+                        # HARD WAAMI CAP: client requirement is the legal cap is
+                        # never exceeded — not by a percent, not by a fraction.
+                        # Tiny float overshoots (e.g. 60.00004% from rounding)
+                        # still count as non-compliant and the scenario is dropped.
+                        cap_fraction_strict = float(strict_rules.get('waami_cap_percent') or 60.0) / 100.0
+                        total_sf_strict = sum(float(u.get('net_sf', 0) or 0) for u in assignments)
+                        if total_sf_strict > 0:
+                            actual_waami_strict = sum(
+                                float(u.get('net_sf', 0) or 0) * float(u.get('assigned_ami', 0) or 0)
+                                for u in assignments
+                            ) / total_sf_strict
+                            if actual_waami_strict > cap_fraction_strict:
+                                notes.append(
+                                    f"Dropped '{key}' edge scenario: WAAMI {actual_waami_strict*100:.6f}% exceeds the {cap_fraction_strict*100:.2f}% cap."
+                                )
+                                return False
+
                         # Tradeoffs: validate edge scenario under STRICT rules and keep only the failures.
                         is_valid, errors, _summary = _validate_assignment_payload(assignments, strict_config)
                         candidate['tradeoffs'] = [] if is_valid else errors[:8]
@@ -1565,6 +1582,31 @@ def optimize_units():
                     "changed_units": changed_units[:200],
                 },
             }
+
+        # FINAL HARD WAAMI CAP enforcement (belt + suspenders): scan every
+        # scenario from every source and drop any whose WAAMI exceeds the
+        # legal cap by even a fraction of a percent. Client requirement.
+        try:
+            cap_fraction_final = float((config.get('optimization_rules', {}) or {}).get('waami_cap_percent') or 60.0) / 100.0
+            dropped_for_cap = []
+            for _sk in list(scenarios.keys()):
+                _sv = scenarios.get(_sk)
+                if not _sv or 'assignments' not in _sv:
+                    continue
+                _a = _sv['assignments'] or []
+                _tsf = sum(float(_u.get('net_sf', 0) or 0) for _u in _a)
+                if _tsf <= 0:
+                    continue
+                _w = sum(float(_u.get('net_sf', 0) or 0) * float(_u.get('assigned_ami', 0) or 0) for _u in _a) / _tsf
+                if _w > cap_fraction_final:
+                    dropped_for_cap.append((_sk, _w))
+                    del scenarios[_sk]
+            for _k, _w in dropped_for_cap:
+                notes.append(
+                    f"Removed scenario '{_k}' from results: WAAMI {_w*100:.6f}% exceeds the {cap_fraction_final*100:.2f}% cap (client requires strict compliance)."
+                )
+        except Exception as _e:
+            notes.append(f"Note: WAAMI cap enforcement pass failed: {_e}")
 
         # Build response
         response_start = time.perf_counter()
