@@ -1616,6 +1616,7 @@ def optimize_units():
         # non-compliant pre-saved scenario still appears for visibility.
         try:
             if rent_schedule:
+                import math as _math
                 orig_assignments = []
                 for _idx, _u in df_units.iterrows():
                     _ami = _u.get('client_ami')
@@ -1625,13 +1626,23 @@ def optimize_units():
                         _ami_f = float(_ami)
                     except (TypeError, ValueError):
                         continue
-                    if _ami_f <= 0:
+                    # Defensive: reject NaN, non-positive, or unreasonable AMI
+                    # values. Market-rate units in the payload may have NaN AMI
+                    # which would otherwise sneak into the Original Scenario.
+                    if _math.isnan(_ami_f) or _ami_f <= 0 or _ami_f > 2.0:
+                        continue
+                    _net_sf_val = _u.get('net_sf')
+                    try:
+                        _net_sf_f = float(_net_sf_val or 0.0)
+                    except (TypeError, ValueError):
+                        _net_sf_f = 0.0
+                    if _net_sf_f <= 0 or _math.isnan(_net_sf_f):
                         continue
                     orig_assignments.append({
                         'unit_id': str(_u.get('unit_id', '')),
                         'assigned_ami': _ami_f,
                         'bedrooms': _u.get('bedrooms'),
-                        'net_sf': float(_u.get('net_sf') or 0.0),
+                        'net_sf': _net_sf_f,
                     })
                 if orig_assignments:
                     _enriched, _totals = compute_rents_for_assignments(

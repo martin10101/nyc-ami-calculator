@@ -2904,7 +2904,7 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     ws.Cells(row, 6).Value = "Gross Rent"
     ws.Cells(row, 7).Value = "Net Rent"
     ws.Cells(row, 8).Value = "Annual Rent"
-    ws.Cells(row, 9).Value = "Headline (pre-3% cap)"
+    ws.Cells(row, 9).Value = "Pre-Cap"
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 9)).Font.Bold = True
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 9)).Interior.Color = RGB(230, 230, 230)
     ws.Cells(row, 1).HorizontalAlignment = xlRight
