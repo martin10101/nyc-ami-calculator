@@ -613,6 +613,7 @@ def find_optimal_scenarios(
     relaxed_floor: float = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     project_overrides: Optional[Dict[str, Any]] = None,
+    rent_by_band_cents: Optional[Dict[int, List[int]]] = None,
 ) -> Dict[str, Any]:
     optimization_rules = copy.deepcopy(config['optimization_rules'])
     if relaxed_floor:
@@ -724,16 +725,38 @@ def find_optimal_scenarios(
             break
         combo_start = time.perf_counter()
         combos_checked += 1
-        result = _solve_single_scenario(
-            df_with_scores,
-            list(combo),
-            total_affordable_sf,
-            optimization_rules,
-            share_thresholds=share_thresholds,
-            share_denominators=share_denominators,
-            unit_band_rules=unit_band_rules,
-            unit_min_band=unit_min_band,
-        )
+        # When rent coefficients are available, optimize each combo's allocation
+        # for actual rent dollars instead of the WAAMI proxy. This is what makes
+        # the solver pick the client's allocation (e.g., 8/8/8 at [40,60,90])
+        # instead of the WAAMI-max allocation (9/8/7).
+        if rent_by_band_cents is not None and all(int(b) in rent_by_band_cents for b in combo):
+            rent_coeffs_int = [
+                [int(rent_by_band_cents[int(band)][i]) for band in combo]
+                for i in range(len(df_with_scores))
+            ]
+            result = _solve_single_scenario(
+                df_with_scores,
+                list(combo),
+                total_affordable_sf,
+                optimization_rules,
+                share_thresholds=share_thresholds,
+                share_denominators=share_denominators,
+                unit_band_rules=unit_band_rules,
+                unit_min_band=unit_min_band,
+                objective_mode="rent",
+                rent_coeffs_int=rent_coeffs_int,
+            )
+        else:
+            result = _solve_single_scenario(
+                df_with_scores,
+                list(combo),
+                total_affordable_sf,
+                optimization_rules,
+                share_thresholds=share_thresholds,
+                share_denominators=share_denominators,
+                unit_band_rules=unit_band_rules,
+                unit_min_band=unit_min_band,
+            )
         combo_duration = time.perf_counter() - combo_start
         if diagnostics is not None:
             diagnostics.append({

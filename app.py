@@ -818,6 +818,37 @@ def optimize_units():
         if not mih_constraint_injected:
             print(f"[MIH-DEBUG] total_building_sf NOT set: program={program_norm}, mih_residential_sf={mih_residential_sf}", flush=True)
 
+        # Load rent schedule BEFORE the solver runs so we can build per-band
+        # rent coefficients and pass them to find_optimal_scenarios. This makes
+        # the solver maximize ACTUAL rent dollars per combo (using haircut-
+        # adjusted rents from rent_components), instead of the WAAMI proxy.
+        rent_load_start = time.perf_counter()
+        rent_schedule = None
+        rent_schedule_cache_hit = False
+        rent_calc_path = _get_active_rent_calculator_path()
+        if rent_calc_path:
+            try:
+                rent_schedule, rent_schedule_cache_hit = _load_rent_schedule_cached(rent_calc_path)
+            except Exception as e:
+                notes.append(f"Warning: Could not load rent calculator: {str(e)}")
+        timing["rent_schedule_load_ms"] = int(round((time.perf_counter() - rent_load_start) * 1000))
+        timing["rent_schedule_cache_hit"] = bool(rent_schedule_cache_hit)
+
+        rent_by_band_cents = None
+        if rent_schedule:
+            try:
+                bands_for_rent = sorted({int(b) for b in (config.get('optimization_rules', {}) or {}).get('potential_bands', [])})
+                rent_by_band_cents = {}
+                for band in bands_for_rent:
+                    rents = []
+                    for _, unit_row in df_units.iterrows():
+                        components = rent_schedule.rent_components(band / 100.0, unit_row.get('bedrooms', 0), utilities_clean)
+                        rents.append(int(round(float(components['gross']) * 100)))
+                    rent_by_band_cents[int(band)] = rents
+            except Exception as e:
+                rent_by_band_cents = None
+                notes.append(f"Warning: Could not build per-band rent coefficients: {str(e)}")
+
         solver_start = time.perf_counter()
 
         # Run the strict solver (optionally with project overrides for premium weights / unit rules).
@@ -842,7 +873,7 @@ def optimize_units():
                     if int(_t.get('band_threshold', 0)) == 40:
                         _t['min_share'] = mih_walk_value
                         _t['max_share'] = round(mih_walk_value + mih_window_width, 5)
-                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
+                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
                 mih_walk_last = _trial
                 if (_trial.get('scenarios') or {}).get('absolute_best'):
                     mih_walk_results = _trial
@@ -863,7 +894,7 @@ def optimize_units():
             else:
                 solver_results = mih_walk_results
         else:
-            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides)
+            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
 
@@ -871,7 +902,7 @@ def optimize_units():
         baseline_scenarios = None
         baseline_notes = None
         if compare_baseline and project_overrides:
-            baseline_results = find_optimal_scenarios(df_units, config, project_overrides=None)
+            baseline_results = find_optimal_scenarios(df_units, config, project_overrides=None, rent_by_band_cents=rent_by_band_cents)
             baseline_scenarios = baseline_results.get('scenarios', {}) or {}
             baseline_notes = baseline_results.get('notes', []) or []
 
@@ -895,7 +926,7 @@ def optimize_units():
                         relaxed_rules['deep_affordability_max_share'] = float(candidate)
                         relaxed_config['optimization_rules'] = relaxed_rules
 
-                        relaxed_results = find_optimal_scenarios(df_units, relaxed_config, project_overrides=project_overrides)
+                        relaxed_results = find_optimal_scenarios(df_units, relaxed_config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
                         relaxed_scenarios = relaxed_results.get('scenarios', {}) or {}
                         if relaxed_scenarios.get('absolute_best'):
                             notes.append(
@@ -959,19 +990,8 @@ def optimize_units():
         except Exception:
             pass
 
-        # Load rent schedule and apply rent calculations
-        rent_load_start = time.perf_counter()
-        rent_schedule = None
-        rent_schedule_cache_hit = False
-        rent_calc_path = _get_active_rent_calculator_path()
-        if rent_calc_path:
-            try:
-                rent_schedule, rent_schedule_cache_hit = _load_rent_schedule_cached(rent_calc_path)
-            except Exception as e:
-                notes.append(f"Warning: Could not load rent calculator: {str(e)}")
-        timing["rent_schedule_load_ms"] = int(round((time.perf_counter() - rent_load_start) * 1000))
-        timing["rent_schedule_cache_hit"] = bool(rent_schedule_cache_hit)
-
+        # rent_schedule was already loaded above (before solver) so we could
+        # pass per-band rent coefficients into the solver.
         def _apply_rents_to_scenarios(scenarios_dict: dict) -> None:
             if not rent_schedule:
                 return
