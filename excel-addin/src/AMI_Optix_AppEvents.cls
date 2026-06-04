@@ -198,16 +198,14 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     On Error GoTo SafeExit
 
     ' Capture the pre-edit value (cached from the selection-change handler)
-    ' and arm the custom Ctrl+Z handler BEFORE we modify the cell or run the
-    ' refresh — both of those clear Excel's native undo stack.
+    ' so we can register a custom Ctrl+Z handler AFTER all macro writes
+    ' complete. Application.OnUndo is cleared by any subsequent macro write,
+    ' so we must register it last — see end of this sub.
     Dim oldValueForUndo As Variant
     If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
         oldValueForUndo = m_LastSelectionValue
     Else
         oldValueForUndo = Empty
-    End If
-    If target.CountLarge = 1 And Not IsEmpty(oldValueForUndo) Then
-        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
     End If
 
     ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
@@ -222,6 +220,13 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     m_LastSelectionSheet = CStr(ws.Name)
     m_LastSelectionAddress = target.Address(False, False)
     m_LastSelectionValue = target.Value
+
+    ' Register custom Ctrl+Z handler LAST. Application.OnUndo persists until
+    ' the next user action that would clear it; if we register early, the
+    ' subsequent macro writes (normalize + refresh) will wipe it out.
+    If target.CountLarge = 1 And Not IsEmpty(oldValueForUndo) Then
+        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
+    End If
 
 SafeExit:
 End Sub
@@ -329,11 +334,13 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
 
-    ' Arm custom Ctrl+Z handler with the cached pre-edit value (if available).
+    ' Capture pre-edit value for custom Ctrl+Z (registered AFTER the refresh
+    ' below so subsequent macro writes don't clear Application.OnUndo).
+    Dim oldValueForUndo As Variant
     If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
-        If Not IsEmpty(m_LastSelectionValue) Then
-            Call AMI_Optix_ArmUndoForAmiEdit(target, m_LastSelectionValue, programNorm)
-        End If
+        oldValueForUndo = m_LastSelectionValue
+    Else
+        oldValueForUndo = Empty
     End If
 
     Dim changes As Object
@@ -341,6 +348,11 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     changes(unitId) = newAmi
 
     Call ApplyManualAmiChangesAndRefresh(programNorm, changes, ws, target)
+
+    ' Register custom Ctrl+Z handler AFTER all macro writes complete.
+    If Not IsEmpty(oldValueForUndo) Then
+        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
+    End If
     Exit Sub
 
 Fail:
