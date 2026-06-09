@@ -18,6 +18,22 @@ Private m_LastSelectionSheet As String
 Private m_LastSelectionAddress As String
 Private m_LastSelectionValue As Variant
 
+Private Sub App_WorkbookDeactivate(ByVal Wb As Workbook)
+    ' When the user leaves a workbook, cancel any pending deferred refresh.
+    ' The refresh writes cells; if it fires while a different workbook is
+    ' active it will clear THAT workbook's Ctrl+Z undo stack. App_WorkbookActivate
+    ' reschedules the refresh on return.
+    On Error Resume Next
+    Call AMI_Optix_CancelDeferredRefresh
+End Sub
+
+Private Sub App_WorkbookActivate(ByVal Wb As Workbook)
+    ' On return to an AMI workbook, reschedule the deferred refresh that was
+    ' canceled by WorkbookDeactivate (no-op if nothing was pending).
+    On Error Resume Next
+    Call AMI_Optix_OnWorkbookActivate(Wb)
+End Sub
+
 Private Sub App_SheetActivate(ByVal Sh As Object)
     ' Keep AMI Optix sheets visible even in client workbooks that hide sheets via macros.
     On Error GoTo SafeExit
@@ -197,17 +213,6 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
     On Error GoTo SafeExit
 
-    ' Capture the pre-edit value (cached from the selection-change handler)
-    ' so we can register a custom Ctrl+Z handler AFTER all macro writes
-    ' complete. Application.OnUndo is cleared by any subsequent macro write,
-    ' so we must register it last — see end of this sub.
-    Dim oldValueForUndo As Variant
-    If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
-        oldValueForUndo = m_LastSelectionValue
-    Else
-        oldValueForUndo = Empty
-    End If
-
     ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
     ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
     ' Only writes when actually needed (raw > 2) to preserve Excel's native
@@ -220,20 +225,14 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' edit." By debouncing the refresh, the user gets a 2-second window where
     ' Ctrl+Z works natively. If they edit another cell within those 2 seconds,
     ' the timer resets. After the quiet period, the refresh fires and rents
-    ' update.
+    ' update. The refresh self-cancels if the user switches to a different
+    ' workbook during the quiet period.
     Call AMI_Optix_ScheduleDeferredRefresh(programNorm)
 
     ' Keep last selection cache consistent for subsequent edits.
     m_LastSelectionSheet = CStr(ws.Name)
     m_LastSelectionAddress = target.Address(False, False)
     m_LastSelectionValue = target.Value
-
-    ' Register custom Ctrl+Z fallback (for the edge case where user typed a
-    ' raw value like "60" which triggered our normalization write — Excel's
-    ' native undo was cleared by that write, but our cached state can restore).
-    If target.CountLarge = 1 And Not IsEmpty(oldValueForUndo) Then
-        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
-    End If
 
 SafeExit:
 End Sub
@@ -356,25 +355,11 @@ Private Sub HandleManualScenarioEdit(ws As Worksheet, target As Range)
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
 
-    ' Capture pre-edit value for custom Ctrl+Z (registered AFTER the refresh
-    ' below so subsequent macro writes don't clear Application.OnUndo).
-    Dim oldValueForUndo As Variant
-    If m_LastSelectionSheet = CStr(ws.Name) And m_LastSelectionAddress = target.Address(False, False) Then
-        oldValueForUndo = m_LastSelectionValue
-    Else
-        oldValueForUndo = Empty
-    End If
-
     Dim changes As Object
     Set changes = CreateObject("Scripting.Dictionary") ' unit_id -> newAmi
     changes(unitId) = newAmi
 
     Call ApplyManualAmiChangesAndRefresh(programNorm, changes, ws, target)
-
-    ' Register custom Ctrl+Z handler AFTER all macro writes complete.
-    If Not IsEmpty(oldValueForUndo) Then
-        Call AMI_Optix_ArmUndoForAmiEdit(target, oldValueForUndo, programNorm)
-    End If
     Exit Sub
 
 Fail:

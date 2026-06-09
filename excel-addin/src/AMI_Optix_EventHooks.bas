@@ -10,23 +10,15 @@ Public g_AMIOptixSuppressEvents As Boolean
 Public g_AMIOptixLiveSyncEnabled As Boolean
 Public g_AMIOptixVisibilityWorkbookName As String
 
-' Custom-undo state for AMI cell edits. The live-sync refresh that runs after
-' each AMI edit writes to other cells, which always clears Excel's native undo
-' stack. We register a custom Application.OnUndo handler so Ctrl+Z can still
-' restore the most recently edited AMI cell.
-Public g_AMIOptixUndoWorkbookName As String
-Public g_AMIOptixUndoSheetName As String
-Public g_AMIOptixUndoAddress As String
-Public g_AMIOptixUndoOldValue As Variant
-Public g_AMIOptixUndoProgramNorm As String
-Public g_AMIOptixUndoArmed As Boolean
-
 ' Deferred Manual Working Copy refresh. We delay the refresh by ~2 seconds
 ' after the last AMI edit so Excel's native Ctrl+Z keeps working during that
 ' window. If the user makes another edit before the timer fires, we cancel
-' and reschedule.
+' and reschedule. The refresh also self-cancels if the AMI workbook is no
+' longer active when the timer fires — otherwise our writes would land in an
+' unrelated workbook and wipe its undo stack.
 Public g_AMIOptixDeferredRefreshAt As Date
 Public g_AMIOptixDeferredRefreshProgramNorm As String
+Public g_AMIOptixDeferredRefreshWorkbook As String
 
 Private m_LiveSyncInitialized As Boolean
 Private m_EnsureVisibleScheduled As Boolean
@@ -61,24 +53,38 @@ Public Sub Auto_Close()
 End Sub
 
 Public Sub StartAMIOptixEventHooks()
+    ' Self-heal: release any stale Ctrl+Z hijack left over from prior buggy
+    ' add-in versions. Calling OnKey with no second argument resets the key
+    ' to Excel's default behavior. Idempotent and safe on fresh sessions —
+    ' must run BEFORE anything else so installs upgrading from the broken
+    ' version get their global Ctrl+Z back immediately.
+    On Error Resume Next
+    Application.OnKey "^z"
+    Application.OnKey "^+z"
+    On Error GoTo 0
+
     On Error Resume Next
     EnsureLiveSyncInitialized
     g_AMIOptixVisibilityWorkbookName = ""
     Set g_AMIOptixAppEvents = New AMI_Optix_AppEvents
     Set g_AMIOptixAppEvents.App = Application
-    ' Install global Ctrl+Z intercept so AMI cell edits can be undone even
-    ' after the live-sync refresh clears Excel's native undo stack.
-    Call AMI_Optix_ArmCtrlZIntercept
     On Error GoTo 0
 End Sub
 
 Public Sub StopAMIOptixEventHooks()
-    On Error Resume Next
+    ' Release any pending timers and event sinks. We deliberately do NOT wrap
+    ' the OnKey releases in On Error Resume Next — if those fail to release,
+    ' Excel's Ctrl+Z stays hijacked for the rest of the session and breaks
+    ' undo in EVERY workbook. We need to know if that ever happens.
     Call AMI_Optix_CancelEnsureSheetsVisible
-    ' Release both key intercepts so Excel's default shortcuts are restored
-    ' when the add-in unloads.
+    Call AMI_Optix_CancelDeferredRefresh
+
+    ' Unconditional release so Excel's default shortcuts are restored even if
+    ' the AppEvents object was already torn down or never created.
     Application.OnKey "^z"
     Application.OnKey "^+z"
+
+    On Error Resume Next
     If Not g_AMIOptixAppEvents Is Nothing Then
         Set g_AMIOptixAppEvents.App = Nothing
     End If
@@ -148,39 +154,6 @@ Public Sub AMI_Optix_CancelEnsureSheetsVisible()
     On Error GoTo 0
 End Sub
 
-Public Sub AMI_Optix_ArmUndoForAmiEdit(target As Range, oldValue As Variant, programNorm As String)
-    ' Capture the pre-edit AMI cell state. Excel's native undo gets cleared by
-    ' the live-sync refresh that runs after an AMI edit, AND Application.OnUndo
-    ' is unreliable from inside an .xlam add-in. So we intercept Ctrl+Z via
-    ' Application.OnKey (registered globally at Auto_Open) and route it through
-    ' our handler which checks this armed state.
-    On Error GoTo SafeExit
-    If target Is Nothing Then Exit Sub
-
-    Dim wb As String
-    Dim ws As String
-    On Error Resume Next
-    wb = CStr(target.Worksheet.Parent.Name)
-    ws = CStr(target.Worksheet.Name)
-    On Error GoTo SafeExit
-
-    g_AMIOptixUndoWorkbookName = wb
-    g_AMIOptixUndoSheetName = ws
-    g_AMIOptixUndoAddress = target.Address(False, False)
-    g_AMIOptixUndoOldValue = oldValue
-    g_AMIOptixUndoProgramNorm = CStr(programNorm)
-    g_AMIOptixUndoArmed = True
-
-    ' Make sure the Ctrl+Z intercept is active (idempotent — safe to call
-    ' repeatedly). If it gets disarmed for some reason this re-establishes it.
-    Call AMI_Optix_ArmCtrlZIntercept
-
-    On Error Resume Next
-    DebugLog "Custom undo armed for " & wb & "!" & ws & "!" & target.Address(False, False) & " (old=" & CStr(oldValue) & ")", True
-
-SafeExit:
-End Sub
-
 Public Sub AMI_Optix_ScheduleDeferredRefresh(programNorm As String)
     ' Debounced Manual Working Copy refresh: cancel any pending refresh,
     ' schedule a new one ~2 seconds out. The delay gives the user a window
@@ -188,11 +161,15 @@ Public Sub AMI_Optix_ScheduleDeferredRefresh(programNorm As String)
     ' we haven't written to any cell).
     On Error Resume Next
 
-    ' Cancel any pending refresh (best effort).
-    If g_AMIOptixDeferredRefreshAt <> 0 Then
-        Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
-                            Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh", _
-                            Schedule:=False
+    Call AMI_Optix_CancelDeferredRefresh
+
+    ' Capture which workbook initiated this refresh. If the user switches to
+    ' a different workbook before the timer fires, AMI_Optix_DoDeferredRefresh
+    ' will bail out rather than write into the wrong workbook (which would
+    ' clear that workbook's Ctrl+Z undo stack).
+    g_AMIOptixDeferredRefreshWorkbook = ""
+    If Not ActiveWorkbook Is Nothing Then
+        g_AMIOptixDeferredRefreshWorkbook = CStr(ActiveWorkbook.Name)
     End If
 
     g_AMIOptixDeferredRefreshProgramNorm = CStr(programNorm)
@@ -201,88 +178,44 @@ Public Sub AMI_Optix_ScheduleDeferredRefresh(programNorm As String)
                         Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh"
 End Sub
 
+Public Sub AMI_Optix_CancelDeferredRefresh()
+    ' Cancel any pending deferred refresh. Called when the user switches to
+    ' a different workbook (so our timer doesn't fire into the wrong workbook
+    ' and clear THAT workbook's undo stack) or when the add-in unloads.
+    On Error Resume Next
+    If g_AMIOptixDeferredRefreshAt <> 0 Then
+        Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
+                            Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh", _
+                            Schedule:=False
+        g_AMIOptixDeferredRefreshAt = 0
+    End If
+End Sub
+
 Public Sub AMI_Optix_DoDeferredRefresh()
     ' Fires (via OnTime) ~2 seconds after the last AMI edit. Performs the
     ' Manual Working Copy refresh that was previously immediate.
     On Error Resume Next
     g_AMIOptixDeferredRefreshAt = 0
+
     Dim prog As String
+    Dim scheduledWb As String
     prog = g_AMIOptixDeferredRefreshProgramNorm
-    If prog <> "" Then
-        Dim prevEnableEvents As Boolean
-        Dim prevSuppress As Boolean
-        prevEnableEvents = Application.EnableEvents
-        prevSuppress = g_AMIOptixSuppressEvents
-        Application.EnableEvents = False
-        g_AMIOptixSuppressEvents = True
+    scheduledWb = g_AMIOptixDeferredRefreshWorkbook
+    If prog = "" Then Exit Sub
 
-        Call RefreshManualWorkingCopyLocalRents(prog)
-
-        Application.EnableEvents = prevEnableEvents
-        g_AMIOptixSuppressEvents = prevSuppress
+    ' GUARD: only refresh when the workbook that scheduled the timer is still
+    ' the active workbook. If the user switched to a different workbook (or
+    ' closed the AMI workbook entirely), writing 100+ cells now would clear
+    ' Excel's session-wide undo stack and break Ctrl+Z in their other docs.
+    ' On return, App_WorkbookActivate reschedules the refresh.
+    If ActiveWorkbook Is Nothing Then Exit Sub
+    If scheduledWb <> "" Then
+        If CStr(ActiveWorkbook.Name) <> scheduledWb Then Exit Sub
     End If
-End Sub
-
-Public Sub AMI_Optix_ArmCtrlZIntercept()
-    ' Registers TWO key intercepts that route through our undo handler:
-    '   Ctrl+Z  - tries to override Excel's native Ctrl+Z (may not always
-    '             stick depending on Excel config, but worth attempting)
-    '   Ctrl+Shift+Z - guaranteed backup. Excel doesn't use this shortcut
-    '             natively (Ctrl+Y is redo), so OnKey is rock-solid here.
-    ' Tell users: "if Ctrl+Z doesn't undo your AMI edit, use Ctrl+Shift+Z."
-    On Error Resume Next
-    Dim procRef As String
-    procRef = "'" & ThisWorkbook.Name & "'!AMI_Optix_HandleCtrlZ"
-    Application.OnKey "^z", procRef
-    Application.OnKey "^+z", procRef
-End Sub
-
-Public Sub AMI_Optix_HandleCtrlZ()
-    ' Routes Ctrl+Z: if we have an armed AMI undo, restore the cell. Else
-    ' fall through to Excel's native undo (Application.Undo).
-    On Error GoTo Passthrough
-
-    On Error Resume Next
-    DebugLog "Ctrl+Z intercepted: armed=" & CStr(g_AMIOptixUndoArmed), True
-    On Error GoTo Passthrough
-
-    If g_AMIOptixUndoArmed Then
-        Call AMI_Optix_UndoLastAmiEdit
-        Exit Sub
-    End If
-
-Passthrough:
-    On Error Resume Next
-    Application.Undo
-End Sub
-
-Public Sub AMI_Optix_UndoLastAmiEdit()
-    ' Restores the most recently edited AMI cell to its pre-edit value. Called
-    ' by Excel via Application.OnUndo when the user presses Ctrl+Z.
-    On Error Resume Next
-    DebugLog "OnUndo fired: armed=" & CStr(g_AMIOptixUndoArmed) & " sheet=" & g_AMIOptixUndoSheetName & " addr=" & g_AMIOptixUndoAddress & " old=" & CStr(g_AMIOptixUndoOldValue), True
-    On Error GoTo SafeExit
-    If Not g_AMIOptixUndoArmed Then Exit Sub
-    If g_AMIOptixUndoSheetName = "" Or g_AMIOptixUndoAddress = "" Then Exit Sub
-
-    Dim wb As Workbook
-    Set wb = Nothing
-    On Error Resume Next
-    Set wb = Application.Workbooks(g_AMIOptixUndoWorkbookName)
-    On Error GoTo SafeExit
-    If wb Is Nothing Then
-        On Error Resume Next
-        Set wb = ActiveWorkbook
-        On Error GoTo SafeExit
-    End If
-    If wb Is Nothing Then Exit Sub
-
-    Dim ws As Worksheet
-    Set ws = Nothing
-    On Error Resume Next
-    Set ws = wb.Worksheets(g_AMIOptixUndoSheetName)
-    On Error GoTo SafeExit
-    If ws Is Nothing Then Exit Sub
+    ' Belt-and-suspenders: must have an "AMI Scenarios" sheet to be a real AMI
+    ' workbook. Prevents accidental fire-through on a random workbook that
+    ' happens to share a name (rare, but cheap to guard).
+    If Not WorkbookHasAmiScenariosSheet(ActiveWorkbook) Then Exit Sub
 
     Dim prevEnableEvents As Boolean
     Dim prevSuppress As Boolean
@@ -291,26 +224,41 @@ Public Sub AMI_Optix_UndoLastAmiEdit()
     Application.EnableEvents = False
     g_AMIOptixSuppressEvents = True
 
-    On Error Resume Next
-    ws.Range(g_AMIOptixUndoAddress).Value = g_AMIOptixUndoOldValue
-    ws.Range(g_AMIOptixUndoAddress).NumberFormat = "0%"
-    On Error GoTo SafeExit
+    Call RefreshManualWorkingCopyLocalRents(prog)
 
     Application.EnableEvents = prevEnableEvents
     g_AMIOptixSuppressEvents = prevSuppress
+End Sub
 
-    ' One-shot — clear so subsequent Ctrl+Z presses don't re-fire the same undo.
-    g_AMIOptixUndoArmed = False
-
-    ' Refresh the Manual Working Copy with the restored AMI value so rents
-    ' reflect the undone state. Best-effort; ignore errors.
+Private Function WorkbookHasAmiScenariosSheet(wb As Workbook) As Boolean
+    On Error GoTo Fail
+    If wb Is Nothing Then Exit Function
+    Dim ws As Worksheet
+    Set ws = Nothing
     On Error Resume Next
-    If g_AMIOptixUndoProgramNorm <> "" Then
-        Call RefreshManualWorkingCopyLocalRents(g_AMIOptixUndoProgramNorm)
-    End If
-    On Error GoTo SafeExit
+    Set ws = wb.Worksheets("AMI Scenarios")
+    On Error GoTo Fail
+    WorkbookHasAmiScenariosSheet = (Not ws Is Nothing)
+    Exit Function
+Fail:
+    WorkbookHasAmiScenariosSheet = False
+End Function
 
-SafeExit:
+Public Sub AMI_Optix_OnWorkbookActivate(ByVal Wb As Workbook)
+    ' Called by App_WorkbookActivate. If we have a pending refresh for THIS
+    ' workbook and the timer was canceled while the user was elsewhere,
+    ' reschedule so the refresh fires on their return.
     On Error Resume Next
-    Application.EnableEvents = True
+    If Wb Is Nothing Then Exit Sub
+    If g_AMIOptixDeferredRefreshWorkbook = "" Then Exit Sub
+    If CStr(Wb.Name) <> g_AMIOptixDeferredRefreshWorkbook Then Exit Sub
+    If g_AMIOptixDeferredRefreshProgramNorm = "" Then Exit Sub
+
+    ' Only reschedule if no timer is currently armed (avoid double-scheduling
+    ' the same refresh).
+    If g_AMIOptixDeferredRefreshAt <> 0 Then Exit Sub
+
+    g_AMIOptixDeferredRefreshAt = Now + TimeSerial(0, 0, 2)
+    Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
+                        Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh"
 End Sub
