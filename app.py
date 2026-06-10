@@ -1049,7 +1049,7 @@ def optimize_units():
             # the rent-max landing zone). Both still use rent-max within the
             # narrowed window so the trade-off is purely about 40% exposure.
             if rent_schedule and rent_by_band_cents:
-                def _solve_with_40_window(min_share, max_share):
+                def _solve_with_40_window(min_share, max_share, floor_tiebreak=False):
                     v_config = copy.deepcopy(config)
                     v_rules = v_config.get('optimization_rules', {}) or {}
                     modified = False
@@ -1078,6 +1078,7 @@ def optimize_units():
                         df_units, v_config,
                         project_overrides=project_overrides,
                         rent_by_band_cents=rent_by_band_cents,
+                        low_band_floor_tiebreak=floor_tiebreak,
                     )
                     v_scenarios = v_results.get('scenarios', {}) or {}
                     best_pick = None
@@ -1109,10 +1110,15 @@ def optimize_units():
                     eff_min = float((config.get('optimization_rules', {}) or {}).get('deep_affordability_min_share') or 0.10)
                     eff_max = float((config.get('optimization_rules', {}) or {}).get('deep_affordability_max_share') or 0.125)
 
-                # low_40_share: narrow window at the floor (e.g., [10.0%, 10.5%])
+                # low_40_share: narrow window at the floor (e.g., [10.0%, 10.5%]).
+                # Floor tie-break on: among equal-rent optima, 40% units sink to
+                # the lowest floors (free — 40% rent never depends on floor).
                 window_width = 0.005
-                low_40 = _solve_with_40_window(eff_min, eff_min + window_width)
+                low_40 = _solve_with_40_window(eff_min, eff_min + window_width, floor_tiebreak=True)
                 if low_40 and low_40.get('rent_totals'):
+                    low40_base_desc = "Low-40 option: best rent at the minimum 40% share."
+                    low_40['tradeoffs'] = [low40_base_desc]
+                    low_40['description'] = low40_base_desc
                     scenarios['low_40_share'] = low_40
 
                 # max_40_share: narrow window at the ceiling (e.g., [12.0%, 12.5%])
@@ -1379,6 +1385,220 @@ def optimize_units():
                     )
         except Exception as e:
             notes.append(f"Warning: best_rent_roll promotion failed: {str(e)}")
+
+        # --- Low-40 options ladder (client request 2026-06) ---
+        # The client's buyers usually prefer the smallest possible 40% AMI
+        # allocation, but a single 'low_40_share' scenario gives them no
+        # choice. Add up to 3 MORE low-40 options, each rent-maximized inside
+        # the same minimum-40% window, each structurally different:
+        #   count rungs:  pin the number of apartments at 40% (fewest
+        #                 possible, fewest+1, fewest+2) — "fewest" forces the
+        #                 largest units into the 40% band
+        #   differ rungs: force a layout that differs from low_40_share by at
+        #                 least 3 units, relaxing to 2 then 1 so small
+        #                 buildings still get options (closer together in
+        #                 rent, as accepted)
+        # Acceptance requires a genuinely different OUTCOME (band counts or
+        # rent dollars), so the Fix-02 de-dupe below never collapses them.
+        # Runs AFTER the edge block so edge-scenario generation sees the same
+        # scenario count as before this feature (zero interference).
+        try:
+            base_low40 = (scenarios or {}).get('low_40_share')
+            if rent_schedule and rent_by_band_cents and base_low40 and base_low40.get('canonical_assignments'):
+                low40_rules = (config.get('optimization_rules', {}) or {})
+                cap_fraction_low40 = float(low40_rules.get('waami_cap_percent') or 60.0) / 100.0
+
+                # Effective 40% window + denominator (mirrors the low_40_share
+                # block above; MIH uses share_thresholds, UAP the legacy keys).
+                low40_eff_min, low40_eff_max = None, None
+                low40_denom_key = 'affordable'
+                for t in (low40_rules.get('share_thresholds') or []):
+                    try:
+                        if int(t.get('band_threshold', 0)) <= 40:
+                            low40_eff_min = float(t.get('min_share') or 0.10)
+                            low40_eff_max = float(t.get('max_share') or 0.125)
+                            low40_denom_key = str(t.get('denominator') or 'affordable').lower()
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                if low40_eff_min is None:
+                    low40_eff_min = float(low40_rules.get('deep_affordability_min_share') or 0.10)
+                    low40_eff_max = float(low40_rules.get('deep_affordability_max_share') or 0.125)
+                    low40_denom_key = str(low40_rules.get('share_denominator') or 'affordable').lower()
+                low40_window_max = min(float(low40_eff_max), float(low40_eff_min) + 0.005)
+
+                if low40_denom_key == 'residential' and low40_rules.get('residential_sf'):
+                    low40_denom_sf = float(low40_rules['residential_sf'])
+                elif low40_denom_key == 'total_building' and low40_rules.get('total_building_sf'):
+                    low40_denom_sf = float(low40_rules['total_building_sf'])
+                else:
+                    low40_denom_sf = float(df_units['net_sf'].sum())
+
+                def _low40_config():
+                    cfg = copy.deepcopy(config)
+                    rules = cfg.get('optimization_rules', {}) or {}
+                    thresholds = rules.get('share_thresholds')
+                    if isinstance(thresholds, list):
+                        for t in thresholds:
+                            try:
+                                if int(t.get('band_threshold', 0)) <= 40:
+                                    t['min_share'] = float(low40_eff_min)
+                                    t['max_share'] = float(low40_window_max)
+                            except (TypeError, ValueError):
+                                pass
+                    if rules.get('deep_affordability_min_share') is not None and rules.get('deep_affordability_max_share') is not None:
+                        rules['deep_affordability_min_share'] = float(low40_eff_min)
+                        rules['deep_affordability_max_share'] = float(low40_window_max)
+                    # Keep each ladder solve snappy: the narrow window prunes
+                    # hard and rent-max sorting finds the best combos early.
+                    rules['max_revenue_combo_checks'] = 12
+                    cfg['optimization_rules'] = rules
+                    return cfg
+
+                def _canon_pairs(canon):
+                    pairs = []
+                    for entry in (canon or []):
+                        try:
+                            pairs.append((str(entry[0]), int(entry[1])))
+                        except (TypeError, ValueError, IndexError):
+                            continue
+                    return pairs
+
+                def _low40_outcome_sig(s):
+                    # Outcome identity = band mix unit-counts + monthly rent.
+                    # Two options matching on both are pointless to show.
+                    if not s:
+                        return None
+                    mix = ((s.get('metrics') or {}).get('band_mix')) or []
+                    rt = s.get('rent_totals') or {}
+                    if not mix or rt.get('net_monthly') is None:
+                        return None
+                    try:
+                        mix_t = tuple(sorted(
+                            (int(m.get('band')), int(m.get('units') or 0)) for m in mix
+                        ))
+                        return (mix_t, round(float(rt.get('net_monthly')), 2))
+                    except (TypeError, ValueError):
+                        return None
+
+                base_canon = _canon_pairs(base_low40.get('canonical_assignments'))
+                taken_sigs = set()
+                taken_canons = set()
+                for s in (scenarios or {}).values():
+                    sig = _low40_outcome_sig(s)
+                    if sig:
+                        taken_sigs.add(sig)
+                    ck = tuple(_canon_pairs((s or {}).get('canonical_assignments')))
+                    if ck:
+                        taken_canons.add(ck)
+
+                # Proven lower bound on "fewest units at 40%": taking units
+                # largest-first is optimal for minimum count to reach an SF
+                # threshold. Other constraints may push the true minimum
+                # higher — the +1/+2 rungs absorb that.
+                k_min = None
+                required_40_sf = float(low40_eff_min) * low40_denom_sf
+                sf_desc = sorted(
+                    (float(v) for v in df_units['net_sf'].tolist() if v and float(v) > 0),
+                    reverse=True,
+                )
+                acc_sf = 0.0
+                for idx, sf in enumerate(sf_desc, start=1):
+                    acc_sf += sf
+                    if acc_sf >= required_40_sf - 1e-9:
+                        k_min = idx
+                        break
+
+                rungs = []
+                if k_min:
+                    rungs.extend([('count', k_min), ('count', k_min + 1), ('count', k_min + 2)])
+                rungs.extend([('differ', 3), ('differ', 2), ('differ', 1)])
+
+                accepted_canons = []
+                added_keys = []
+                for rung_kind, rung_value in rungs:
+                    if len(added_keys) >= 3:
+                        break
+                    # Always exclude the base layout and everything already
+                    # accepted, so each rung must surface something new.
+                    differ_constraints = [(base_canon, 1)] + [(c, 1) for c in accepted_canons]
+                    count_pin = None
+                    if rung_kind == 'count':
+                        count_pin = int(rung_value)
+                    else:
+                        differ_constraints[0] = (base_canon, int(rung_value))
+
+                    candidate = find_max_revenue_scenario(
+                        df_units,
+                        _low40_config(),
+                        rent_by_band_cents=rent_by_band_cents,
+                        waami_floor=0.58,
+                        project_overrides=project_overrides,
+                        low_band_unit_count=count_pin,
+                        differ_from=differ_constraints,
+                        low_band_floor_tiebreak=True,
+                    )
+                    if not candidate or candidate.get('status') != 'OPTIMAL':
+                        continue
+                    cand_canon = tuple(_canon_pairs(candidate.get('canonical_assignments')))
+                    if not cand_canon or cand_canon in taken_canons:
+                        continue
+
+                    cand_assignments, cand_rent_totals = compute_rents_for_assignments(
+                        rent_schedule, candidate['assignments'], utilities_clean
+                    )
+                    candidate['assignments'] = cand_assignments
+                    candidate['rent_totals'] = cand_rent_totals
+
+                    # Hard WAAMI cap — same strictness as every other scenario.
+                    cand_total_sf = sum(float(u.get('net_sf', 0) or 0) for u in cand_assignments)
+                    if cand_total_sf <= 0:
+                        continue
+                    cand_waami = sum(
+                        float(u.get('net_sf', 0) or 0) * float(u.get('assigned_ami', 0) or 0)
+                        for u in cand_assignments
+                    ) / cand_total_sf
+                    if cand_waami > cap_fraction_low40:
+                        continue
+
+                    sig = _low40_outcome_sig(candidate)
+                    if sig is None or sig in taken_sigs:
+                        continue
+
+                    low40_unit_count = sum(
+                        1 for u in cand_assignments
+                        if float(u.get('assigned_ami', 0) or 0) <= 0.4000001
+                    )
+                    if rung_kind == 'count':
+                        desc = (
+                            f"Low-40 option: only {low40_unit_count} apartments at 40% AMI, "
+                            f"rent-maximized at the minimum 40% share."
+                        )
+                    else:
+                        desc = (
+                            f"Low-40 option: alternative layout (differs from Low 40 Share by at least "
+                            f"{int(rung_value)} unit(s)), rent-maximized at the minimum 40% share."
+                        )
+                    candidate['tradeoffs'] = [desc]
+                    candidate['description'] = desc
+
+                    key = f"low_40_share_{len(added_keys) + 2}"
+                    scenarios[key] = candidate
+                    taken_sigs.add(sig)
+                    taken_canons.add(cand_canon)
+                    accepted_canons.append(list(cand_canon))
+                    added_keys.append(key)
+
+                if added_keys:
+                    notes.append(
+                        f"Low-40 options: added {len(added_keys)} additional minimal-40% scenario(s) ({', '.join(added_keys)})."
+                    )
+                else:
+                    notes.append(
+                        "Low-40 options: no additional distinct minimal-40% layouts exist for this building."
+                    )
+        except Exception as e:
+            notes.append(f"Warning: low-40 options ladder failed: {str(e)}")
 
         # --- Fix-02: De-dupe outcome-identical scenarios (post-processing) ---
         # Only remove scenarios when they are truly identical in outputs (band mix + rent totals),

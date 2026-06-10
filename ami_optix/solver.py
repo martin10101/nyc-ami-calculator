@@ -170,6 +170,9 @@ def _solve_single_scenario(
     unit_min_band: Optional[Dict[int, int]] = None,
     objective_mode: str = "waami",
     rent_coeffs_int: Optional[List[List[int]]] = None,
+    low_band_unit_count: Optional[int] = None,
+    differ_from: Optional[List[tuple]] = None,
+    low_band_floor_tiebreak: bool = False,
 ) -> Dict[str, Any]:
     bands_to_test = [band for band in bands_to_test if band != 50]
     if not bands_to_test:
@@ -278,6 +281,53 @@ def _solve_single_scenario(
                 upper_sf = math.floor(float(max_share) * denom_sf_int)
                 model.Add(low_band_var <= upper_sf)
 
+    # Optional: pin the exact number of units assigned to bands <= 40%.
+    # Used by the low-40 options ladder so each option has a structurally
+    # different rent roll (e.g., 6 large units at 40% vs 8 smaller ones),
+    # instead of micro-variations of the same layout.
+    if low_band_unit_count is not None:
+        low_count_indices = [j for j, band in enumerate(bands_to_test) if int(band) <= 40]
+        if not low_count_indices:
+            if int(low_band_unit_count) > 0:
+                return {"status": "NO_SOLUTION"}
+        else:
+            low_count_expr = sum(
+                x[i][j] for i in range(num_units) for j in low_count_indices
+            )
+            model.Add(low_count_expr == int(low_band_unit_count))
+
+    # Optional: require the solution to differ from prior solutions by at
+    # least N unit assignments each. Entries are (canonical_assignments,
+    # min_diff_units) where canonical is a list of (unit_id, band_percent).
+    if differ_from:
+        unit_ids = [str(v) for v in df_affordable['unit_id'].tolist()]
+        band_index_by_value = {int(band): j for j, band in enumerate(bands_to_test)}
+        for prior_canonical, min_diff_units in differ_from:
+            prev_map: Dict[str, int] = {}
+            for entry in (prior_canonical or []):
+                try:
+                    prev_map[str(entry[0])] = int(entry[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+            if not prev_map:
+                continue
+            max_matches = len(prev_map) - int(min_diff_units)
+            if max_matches < 0:
+                return {"status": "NO_SOLUTION"}
+            match_terms = []
+            for i, uid in enumerate(unit_ids):
+                prev_band = prev_map.get(uid)
+                if prev_band is None:
+                    continue
+                j = band_index_by_value.get(prev_band)
+                if j is None:
+                    # That band isn't in this combo, so this unit can never
+                    # match its prior assignment — it differs for free.
+                    continue
+                match_terms.append(x[i][j])
+            if match_terms:
+                model.Add(sum(match_terms) <= max_matches)
+
     objective_mode_norm = (objective_mode or "waami").strip().lower()
     primary_var = total_ami_sf_var
     if objective_mode_norm == "waami":
@@ -357,6 +407,36 @@ def _solve_single_scenario(
     # Skip premium-alignment tie-breaking entirely to avoid extra solve work.
     if objective_mode_norm == "rent":
         assignments = pass1_assignments
+
+        # Optional free tie-break: among equal-rent optima, push <=40% AMI
+        # units to the lowest floors. A 40% unit's regulated rent depends on
+        # band + bedrooms only (never the floor), so this re-shuffle cannot
+        # cost a dollar of rent — it just preserves high floors for the
+        # higher bands. Skipped when no floor data exists.
+        if low_band_floor_tiebreak and 'floor' in df_affordable.columns:
+            low_band_indices = [j for j, band in enumerate(bands_to_test) if int(band) <= 40]
+            floor_series = pd.to_numeric(df_affordable['floor'], errors='coerce').fillna(0.0)
+            if low_band_indices and float(floor_series.max()) > float(floor_series.min()):
+                model.Add(primary_var == optimal_primary)
+                floor_ints = (floor_series * 100).round().astype(int)
+                low_floor_expr = sum(
+                    x[i][j] * int(floor_ints.iloc[i])
+                    for i in range(num_units)
+                    for j in low_band_indices
+                )
+                model.Minimize(low_floor_expr)
+                tiebreak_limit = 0.25
+                if time_limit_seconds is not None:
+                    tiebreak_limit = min(tiebreak_limit, float(time_limit_seconds))
+                solver_tiebreak = cp_model.CpSolver()
+                _configure_solver(solver_tiebreak, tiebreak_limit)
+                try:
+                    tiebreak_status = solver_tiebreak.Solve(model)
+                except (SystemExit, KeyboardInterrupt):
+                    tiebreak_status = None
+                if tiebreak_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    assignments = _extract_assignments_from_solver(solver_tiebreak)
+
         final_waami = _calculate_waami_from_assignments(assignments)
         metrics = _build_metrics(assignments)
         rent_score = None
@@ -444,10 +524,18 @@ def find_max_revenue_scenario(
     waami_floor: float,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     project_overrides: Optional[Dict[str, Any]] = None,
+    low_band_unit_count: Optional[int] = None,
+    differ_from: Optional[List[tuple]] = None,
+    low_band_floor_tiebreak: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Finds a single scenario that maximizes rent (gross/net equivalent for fixed utilities),
     subject to all constraints (WAAMI cap + share thresholds + band caps) and a WAAMI floor.
+
+    Optional low-40 ladder constraints (all default off, so existing callers
+    are unaffected): pin the exact unit count at bands <= 40%, require the
+    solution to differ from prior canonical assignments, and/or tie-break
+    equal-rent optima toward the lowest floors for <=40% units.
     """
     optimization_rules = copy.deepcopy(config['optimization_rules'])
     optimization_rules['waami_floor'] = float(waami_floor)
@@ -573,6 +661,9 @@ def find_max_revenue_scenario(
             unit_min_band=unit_min_band,
             objective_mode="rent",
             rent_coeffs_int=rent_coeffs_int,
+            low_band_unit_count=low_band_unit_count,
+            differ_from=differ_from,
+            low_band_floor_tiebreak=low_band_floor_tiebreak,
         )
         combo_duration = time.perf_counter() - combo_start
         if diagnostics is not None:
@@ -614,6 +705,7 @@ def find_optimal_scenarios(
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     project_overrides: Optional[Dict[str, Any]] = None,
     rent_by_band_cents: Optional[Dict[int, List[int]]] = None,
+    low_band_floor_tiebreak: bool = False,
 ) -> Dict[str, Any]:
     optimization_rules = copy.deepcopy(config['optimization_rules'])
     if relaxed_floor:
@@ -745,6 +837,7 @@ def find_optimal_scenarios(
                 unit_min_band=unit_min_band,
                 objective_mode="rent",
                 rent_coeffs_int=rent_coeffs_int,
+                low_band_floor_tiebreak=low_band_floor_tiebreak,
             )
         else:
             result = _solve_single_scenario(
