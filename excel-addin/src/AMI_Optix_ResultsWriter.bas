@@ -1149,7 +1149,14 @@ AfterRent:
     ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 16
-    row = row + 2
+    row = row + 1
+
+    ' Rents in this path are computed locally from the dropdown year — mark
+    ' the label "(local)" to distinguish from server-priced blocks.
+    If selectedYear > 0 Then
+        row = WriteRentRollYearLine(ws, row, CStr(selectedYear) & " (local)")
+    End If
+    row = row + 1
 
     row = WriteUtilitySettings(ws, row)
     row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
@@ -2212,6 +2219,46 @@ Fail:
     FindFirstScenarioHeaderRow = 0
 End Function
 
+Private Function WriteRentRollYearLine(ws As Worksheet, startRow As Long, yearLabel As String) As Long
+    ' Year guardrail line shared by all three manual-block writers (optimize
+    ' result, evaluate result, local refresh). Every writer erases and
+    ' rebuilds the top block, so each must re-write this line or it vanishes
+    ' on the next Manual Calculate / year switch / AMI edit.
+    WriteRentRollYearLine = startRow
+    If Trim$(yearLabel) = "" Then Exit Function
+    ws.Cells(startRow, 1).Value = "Rent Roll Year:"
+    ws.Cells(startRow, 1).Font.Bold = True
+    ws.Cells(startRow, 2).Value = yearLabel
+    ws.Cells(startRow, 2).Font.Bold = True
+    WriteRentRollYearLine = startRow + 1
+End Function
+
+Private Function ResolveRentYearLabelFromResponse(resp As Object) As String
+    ' The server reports the year it actually priced with
+    ' (rent_roll_year_used, present on both /api/optimize and /api/evaluate
+    ' responses). If an older server omits the field, fall back to the local
+    ' dropdown year marked "(local)" so the line is never blank.
+    Dim label As String
+    label = ""
+    On Error Resume Next
+    If Not resp Is Nothing Then
+        If resp.Exists("rent_roll_year_used") Then
+            If Not IsEmpty(resp("rent_roll_year_used")) And Not IsNull(resp("rent_roll_year_used")) Then
+                label = Trim$(CStr(resp("rent_roll_year_used")))
+            End If
+        End If
+    End If
+    On Error GoTo 0
+    If label = "" Then
+        On Error Resume Next
+        Dim localYr As Long
+        localYr = GetSelectedRentRollYearLocal()
+        If localYr > 0 Then label = CStr(localYr) & " (local)"
+        On Error GoTo 0
+    End If
+    ResolveRentYearLabelFromResponse = label
+End Function
+
 Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object) As Long
     ClearManualBlock ws
 
@@ -2224,32 +2271,8 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     row = row + 1
 
     ' Rent-roll year guardrail: always show which rent table priced these
-    ' results. The server reports the year it actually used; if an older
-    ' server omits the field, fall back to the local dropdown year marked
-    ' "(local)". A 2025-vs-2026 mismatch must never be invisible again.
-    Dim rentYearLabel As String
-    rentYearLabel = ""
-    On Error Resume Next
-    If result.Exists("rent_roll_year_used") Then
-        If Not IsEmpty(result("rent_roll_year_used")) And Not IsNull(result("rent_roll_year_used")) Then
-            rentYearLabel = Trim$(CStr(result("rent_roll_year_used")))
-        End If
-    End If
-    On Error GoTo 0
-    If rentYearLabel = "" Then
-        On Error Resume Next
-        Dim localRentYear As Long
-        localRentYear = GetSelectedRentRollYearLocal()
-        If localRentYear > 0 Then rentYearLabel = CStr(localRentYear) & " (local)"
-        On Error GoTo 0
-    End If
-    If rentYearLabel <> "" Then
-        ws.Cells(row, 1).Value = "Rent Roll Year:"
-        ws.Cells(row, 1).Font.Bold = True
-        ws.Cells(row, 2).Value = rentYearLabel
-        ws.Cells(row, 2).Font.Bold = True
-        row = row + 1
-    End If
+    ' results. A 2025-vs-2026 mismatch must never be invisible again.
+    row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(result))
     row = row + 1
 
     Dim scenarioKey As String
@@ -2382,7 +2405,11 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 16
-    row = row + 2
+    row = row + 1
+
+    ' Year guardrail — /api/evaluate reports rent_roll_year_used.
+    row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(evalResult))
+    row = row + 1
 
     ' Build a minimal scenario-shaped object from /api/evaluate response.
     Dim scenario As Object
