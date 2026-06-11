@@ -327,10 +327,13 @@ Public Sub CreateScenariosSheet(result As Object)
         Set scenario = scenarios(scenarioKey)
 
         ' Group banner before the first scenario of each group.
+        ' NOTE: banner text must NOT start with "=" — assigning a string that
+        ' begins with "=" to .Value makes Excel parse it as a formula and
+        ' raises 1004 ("Application-defined or object-defined error").
         Dim grpLabel As String
         grpLabel = CStr(groupLabels(scenarioNum))
         If grpLabel <> lastGroupLabel Then
-            ws.Cells(row, 1).Value = "=== " & grpLabel & " ==="
+            ws.Cells(row, 1).Value = "GROUP: " & grpLabel
             ws.Cells(row, 1).Font.Bold = True
             ws.Cells(row, 1).Font.Size = 14
             ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(191, 207, 230)
@@ -2439,10 +2442,10 @@ Private Function FindFirstScenarioHeaderRow(ws As Worksheet) As Long
         Dim v As String
         v = UCase$(Trim$(CStr(ws.Cells(r, 1).Value)))
         ' Match scenario table headers like "SCENARIO 1: ..." (not "SCENARIO
-        ' MANUAL ..."), or a group banner ("=== FEWEST UNITS AT 40% ===") —
+        ' MANUAL ..."), or a group banner ("GROUP: FEWEST UNITS AT 40%") —
         ' banners open the scenario area, so the manual-block clear must stop
         ' before them.
-        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Or (v Like "===*") Then
+        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Or (Left$(v, 6) = "GROUP:") Then
             FindFirstScenarioHeaderRow = r
             Exit Function
         End If
