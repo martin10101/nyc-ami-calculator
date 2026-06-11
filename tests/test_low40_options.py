@@ -235,3 +235,51 @@ def test_api_ladder_returns_multiple_distinct_low40_options():
         assert tradeoffs and any('low-40' in str(t).lower() or '40% ami' in str(t).lower() for t in tradeoffs), (
             f"{key} is missing its description line"
         )
+
+
+def test_api_mid_40_share_fills_the_middle_of_the_window():
+    """Client request 2026-06-11: the low-40 group hugs the 10% floor and the
+    unconstrained best often runs to the 12.5% ceiling, leaving 10.5-11.5%
+    unexplored. mid_40_share must land inside that middle range."""
+    from app import app
+
+    client = app.test_client()
+    payload = {
+        'program': 'MIH',
+        'mih_option': 'Option 1',
+        'mih_residential_sf': 41000,
+        'mih_max_band_percent': 135,
+        'utilities': {'electricity': 'na', 'cooking': 'na', 'heat': 'na', 'hot_water': 'na'},
+        'units': _ladder_units(),
+    }
+    resp = client.post('/api/optimize', json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    scenarios = data.get('scenarios') or {}
+
+    if 'low_40_share' not in scenarios:
+        pytest.skip('Rent calculator unavailable in this environment.')
+
+    mid = scenarios.get('mid_40_share')
+    assert mid, f"mid_40_share missing; keys: {sorted(scenarios.keys())}"
+
+    assignments = mid.get('assignments') or []
+    low_sf = sum(
+        float(u['net_sf']) for u in assignments
+        if float(u['assigned_ami']) <= 0.4 + 1e-12
+    )
+    share = low_sf / 41000.0
+    assert 0.105 - 1e-9 <= share <= 0.115 + 1e-9, (
+        f"mid_40_share 40-band share {share*100:.2f}% outside [10.5%, 11.5%]"
+    )
+
+    # Must be a distinct layout from the floor-hugging and ceiling options.
+    others = {
+        tuple(map(tuple, (scenarios[k].get('canonical_assignments') or [])))
+        for k in scenarios if k != 'mid_40_share'
+    }
+    mid_canon = tuple(map(tuple, (mid.get('canonical_assignments') or [])))
+    assert mid_canon not in others
+
+    tradeoffs = mid.get('tradeoffs') or []
+    assert any('mid-range' in str(t).lower() for t in tradeoffs)

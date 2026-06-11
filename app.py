@@ -1146,6 +1146,29 @@ def optimize_units():
                         if max_40.get('canonical_assignments') != ab_canon:
                             scenarios['max_40_share'] = max_40
 
+                # mid_40_share: the middle of the window (e.g., [10.5%, 11.5%]).
+                # Client request 2026-06-11: the low-40 group hugs the floor
+                # and the unconstrained best often runs to the ceiling, leaving
+                # the 10.5-11.5% range unexplored. This fills the gap so the
+                # client sees the full rent trade-off curve across the window.
+                mid_lo = eff_min + window_width
+                mid_hi = min(float(eff_max), eff_min + 0.015)
+                if mid_hi > mid_lo + 1e-9:
+                    mid_40 = _solve_with_40_window(mid_lo, mid_hi, floor_tiebreak=True)
+                    if mid_40 and mid_40.get('rent_totals'):
+                        existing_mid_canons = {
+                            (s or {}).get('canonical_assignments')
+                            for s in scenarios.values() if s
+                        }
+                        if mid_40.get('canonical_assignments') not in existing_mid_canons:
+                            mid_desc = (
+                                f"Mid-range option: 40% AMI between {mid_lo*100:.1f}% and "
+                                f"{mid_hi*100:.1f}% of residential SF, rent-maximized."
+                            )
+                            mid_40['tradeoffs'] = [mid_desc]
+                            mid_40['description'] = mid_desc
+                            scenarios['mid_40_share'] = mid_40
+
             # --- Edge / relaxed scenarios (UAP + MIH) ---
             # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
             # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH
