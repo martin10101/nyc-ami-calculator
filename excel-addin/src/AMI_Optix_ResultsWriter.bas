@@ -2234,6 +2234,75 @@ Fail:
     FindFirstScenarioHeaderRow = 0
 End Function
 
+Private Function WriteMihComplianceLines(ws As Worksheet, startRow As Long, bandMix As Object) As Long
+    ' "Required vs provided" compliance lines for one scenario, in the
+    ' client's own checklist format:
+    '   40% AMI Floor:    required X SF | provided Y SF | surplus +Z SF
+    '   Affordable Share: provided P% of residential SF
+    ' MIH-only (needs the building denominator); UAP blocks are unchanged.
+    Dim row As Long
+    row = startRow
+    WriteMihComplianceLines = row
+
+    On Error GoTo SafeExit
+    If bandMix Is Nothing Then Exit Function
+    If g_MihTotalBuildingSf <= 0# Then Exit Function
+
+    Dim totalSf As Double
+    Dim low40Sf As Double
+    totalSf = 0#
+    low40Sf = 0#
+
+    Dim idx As Long
+    For idx = 1 To bandMix.Count
+        Dim bm As Object
+        Set bm = bandMix(idx)
+        If Not bm Is Nothing Then
+            If bm.Exists("net_sf") Then
+                totalSf = totalSf + CDbl(bm("net_sf"))
+                If bm.Exists("band") Then
+                    Dim bandVal As Double
+                    bandVal = CDbl(bm("band"))
+                    ' Server/local mixes store 40 as integer; tolerate 0.4 too.
+                    If bandVal <= 2# Then bandVal = bandVal * 100#
+                    If bandVal <= 40.0001 Then low40Sf = low40Sf + CDbl(bm("net_sf"))
+                End If
+            End If
+        End If
+    Next idx
+    If totalSf <= 0# Then Exit Function
+
+    Dim minShare As Double
+    minShare = g_MihLow40MinShare
+    If minShare <= 0# Then minShare = 0.1   ' standard MIH window fallback
+
+    Dim requiredSf As Double
+    requiredSf = minShare * g_MihTotalBuildingSf
+
+    Dim surplusSf As Double
+    surplusSf = low40Sf - requiredSf
+
+    ws.Cells(row, 1).Value = "40% AMI Floor:"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 2).Value = "required " & Format$(requiredSf, "#,##0.00") & _
+                             " SF | provided " & Format$(low40Sf, "#,##0.00") & _
+                             " SF | " & IIf(surplusSf >= 0, "surplus +", "SHORTFALL ") & _
+                             Format$(Abs(surplusSf), "#,##0.00") & " SF"
+    If surplusSf < 0 Then
+        ws.Cells(row, 2).Font.Color = RGB(192, 0, 0)
+        ws.Cells(row, 2).Font.Bold = True
+    End If
+    row = row + 1
+
+    ws.Cells(row, 1).Value = "Affordable Share:"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 2).Value = "provided " & Format$(totalSf / g_MihTotalBuildingSf, "0.00%") & " of residential SF"
+    row = row + 1
+
+    WriteMihComplianceLines = row
+SafeExit:
+End Function
+
 Private Function FormatBandsSuffix(scenario As Object) As String
     ' Returns " - 40/60/90" from the scenario's bands list, or "" when
     ' unavailable. Tolerates integer (40) and fractional (0.4) band values.
@@ -2399,23 +2468,12 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     On Error GoTo 0
     If bandMix Is Nothing Then Exit Function
 
-    ' Calculate total affordable SF and the <=40% band subtotal from band_mix
-    Dim low40Sf As Double
+    ' Calculate total building SF from band_mix
     totalSf = 0#
-    low40Sf = 0#
     For idx = 1 To bandMix.Count
         Set bm = bandMix(idx)
         If Not bm Is Nothing Then
-            If bm.Exists("net_sf") Then
-                totalSf = totalSf + CDbl(bm("net_sf"))
-                If bm.Exists("band") Then
-                    Dim bandVal As Double
-                    bandVal = CDbl(bm("band"))
-                    ' Server/local mixes store 40 as integer; tolerate 0.4 too.
-                    If bandVal <= 2# Then bandVal = bandVal * 100#
-                    If bandVal <= 40.0001 Then low40Sf = low40Sf + CDbl(bm("net_sf"))
-                End If
-            End If
+            If bm.Exists("net_sf") Then totalSf = totalSf + CDbl(bm("net_sf"))
         End If
     Next idx
     If totalSf <= 0# Then Exit Function
@@ -2447,37 +2505,11 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     ws.Cells(row, 2).Font.Bold = True
     row = row + 1
 
-    ' Compliance box ("required vs provided" — the client's own checklist
-    ' format): the 40% AMI floor against residential SF, and the affordable
-    ' share. Only meaningful for MIH (needs a real building denominator).
-    If g_MihTotalBuildingSf > 0# Then
-        Dim minShare As Double
-        minShare = g_MihLow40MinShare
-        If minShare <= 0# Then minShare = 0.1   ' standard MIH window fallback
-
-        Dim requiredSf As Double
-        requiredSf = minShare * g_MihTotalBuildingSf
-
-        Dim surplusSf As Double
-        surplusSf = low40Sf - requiredSf
-
-        ws.Cells(row, 1).Value = "40% AMI Floor:"
-        ws.Cells(row, 1).Font.Bold = True
-        ws.Cells(row, 2).Value = "required " & Format$(requiredSf, "#,##0.00") & _
-                                 " SF | provided " & Format$(low40Sf, "#,##0.00") & _
-                                 " SF | " & IIf(surplusSf >= 0, "surplus +", "SHORTFALL ") & _
-                                 Format$(Abs(surplusSf), "#,##0.00") & " SF"
-        If surplusSf < 0 Then
-            ws.Cells(row, 2).Font.Color = RGB(192, 0, 0)
-            ws.Cells(row, 2).Font.Bold = True
-        End If
-        row = row + 1
-
-        ws.Cells(row, 1).Value = "Affordable Share:"
-        ws.Cells(row, 1).Font.Bold = True
-        ws.Cells(row, 2).Value = "provided " & Format$(totalSf / g_MihTotalBuildingSf, "0.00%") & " of residential SF"
-        row = row + 1
-    End If
+    ' NOTE: the "40% AMI Floor / Affordable Share" compliance lines are
+    ' per-scenario values (each scenario provides a different 40% SF), so
+    ' they render inside every scenario block (WriteMihComplianceLines,
+    ' called after each Band Mix table) — NOT here in the building-level
+    ' summary. Client feedback 2026-06-11.
 
     row = row + 1
     WriteMihSquareFootageSummary = row
@@ -3019,6 +3051,11 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
                     row = row + 1
                 End If
             Next bmIdx
+
+            ' Compliance lines for THIS scenario ("required vs provided",
+            ' the client's own checklist format). Per-scenario because each
+            ' scenario provides a different 40% SF.
+            row = WriteMihComplianceLines(ws, row, bandMix)
         End If
     End If
 

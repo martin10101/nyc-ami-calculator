@@ -54,4 +54,18 @@ via a new `FormatBandsSuffix` helper (tolerates integer and fractional band valu
 ## Out of scope (deliberately)
 
 - Band-preference rules (e.g. "avoid 60% AMI") — the client's own options contradict a blanket rule; awaiting her answer to the band-choice question before encoding anything.
-- Per-scenario required-vs-provided rows (the top box covers the checklist habit without bloating every block).
+
+## Revision 2026-06-11 (branch `fix/compliance-box-per-scenario`)
+
+User feedback after seeing it live: the compliance lines sat in the top
+SQUARE FOOTAGE SUMMARY, where the "provided" 40% SF (a **per-scenario**
+value — every scenario allocates a different 40% SF) read as a building
+fact. Wrong altitude.
+
+Moved: the "40% AMI Floor" + "Affordable Share" lines now render inside
+**every scenario block**, directly under its Band Mix table, via a new
+`WriteMihComplianceLines` helper called from `WriteScenarioSummaryAndTable`
+(which serves both the manual live block and all numbered scenarios — one
+call site covers everything). The top summary reverted to building-level
+facts only (Total Building Net SF, Affordable Net SF). Same formatting,
+same red SHORTFALL treatment, same server fields.
