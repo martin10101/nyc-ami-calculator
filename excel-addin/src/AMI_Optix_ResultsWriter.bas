@@ -20,6 +20,10 @@ Public g_MihTotalBuildingSf As Double
 ' standard MIH window 10%-12.5%.
 Public g_MihLow40MinShare As Double
 Public g_MihLow40MaxShare As Double
+' Key of the scenario currently shown in the manual working copy — drives
+' the ">" marker in the scenario overview table. Set when results are first
+' written and whenever the user applies a scenario via the picker.
+Public g_AMIOptixCurrentScenarioKey As String
 
 '-------------------------------------------------------------------------------
 ' LOCAL RENT CALC CACHE (Fix-06)
@@ -307,31 +311,31 @@ Public Sub CreateScenariosSheet(result As Object)
     ' Start scenarios immediately after the manual block (no hard jump to row 125)
     row = manualEndRow + 2
 
-    ' Process each scenario (include the best scenario even though it's also shown in the manual block).
-    ' Users expect Scenario 1 to be the "Absolute Best" result, and the manual block is a live view.
-    Dim scenarioNum As Long
-    scenarioNum = 1
-
-    ' Stable ordering + dedupe (client reported duplicates like "Scenario 4" and "Scenario 5" matching exactly).
+    ' Process each scenario in the grouped, de-duped display order. The same
+    ' order drives the overview table and the picker, so "Scenario 3" means
+    ' the same thing everywhere.
+    Dim groupLabels As Collection
     Dim orderedKeys As Collection
-    Set orderedKeys = BuildScenarioKeyOrder(scenarios)
+    Set orderedKeys = BuildGroupedScenarioOrder(scenarios, groupLabels)
 
-    Dim seenCanons As Object
-    Set seenCanons = CreateObject("Scripting.Dictionary") ' canonical string -> True
+    Dim lastGroupLabel As String
+    lastGroupLabel = ""
 
-    Dim k As Variant
-    For Each k In orderedKeys
-        scenarioKey = CStr(k)
+    Dim scenarioNum As Long
+    For scenarioNum = 1 To orderedKeys.Count
+        scenarioKey = CStr(orderedKeys(scenarioNum))
         Set scenario = scenarios(scenarioKey)
 
-        Dim canonKey As String
-        canonKey = ScenarioCanonicalKey(scenario)
-        If canonKey <> "" Then
-            If seenCanons.Exists(canonKey) Then
-                DebugLog "CreateScenariosSheet: skipping duplicate scenario '" & scenarioKey & "'", True
-                GoTo NextScenarioKey
-            End If
-            seenCanons(canonKey) = True
+        ' Group banner before the first scenario of each group.
+        Dim grpLabel As String
+        grpLabel = CStr(groupLabels(scenarioNum))
+        If grpLabel <> lastGroupLabel Then
+            ws.Cells(row, 1).Value = "=== " & grpLabel & " ==="
+            ws.Cells(row, 1).Font.Bold = True
+            ws.Cells(row, 1).Font.Size = 14
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(191, 207, 230)
+            row = row + 2
+            lastGroupLabel = grpLabel
         End If
 
         ' Scenario header — include the band mix (e.g. "- 40/60/90") because
@@ -347,10 +351,7 @@ Public Sub CreateScenariosSheet(result As Object)
 
         ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = RGB(240, 240, 240)
         row = row + 1
-        scenarioNum = scenarioNum + 1
-
-NextScenarioKey:
-    Next k
+    Next scenarioNum
 
     ' Client formatting: alignment is handled per-table (Unit/AMI columns are explicitly aligned when written).
 
@@ -449,6 +450,211 @@ Private Function BuildScenarioKeyOrder(scenarios As Object) As Collection
 
 Fail:
     Set BuildScenarioKeyOrder = ordered
+End Function
+
+Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels As Collection) As Collection
+    ' Grouped display order (client-approved layout 2026-06-11), de-duped by
+    ' canonical assignments so the overview table, the picker, and the
+    ' numbered detail blocks all agree on numbering:
+    '   G1  FEWEST UNITS AT 40%      fewest_40_units*
+    '   G2  MID RANGE                mid_40_share
+    '   G3  MAX RENT / OTHER         everything else (existing preferred order)
+    '   G4  YOUR INPUT               original
+    ' groupLabels is a parallel collection: one label string per returned key.
+    Dim ordered As New Collection
+    Set groupLabels = New Collection
+
+    On Error GoTo Fail
+    If scenarios Is Nothing Then
+        Set BuildGroupedScenarioOrder = ordered
+        Exit Function
+    End If
+
+    Dim seenCanons As Object
+    Set seenCanons = CreateObject("Scripting.Dictionary")
+
+    Dim baseOrder As Collection
+    Set baseOrder = BuildScenarioKeyOrder(scenarios)
+
+    Dim groupNames As Variant
+    groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (10.5-11.5% AT 40%)", "MAX RENT / OTHER OPTIONS", "YOUR INPUT")
+
+    Dim grp As Long
+    For grp = 0 To 3
+        Dim k As Variant
+        For Each k In baseOrder
+            Dim keyStr As String
+            keyStr = CStr(k)
+
+            Dim keyGroup As Long
+            If LCase$(Left$(keyStr, Len("fewest_40_units"))) = "fewest_40_units" Then
+                keyGroup = 0
+            ElseIf LCase$(keyStr) = "mid_40_share" Then
+                keyGroup = 1
+            ElseIf LCase$(keyStr) = "original" Then
+                keyGroup = 3
+            Else
+                keyGroup = 2
+            End If
+            If keyGroup <> grp Then GoTo NextKey
+
+            ' De-dupe by canonical assignments (same rule the detail loop used).
+            Dim canonKey As String
+            canonKey = ""
+            On Error Resume Next
+            canonKey = ScenarioCanonicalKey(scenarios(keyStr))
+            On Error GoTo Fail
+            If canonKey <> "" Then
+                If seenCanons.Exists(canonKey) Then GoTo NextKey
+                seenCanons(canonKey) = True
+            End If
+
+            ordered.Add keyStr
+            groupLabels.Add CStr(groupNames(grp))
+NextKey:
+        Next k
+    Next grp
+
+    Set BuildGroupedScenarioOrder = ordered
+    Exit Function
+
+Fail:
+    Set BuildGroupedScenarioOrder = ordered
+End Function
+
+Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
+    ' Compact at-a-glance index of every scenario (client-approved layout):
+    ' group banners + one line per scenario (# / name / bands / 40% units @
+    ' share / monthly rent), with ">" marking the scenario currently shown in
+    ' the working copy. Reads g_LastScenarios so every manual-block writer can
+    ' re-create it after clearing the top of the sheet. Column N stores each
+    ' row's key (helper data, cleared with the block).
+    Dim row As Long
+    row = startRow
+    WriteScenarioOverview = row
+
+    On Error GoTo Fail
+    If g_LastScenarios Is Nothing Then Exit Function
+    If Not g_LastScenarios.Exists("scenarios") Then Exit Function
+
+    Dim scenarios As Object
+    Set scenarios = g_LastScenarios("scenarios")
+    If scenarios Is Nothing Then Exit Function
+    If scenarios.Count = 0 Then Exit Function
+
+    Dim groupLabels As Collection
+    Dim orderedKeys As Collection
+    Set orderedKeys = BuildGroupedScenarioOrder(scenarios, groupLabels)
+    If orderedKeys.Count = 0 Then Exit Function
+
+    ws.Cells(row, 1).Value = "SCENARIO OVERVIEW (" & orderedKeys.Count & " scenarios)"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 13
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Interior.Color = RGB(217, 226, 243)
+    row = row + 1
+
+    Dim lastGroup As String
+    lastGroup = ""
+
+    Dim i As Long
+    For i = 1 To orderedKeys.Count
+        Dim keyStr As String
+        keyStr = CStr(orderedKeys(i))
+
+        Dim grpLabel As String
+        grpLabel = CStr(groupLabels(i))
+        If grpLabel <> lastGroup Then
+            ws.Cells(row, 1).Value = grpLabel
+            ws.Cells(row, 1).Font.Bold = True
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Interior.Color = RGB(238, 238, 238)
+            row = row + 1
+            lastGroup = grpLabel
+        End If
+
+        Dim scenario As Object
+        Set scenario = Nothing
+        On Error Resume Next
+        Set scenario = scenarios(keyStr)
+        On Error GoTo Fail
+        If scenario Is Nothing Then GoTo NextOverviewKey
+
+        ' Marker + number + name
+        If keyStr = g_AMIOptixCurrentScenarioKey Then
+            ws.Cells(row, 1).Value = "> " & i
+            ws.Cells(row, 1).Font.Bold = True
+        Else
+            ws.Cells(row, 1).Value = i
+        End If
+        ws.Cells(row, 1).HorizontalAlignment = xlRight
+        ws.Cells(row, 2).Value = FormatScenarioName(keyStr)
+
+        ' Bands (reuse the title-suffix helper, strip its " - " prefix)
+        Dim bandsTxt As String
+        bandsTxt = FormatBandsSuffix(scenario)
+        If Left$(bandsTxt, 3) = " - " Then bandsTxt = Mid$(bandsTxt, 4)
+        ws.Cells(row, 3).Value = bandsTxt
+
+        ' 40% units @ share of building
+        Dim n40 As Long
+        Dim sf40 As Double
+        n40 = 0
+        sf40 = 0#
+        Dim assignments As Object
+        Set assignments = Nothing
+        On Error Resume Next
+        Set assignments = scenario("assignments")
+        On Error GoTo Fail
+        If Not assignments Is Nothing Then
+            Dim a As Object
+            Dim j As Long
+            For j = 1 To assignments.Count
+                Set a = assignments(j)
+                If Not a Is Nothing Then
+                    Dim ami As Double
+                    ami = 0#
+                    If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+                    If ami > 2# Then ami = ami / 100#
+                    If ami > 0# And ami <= 0.4000001 Then
+                        n40 = n40 + 1
+                        If a.Exists("net_sf") Then sf40 = sf40 + CDbl(a("net_sf"))
+                    End If
+                End If
+            Next j
+        End If
+        If g_MihTotalBuildingSf > 0# Then
+            ws.Cells(row, 4).Value = n40 & " @ " & Format$(sf40 / g_MihTotalBuildingSf, "0.00%")
+        Else
+            ws.Cells(row, 4).Value = n40 & " at 40%"
+        End If
+
+        ' Monthly rent
+        Dim rentTotals As Object
+        Set rentTotals = Nothing
+        On Error Resume Next
+        Set rentTotals = scenario("rent_totals")
+        On Error GoTo Fail
+        If Not rentTotals Is Nothing Then
+            If rentTotals.Exists("net_monthly") Then
+                If IsNumeric(rentTotals("net_monthly")) Then
+                    ws.Cells(row, 5).Value = CDbl(rentTotals("net_monthly"))
+                    ws.Cells(row, 5).NumberFormat = "$#,##0"
+                End If
+            End If
+        End If
+
+        ' Helper: scenario key for marker lookups / future automation.
+        ws.Cells(row, 14).Value = keyStr
+
+        row = row + 1
+NextOverviewKey:
+    Next i
+
+    row = row + 1
+    WriteScenarioOverview = row
+    Exit Function
+
+Fail:
+    WriteScenarioOverview = row
 End Function
 
 Private Function StringInVariantArray(value As String, arr As Variant) As Boolean
@@ -1176,6 +1382,9 @@ AfterRent:
         row = WriteRentRollYearLine(ws, row, CStr(selectedYear) & " (local)")
     End If
     row = row + 1
+
+    ' At-a-glance index of all scenarios (survives year switches / AMI edits).
+    row = WriteScenarioOverview(ws, row)
 
     row = WriteUtilitySettings(ws, row)
     row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
@@ -2213,7 +2422,9 @@ Private Sub ClearManualBlock(ws As Worksheet)
         clearToRow = MANUAL_CLEAR_FALLBACK_HEIGHT
     End If
 
-    ws.Range("A1:M" & clearToRow).Clear
+    ' N (col 14) included: the scenario overview stores each row's scenario
+    ' key there for the current-scenario marker.
+    ws.Range("A1:N" & clearToRow).Clear
 End Sub
 
 Private Function FindFirstScenarioHeaderRow(ws As Worksheet) As Long
@@ -2227,8 +2438,11 @@ Private Function FindFirstScenarioHeaderRow(ws As Worksheet) As Long
     For r = 1 To Application.Min(lastRow, 5000)
         Dim v As String
         v = UCase$(Trim$(CStr(ws.Cells(r, 1).Value)))
-        ' Match scenario table headers like "SCENARIO 1: ..." (not "SCENARIO MANUAL ...").
-        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Then
+        ' Match scenario table headers like "SCENARIO 1: ..." (not "SCENARIO
+        ' MANUAL ..."), or a group banner ("=== FEWEST UNITS AT 40% ===") —
+        ' banners open the scenario area, so the manual-block clear must stop
+        ' before them.
+        If (v Like "SCENARIO [0-9]*") Or (v Like "SCENARIO #[0-9]*") Or (v Like "===*") Then
             FindFirstScenarioHeaderRow = r
             Exit Function
         End If
@@ -2394,6 +2608,10 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
 
     Dim scenarioKey As String
     scenarioKey = GetBestScenarioKey(result)
+    g_AMIOptixCurrentScenarioKey = scenarioKey
+
+    ' At-a-glance index of all scenarios (grouped, with > on the current one).
+    row = WriteScenarioOverview(ws, row)
 
     Dim scenarios As Object
     Set scenarios = Nothing
@@ -2533,6 +2751,9 @@ Private Function WriteManualScenarioBlockFromEvaluate(ws As Worksheet, evalResul
     ' Year guardrail — /api/evaluate reports rent_roll_year_used.
     row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(evalResult))
     row = row + 1
+
+    ' At-a-glance index of all scenarios (survives Manual Calculate).
+    row = WriteScenarioOverview(ws, row)
 
     ' Build a minimal scenario-shaped object from /api/evaluate response.
     Dim scenario As Object
@@ -2838,7 +3059,14 @@ Public Sub RefreshManualScenarioFromScenario(scenarioKey As String, scenario As 
     ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 16
-    row = row + 2
+    row = row + 1
+
+    ' Year guardrail + overview, same as every other manual-block writer.
+    ' The applied scenario becomes the current one (drives the > marker).
+    row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(g_LastScenarios))
+    row = row + 1
+    g_AMIOptixCurrentScenarioKey = CStr(scenarioKey)
+    row = WriteScenarioOverview(ws, row)
 
     row = WriteUtilitySettings(ws, row)
     row = WriteUtilityDeductionTotalsByBedroom(ws, row, scenario)
@@ -2871,7 +3099,9 @@ Private Function GetBestScenarioKey(result As Object) As String
     Set scenarios = result("scenarios")
 
     Dim priorities As Variant
-    priorities = Array("absolute_best", "best_3_band", "best_2_band", "alternative")
+    ' The working copy defaults to Scenario 1 (fewest units at 40%) so the
+    ' manual block and the first numbered scenario always match.
+    priorities = Array("fewest_40_units", "absolute_best", "best_3_band", "best_2_band", "alternative")
 
     Dim i As Long
     For i = LBound(priorities) To UBound(priorities)

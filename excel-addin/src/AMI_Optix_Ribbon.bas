@@ -1552,48 +1552,35 @@ Private Sub ShowScenarioList()
         Exit Sub
     End If
 
-    ' Build list of scenarios (strict first, then edge)
-    Dim strictKeys As Collection
-    Dim edgeKeys As Collection
-    Set strictKeys = New Collection
-    Set edgeKeys = New Collection
+    ' Same grouped, de-duped order as the sheet's overview table and the
+    ' numbered detail blocks — so "3" in this picker is "SCENARIO 3" on the
+    ' sheet. (Was strict-then-edge, which could disagree with the sheet.)
+    Dim groupLabels As Collection
+    Dim orderedKeys As Collection
+    Set orderedKeys = BuildGroupedScenarioOrder(scenarios, groupLabels)
 
-    For Each scenarioKey In scenarios.keys
-        Dim tier As String
-        tier = ""
-        On Error Resume Next
-        Dim s As Object
-        Set s = scenarios(scenarioKey)
-        If Not s Is Nothing Then
-            If s.Exists("tier") Then tier = CStr(s("tier"))
-        End If
-        On Error GoTo 0
+    If orderedKeys.Count = 0 Then
+        MsgBox "No scenarios available.", vbInformation, "AMI Optix"
+        Exit Sub
+    End If
 
-        If LCase$(Trim$(tier)) = "edge" Then
-            edgeKeys.Add CStr(scenarioKey)
-        Else
-            strictKeys.Add CStr(scenarioKey)
-        End If
-    Next scenarioKey
-
-    ReDim keys(1 To scenarios.Count)
+    ReDim keys(1 To orderedKeys.Count)
     msg = "Available Scenarios:" & vbCrLf & vbCrLf
-    i = 1
+    Dim lastGroup As String
+    lastGroup = ""
 
-    Dim k As Variant
-    For Each k In strictKeys
-        keys(i) = CStr(k)
+    For i = 1 To orderedKeys.Count
+        keys(i) = CStr(orderedKeys(i))
+        Dim grpLabel As String
+        grpLabel = CStr(groupLabels(i))
+        If grpLabel <> lastGroup Then
+            msg = msg & "--- " & grpLabel & " ---" & vbCrLf
+            lastGroup = grpLabel
+        End If
         msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
-        i = i + 1
-    Next k
+    Next i
 
-    For Each k In edgeKeys
-        keys(i) = CStr(k)
-        msg = msg & ScenarioPickerLine(i, keys(i), scenarios(keys(i))) & vbCrLf
-        i = i + 1
-    Next k
-
-    msg = msg & vbCrLf & "Enter scenario number (1-" & scenarios.Count & "):"
+    msg = msg & vbCrLf & "Enter scenario number (1-" & orderedKeys.Count & "):"
 
     choice = InputBox(msg, "Select Scenario", "1")
 
@@ -1604,7 +1591,7 @@ Private Sub ShowScenarioList()
     choiceNum = CLng(choice)
     On Error GoTo 0
 
-    If choiceNum < 1 Or choiceNum > scenarios.Count Then
+    If choiceNum < 1 Or choiceNum > orderedKeys.Count Then
         MsgBox "Invalid selection.", vbExclamation, "AMI Optix"
         Exit Sub
     End If
