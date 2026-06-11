@@ -1926,6 +1926,19 @@ def optimize_units():
         }
         if mih_constraint_injected:
             project_summary["total_building_sf"] = total_building_sf
+            # Effective 40% AMI window (post floor-walk) so Excel can render
+            # the client's "required vs provided" compliance box with the
+            # numbers the solver actually enforced.
+            try:
+                for _t in (config.get('optimization_rules', {}) or {}).get('share_thresholds') or []:
+                    if int(_t.get('band_threshold', 0)) <= 40:
+                        if _t.get('min_share') is not None:
+                            project_summary["mih_low_band_min_share"] = float(_t['min_share'])
+                        if _t.get('max_share') is not None:
+                            project_summary["mih_low_band_max_share"] = float(_t['max_share'])
+                        break
+            except (TypeError, ValueError):
+                pass
 
         response = {
             "success": True,

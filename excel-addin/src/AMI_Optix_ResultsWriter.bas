@@ -14,6 +14,12 @@ Public g_AMIOptixLastManualScenarioInvalid As Boolean
 Public g_AMIOptixLastScenariosSheetBuildError As String
 ' Total building SF for MIH — used by BuildBandMix to compute share of building SF.
 Public g_MihTotalBuildingSf As Double
+' Effective 40% AMI window (fractions of residential SF) reported by the
+' server (post floor-walk). Drives the "required vs provided" compliance
+' lines; 0 means unknown (older server) and the display falls back to the
+' standard MIH window 10%-12.5%.
+Public g_MihLow40MinShare As Double
+Public g_MihLow40MaxShare As Double
 
 '-------------------------------------------------------------------------------
 ' LOCAL RENT CALC CACHE (Fix-06)
@@ -274,6 +280,8 @@ Public Sub CreateScenariosSheet(result As Object)
 
     ' Extract total building SF for MIH share-of-building display
     g_MihTotalBuildingSf = 0#
+    g_MihLow40MinShare = 0#
+    g_MihLow40MaxShare = 0#
     On Error Resume Next
     If result.Exists("project_summary") Then
         Dim projSummary As Object
@@ -281,6 +289,12 @@ Public Sub CreateScenariosSheet(result As Object)
         If Not projSummary Is Nothing Then
             If projSummary.Exists("total_building_sf") Then
                 g_MihTotalBuildingSf = CDbl(projSummary("total_building_sf"))
+            End If
+            If projSummary.Exists("mih_low_band_min_share") Then
+                g_MihLow40MinShare = CDbl(projSummary("mih_low_band_min_share"))
+            End If
+            If projSummary.Exists("mih_low_band_max_share") Then
+                g_MihLow40MaxShare = CDbl(projSummary("mih_low_band_max_share"))
             End If
         End If
     End If
@@ -320,8 +334,9 @@ Public Sub CreateScenariosSheet(result As Object)
             seenCanons(canonKey) = True
         End If
 
-        ' Scenario header
-        ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey))
+        ' Scenario header — include the band mix (e.g. "- 40/60/90") because
+        ' the client thinks and names her own options in band families.
+        ws.Cells(row, 1).Value = "SCENARIO " & scenarioNum & ": " & FormatScenarioName(CStr(scenarioKey)) & FormatBandsSuffix(scenario)
         ws.Cells(row, 1).Font.Bold = True
         ws.Cells(row, 1).Font.Size = 14
         ws.Range(ws.Cells(row, 1), ws.Cells(row, 8)).Interior.Color = ScenarioHeaderColor(CStr(scenarioKey))
@@ -2219,6 +2234,35 @@ Fail:
     FindFirstScenarioHeaderRow = 0
 End Function
 
+Private Function FormatBandsSuffix(scenario As Object) As String
+    ' Returns " - 40/60/90" from the scenario's bands list, or "" when
+    ' unavailable. Tolerates integer (40) and fractional (0.4) band values.
+    FormatBandsSuffix = ""
+    On Error GoTo SafeExit
+    If scenario Is Nothing Then Exit Function
+    If Not scenario.Exists("bands") Then Exit Function
+    If Not IsObject(scenario("bands")) Then Exit Function
+
+    Dim bands As Object
+    Set bands = scenario("bands")
+
+    Dim parts As String
+    parts = ""
+    Dim v As Variant
+    For Each v In bands
+        If IsNumeric(v) Then
+            Dim bandPct As Double
+            bandPct = CDbl(v)
+            If bandPct <= 2# Then bandPct = bandPct * 100#
+            If parts <> "" Then parts = parts & "/"
+            parts = parts & CStr(CLng(Application.Round(bandPct, 0)))
+        End If
+    Next v
+
+    If parts <> "" Then FormatBandsSuffix = " - " & parts
+SafeExit:
+End Function
+
 Private Function WriteRentRollYearLine(ws As Worksheet, startRow As Long, yearLabel As String) As Long
     ' Year guardrail line shared by all three manual-block writers (optimize
     ' result, evaluate result, local refresh). Every writer erases and
@@ -2355,12 +2399,23 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     On Error GoTo 0
     If bandMix Is Nothing Then Exit Function
 
-    ' Calculate total building SF from band_mix
+    ' Calculate total affordable SF and the <=40% band subtotal from band_mix
+    Dim low40Sf As Double
     totalSf = 0#
+    low40Sf = 0#
     For idx = 1 To bandMix.Count
         Set bm = bandMix(idx)
         If Not bm Is Nothing Then
-            If bm.Exists("net_sf") Then totalSf = totalSf + CDbl(bm("net_sf"))
+            If bm.Exists("net_sf") Then
+                totalSf = totalSf + CDbl(bm("net_sf"))
+                If bm.Exists("band") Then
+                    Dim bandVal As Double
+                    bandVal = CDbl(bm("band"))
+                    ' Server/local mixes store 40 as integer; tolerate 0.4 too.
+                    If bandVal <= 2# Then bandVal = bandVal * 100#
+                    If bandVal <= 40.0001 Then low40Sf = low40Sf + CDbl(bm("net_sf"))
+                End If
+            End If
         End If
     Next idx
     If totalSf <= 0# Then Exit Function
@@ -2391,6 +2446,38 @@ Private Function WriteMihSquareFootageSummary(ws As Worksheet, startRow As Long,
     ws.Cells(row, 2).NumberFormat = "#,##0.00"
     ws.Cells(row, 2).Font.Bold = True
     row = row + 1
+
+    ' Compliance box ("required vs provided" — the client's own checklist
+    ' format): the 40% AMI floor against residential SF, and the affordable
+    ' share. Only meaningful for MIH (needs a real building denominator).
+    If g_MihTotalBuildingSf > 0# Then
+        Dim minShare As Double
+        minShare = g_MihLow40MinShare
+        If minShare <= 0# Then minShare = 0.1   ' standard MIH window fallback
+
+        Dim requiredSf As Double
+        requiredSf = minShare * g_MihTotalBuildingSf
+
+        Dim surplusSf As Double
+        surplusSf = low40Sf - requiredSf
+
+        ws.Cells(row, 1).Value = "40% AMI Floor:"
+        ws.Cells(row, 1).Font.Bold = True
+        ws.Cells(row, 2).Value = "required " & Format$(requiredSf, "#,##0.00") & _
+                                 " SF | provided " & Format$(low40Sf, "#,##0.00") & _
+                                 " SF | " & IIf(surplusSf >= 0, "surplus +", "SHORTFALL ") & _
+                                 Format$(Abs(surplusSf), "#,##0.00") & " SF"
+        If surplusSf < 0 Then
+            ws.Cells(row, 2).Font.Color = RGB(192, 0, 0)
+            ws.Cells(row, 2).Font.Bold = True
+        End If
+        row = row + 1
+
+        ws.Cells(row, 1).Value = "Affordable Share:"
+        ws.Cells(row, 1).Font.Bold = True
+        ws.Cells(row, 2).Value = "provided " & Format$(totalSf / g_MihTotalBuildingSf, "0.00%") & " of residential SF"
+        row = row + 1
+    End If
 
     row = row + 1
     WriteMihSquareFootageSummary = row
