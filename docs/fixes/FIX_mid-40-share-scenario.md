@@ -24,3 +24,20 @@ Excel shows it automatically as **MID 40 SHARE** (dynamic key ordering + auto di
 ## Deploy
 
 Render auto-deploys; nothing to install on client PCs.
+
+## Revision 2026-06-11 (branch `fix/mid-40-after-edge-block`)
+
+User feedback after the first deploy: an edge scenario (`edge_waami_floor_590`,
+$45,376 on Building D) disappeared and the low-40 ladder could lose rungs.
+Cause: the mid-40 block originally ran in the 40%-variants section, BEFORE
+the edge block — so it consumed an edge-budget slot (`target_edge_count =
+6 - len(scenarios)`) and polluted the ladder's duplicate filter. Exactly the
+interference the low-40 ladder's after-the-edge-block placement was designed
+to avoid.
+
+Moved: mid_40_share now generates AFTER the edge block and the low-40
+ladder (right before Fix-02 de-dupe), self-contained (recomputes its own
+window, dedupes by canonical + outcome signature against everything).
+Verified on Building D: the full pre-mid scenario set returns byte-identical
+(edge_waami_floor_590 and the $45,247 alternative restored, all 3 low-40s),
+with MID 40 SHARE purely additive — 9 scenarios total.

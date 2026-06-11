@@ -1146,29 +1146,6 @@ def optimize_units():
                         if max_40.get('canonical_assignments') != ab_canon:
                             scenarios['max_40_share'] = max_40
 
-                # mid_40_share: the middle of the window (e.g., [10.5%, 11.5%]).
-                # Client request 2026-06-11: the low-40 group hugs the floor
-                # and the unconstrained best often runs to the ceiling, leaving
-                # the 10.5-11.5% range unexplored. This fills the gap so the
-                # client sees the full rent trade-off curve across the window.
-                mid_lo = eff_min + window_width
-                mid_hi = min(float(eff_max), eff_min + 0.015)
-                if mid_hi > mid_lo + 1e-9:
-                    mid_40 = _solve_with_40_window(mid_lo, mid_hi, floor_tiebreak=True)
-                    if mid_40 and mid_40.get('rent_totals'):
-                        existing_mid_canons = {
-                            (s or {}).get('canonical_assignments')
-                            for s in scenarios.values() if s
-                        }
-                        if mid_40.get('canonical_assignments') not in existing_mid_canons:
-                            mid_desc = (
-                                f"Mid-range option: 40% AMI between {mid_lo*100:.1f}% and "
-                                f"{mid_hi*100:.1f}% of residential SF, rent-maximized."
-                            )
-                            mid_40['tradeoffs'] = [mid_desc]
-                            mid_40['description'] = mid_desc
-                            scenarios['mid_40_share'] = mid_40
-
             # --- Edge / relaxed scenarios (UAP + MIH) ---
             # Generate up to N additional rent-maximizing scenarios to improve rent totals while still
             # respecting program rules. For UAP we may relax deep-affordability share bounds; for MIH
@@ -1638,6 +1615,75 @@ def optimize_units():
                     )
         except Exception as e:
             notes.append(f"Warning: low-40 options ladder failed: {str(e)}")
+
+        # --- mid_40_share: the middle of the 40% window (e.g., [10.5%, 11.5%]) ---
+        # Client request 2026-06-11: the low-40 group hugs the floor and the
+        # unconstrained best often runs toward the ceiling, leaving the middle
+        # unexplored. Runs AFTER the edge block and the low-40 ladder so every
+        # pre-existing scenario (edge slots included) generates exactly as
+        # before — this option is purely additive, never displacing others.
+        try:
+            if rent_schedule and rent_by_band_cents:
+                mid_rules = (config.get('optimization_rules', {}) or {})
+                mid_eff_min, mid_eff_max = None, None
+                for t in (mid_rules.get('share_thresholds') or []):
+                    try:
+                        if int(t.get('band_threshold', 0)) <= 40:
+                            mid_eff_min = float(t.get('min_share') or 0.10)
+                            mid_eff_max = float(t.get('max_share') or 0.125)
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                if mid_eff_min is None:
+                    mid_eff_min = float(mid_rules.get('deep_affordability_min_share') or 0.10)
+                    mid_eff_max = float(mid_rules.get('deep_affordability_max_share') or 0.125)
+
+                mid_lo = mid_eff_min + 0.005
+                mid_hi = min(float(mid_eff_max), mid_eff_min + 0.015)
+                if mid_hi > mid_lo + 1e-9:
+                    mid_40 = _solve_with_40_window(mid_lo, mid_hi, floor_tiebreak=True)
+                    if mid_40 and mid_40.get('rent_totals'):
+                        def _mid_outcome_sig(s):
+                            if not s:
+                                return None
+                            mix = ((s.get('metrics') or {}).get('band_mix')) or []
+                            rt = s.get('rent_totals') or {}
+                            if not mix or rt.get('net_monthly') is None:
+                                return None
+                            try:
+                                mix_t = tuple(sorted(
+                                    (int(m.get('band')), int(m.get('units') or 0)) for m in mix
+                                ))
+                                return (mix_t, round(float(rt.get('net_monthly')), 2))
+                            except (TypeError, ValueError):
+                                return None
+
+                        taken_mid_canons = set()
+                        taken_mid_sigs = set()
+                        for s in scenarios.values():
+                            if not s:
+                                continue
+                            ck = s.get('canonical_assignments')
+                            if ck:
+                                taken_mid_canons.add(tuple(tuple(p) for p in ck))
+                            sig = _mid_outcome_sig(s)
+                            if sig:
+                                taken_mid_sigs.add(sig)
+
+                        mid_canon = tuple(tuple(p) for p in (mid_40.get('canonical_assignments') or []))
+                        mid_sig = _mid_outcome_sig(mid_40)
+                        if mid_canon and mid_canon not in taken_mid_canons and mid_sig and mid_sig not in taken_mid_sigs:
+                            mid_desc = (
+                                f"Mid-range option: 40% AMI between {mid_lo*100:.1f}% and "
+                                f"{mid_hi*100:.1f}% of residential SF, rent-maximized."
+                            )
+                            mid_40['tradeoffs'] = [mid_desc]
+                            mid_40['description'] = mid_desc
+                            scenarios['mid_40_share'] = mid_40
+        except NameError:
+            pass  # _solve_with_40_window undefined => the 40%-variants block never ran
+        except Exception as e:
+            notes.append(f"Warning: mid-40 scenario failed: {str(e)}")
 
         # --- Fix-02: De-dupe outcome-identical scenarios (post-processing) ---
         # Only remove scenarios when they are truly identical in outputs (band mix + rent totals),
