@@ -822,17 +822,32 @@ def optimize_units():
         # rent coefficients and pass them to find_optimal_scenarios. This makes
         # the solver maximize ACTUAL rent dollars per combo (using haircut-
         # adjusted rents from rent_components), instead of the WAAMI proxy.
+        #
+        # The calculator is resolved PER REQUEST (rent_roll_year /
+        # calculator_id from the Excel year dropdown), exactly like
+        # /api/evaluate. Payloads without a year fall back to the
+        # server-global active selection — identical to the old behavior —
+        # so older add-in versions keep working unchanged.
+        # `notes` doesn't exist until the solver returns, so collect rent-
+        # resolution messages here and merge them right after `notes` is born.
+        rent_resolution_notes: list[str] = []
         rent_load_start = time.perf_counter()
         rent_schedule = None
         rent_schedule_cache_hit = False
-        rent_calc_path = _get_active_rent_calculator_path()
+        rent_calc_path, rent_meta = _resolve_rent_calculator_for_request(data)
+        if rent_meta.get('rent_schedule_warning'):
+            rent_resolution_notes.append(f"Warning: {rent_meta['rent_schedule_warning']}")
         if rent_calc_path:
             try:
                 rent_schedule, rent_schedule_cache_hit = _load_rent_schedule_cached(rent_calc_path)
             except Exception as e:
-                notes.append(f"Warning: Could not load rent calculator: {str(e)}")
+                rent_resolution_notes.append(f"Warning: Could not load rent calculator: {str(e)}")
         timing["rent_schedule_load_ms"] = int(round((time.perf_counter() - rent_load_start) * 1000))
         timing["rent_schedule_cache_hit"] = bool(rent_schedule_cache_hit)
+        timing["rent_roll_year_used"] = rent_meta.get("rent_roll_year_used")
+        timing["rent_calculator_filename"] = rent_meta.get("calculator_filename")
+        if rent_schedule and rent_meta.get("rent_roll_year_used"):
+            rent_resolution_notes.append(f"Rents priced on the {rent_meta['rent_roll_year_used']} rent roll.")
 
         rent_by_band_cents = None
         if rent_schedule:
@@ -897,6 +912,7 @@ def optimize_units():
             solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
+        notes.extend(rent_resolution_notes)
 
         # Optional: baseline run for learning compare (runs strict rules without overrides).
         baseline_scenarios = None
@@ -1916,6 +1932,11 @@ def optimize_units():
             "scenarios": safe_scenarios,
             "notes": notes,
             "project_summary": project_summary,
+            # Which rent table priced this response — lets the Excel side
+            # print "Rent Roll Year: NNNN" so a year mismatch can never hide.
+            "rent_roll_year_used": rent_meta.get("rent_roll_year_used"),
+            "rent_calculator_filename": rent_meta.get("calculator_filename"),
+            "rent_schedule_source": rent_meta.get("rent_schedule_source"),
         }
 
         if learning_info:

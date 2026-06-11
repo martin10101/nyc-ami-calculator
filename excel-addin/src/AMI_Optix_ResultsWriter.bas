@@ -2221,7 +2221,36 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     ws.Cells(row, 1).Value = "AMI OPTIMIZATION RESULTS"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 16
-    row = row + 2
+    row = row + 1
+
+    ' Rent-roll year guardrail: always show which rent table priced these
+    ' results. The server reports the year it actually used; if an older
+    ' server omits the field, fall back to the local dropdown year marked
+    ' "(local)". A 2025-vs-2026 mismatch must never be invisible again.
+    Dim rentYearLabel As String
+    rentYearLabel = ""
+    On Error Resume Next
+    If result.Exists("rent_roll_year_used") Then
+        If Not IsEmpty(result("rent_roll_year_used")) And Not IsNull(result("rent_roll_year_used")) Then
+            rentYearLabel = Trim$(CStr(result("rent_roll_year_used")))
+        End If
+    End If
+    On Error GoTo 0
+    If rentYearLabel = "" Then
+        On Error Resume Next
+        Dim localRentYear As Long
+        localRentYear = GetSelectedRentRollYearLocal()
+        If localRentYear > 0 Then rentYearLabel = CStr(localRentYear) & " (local)"
+        On Error GoTo 0
+    End If
+    If rentYearLabel <> "" Then
+        ws.Cells(row, 1).Value = "Rent Roll Year:"
+        ws.Cells(row, 1).Font.Bold = True
+        ws.Cells(row, 2).Value = rentYearLabel
+        ws.Cells(row, 2).Font.Bold = True
+        row = row + 1
+    End If
+    row = row + 1
 
     Dim scenarioKey As String
     scenarioKey = GetBestScenarioKey(result)

@@ -579,6 +579,16 @@ Public Function BuildAPIPayloadV2( _
 
     json = json & """program"": """ & EscapeJSON(programNorm) & """, "
 
+    ' Rent-roll year from the ribbon dropdown. Without this field the server
+    ' falls back to its global default calculator (2025), so the optimizer
+    ' would price scenarios on a different year than Manual Calculate — the
+    ' mixed-year bug of 2026-06. Same pattern as BuildEvaluatePayloadV2.
+    Dim optimizeRentYear As Long
+    optimizeRentYear = GetSelectedRentRollYearSetting()
+    If optimizeRentYear > 0 Then
+        json = json & """rent_roll_year"": " & CStr(optimizeRentYear) & ", "
+    End If
+
     If programNorm = "MIH" Then
         If mihOption <> "" Then
             json = json & """mih_option"": """ & EscapeJSON(mihOption) & """, "
