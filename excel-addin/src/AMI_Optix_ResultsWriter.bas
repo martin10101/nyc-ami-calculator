@@ -408,7 +408,11 @@ Private Function BuildScenarioKeyOrder(scenarios As Object) As Collection
     End If
 
     Dim preferred As Variant
-    preferred = Array("absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented", "max_revenue")
+    ' Fewest-40-units options lead: developers' first question is "how few
+    ' apartments do I have to give to 40% AMI?" — the rent-max-at-any-cost
+    ' options (absolute_best etc.) follow. Client direction 2026-06-11.
+    preferred = Array("fewest_40_units", "fewest_40_units_2", "fewest_40_units_3", _
+                      "absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented", "max_revenue")
 
     Dim i As Long
     For i = LBound(preferred) To UBound(preferred)

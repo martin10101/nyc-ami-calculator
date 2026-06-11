@@ -169,18 +169,26 @@ def _ladder_units():
     return units
 
 
-def test_api_ladder_returns_multiple_distinct_low40_options():
+def test_api_fewest_40_units_family():
+    """Rachel's concept (2026-06-11): developers minimize the NUMBER of
+    apartments at 40% AMI, not the SF share. The fewest_40_units family must
+    pin the true minimum unit count over the FULL legal window and offer
+    several options at that count.
+
+    For _ladder_units() with residential_sf=41000: required 40-SF = 4,100.
+    Largest-first greedy: 740+730+720+710+700 = 3,600 (5 units), +640 =
+    4,240 (6 units) >= 4,100 -> the minimum is 6 apartments.
+    """
     from app import app
 
     client = app.test_client()
-    units = _ladder_units()
     payload = {
         'program': 'MIH',
         'mih_option': 'Option 1',
         'mih_residential_sf': 41000,
         'mih_max_band_percent': 135,
         'utilities': {'electricity': 'na', 'cooking': 'na', 'heat': 'na', 'hot_water': 'na'},
-        'units': units,
+        'units': _ladder_units(),
     }
     resp = client.post('/api/optimize', json=payload)
     assert resp.status_code == 200
@@ -189,50 +197,55 @@ def test_api_ladder_returns_multiple_distinct_low40_options():
     scenarios = data.get('scenarios') or {}
 
     if 'low_40_share' not in scenarios:
-        pytest.skip('Rent calculator unavailable in this environment; low-40 group not generated.')
+        pytest.skip('Rent calculator unavailable in this environment.')
 
-    low40_keys = sorted(k for k in scenarios if k.startswith('low_40_share'))
-    extra_keys = [k for k in low40_keys if k != 'low_40_share']
-    assert len(extra_keys) >= 2, (
-        f"Expected at least 2 additional low-40 options for a 20-unit varied building, "
-        f"got {low40_keys}"
-    )
+    fewest = scenarios.get('fewest_40_units')
+    assert fewest, f"fewest_40_units missing; keys: {sorted(scenarios.keys())}"
 
     residential_sf = 41000.0
-    seen_outcomes = set()
-    for key in low40_keys:
-        scenario = scenarios[key]
+
+    def _forty_band_stats(scenario):
         assignments = scenario.get('assignments') or []
-        assert assignments, f"{key} has no assignments"
-
-        # Every option must respect the hard WAAMI cap...
-        total_sf = sum(float(u['net_sf']) for u in assignments)
-        waami = sum(float(u['net_sf']) * float(u['assigned_ami']) for u in assignments) / total_sf
-        assert waami <= 0.60 + 1e-9, f"{key} WAAMI {waami} exceeds cap"
-
-        # ...and hug the minimum 40% window (10% floor, narrow ceiling).
+        n = sum(1 for u in assignments if float(u['assigned_ami']) <= 0.4 + 1e-12)
         low_sf = sum(
             float(u['net_sf']) for u in assignments
             if float(u['assigned_ami']) <= 0.4 + 1e-12
         )
-        low_share = low_sf / residential_sf
-        assert low_share >= 0.10 - 1e-9, f"{key} 40-share {low_share} below 10% floor"
-        assert low_share <= 0.155 + 1e-9, f"{key} 40-share {low_share} far above the floor window"
+        total_sf = sum(float(u['net_sf']) for u in assignments)
+        waami = sum(float(u['net_sf']) * float(u['assigned_ami']) for u in assignments) / total_sf
+        return n, low_sf, waami
 
-        # Outcome distinctness: band unit-counts + monthly rent must differ.
+    n, low_sf, waami = _forty_band_stats(fewest)
+    assert n == 6, f"fewest_40_units used {n} apartments at 40%; minimum is 6"
+    assert low_sf / residential_sf >= 0.10 - 1e-9
+    assert low_sf / residential_sf <= 0.125 + 1e-9, (
+        "fewest option must stay inside the FULL legal window"
+    )
+    assert waami <= 0.60 + 1e-9
+
+    # The family must offer more than one option (band variety at the
+    # minimum count, or at worst one option at minimum+1).
+    family_keys = sorted(k for k in scenarios if k.startswith('fewest_40_units'))
+    assert len(family_keys) >= 2, f"Expected >=2 fewest-40 options, got {family_keys}"
+
+    seen_outcomes = set()
+    for key in family_keys:
+        scenario = scenarios[key]
+        kn, klow_sf, kwaami = _forty_band_stats(scenario)
+        assert kn in (6, 7), f"{key} used {kn} units at 40%; expected the minimum (6) or 6+1"
+        assert kwaami <= 0.60 + 1e-9, f"{key} WAAMI {kwaami} exceeds cap"
+
         band_counts = {}
-        for u in assignments:
+        for u in scenario.get('assignments') or []:
             band = int(round(float(u['assigned_ami']) * 100))
             band_counts[band] = band_counts.get(band, 0) + 1
         rent_monthly = round(float((scenario.get('rent_totals') or {}).get('net_monthly') or 0.0), 2)
         outcome = (tuple(sorted(band_counts.items())), rent_monthly)
-        assert outcome not in seen_outcomes, f"{key} duplicates another low-40 option's outcome"
+        assert outcome not in seen_outcomes, f"{key} duplicates another option's outcome"
         seen_outcomes.add(outcome)
 
-    # The extra options must carry a client-readable description line.
-    for key in extra_keys:
-        tradeoffs = scenarios[key].get('tradeoffs') or []
-        assert tradeoffs and any('low-40' in str(t).lower() or '40% ami' in str(t).lower() for t in tradeoffs), (
+        tradeoffs = scenario.get('tradeoffs') or []
+        assert tradeoffs and any('apartments at 40% ami' in str(t).lower() for t in tradeoffs), (
             f"{key} is missing its description line"
         )
 
