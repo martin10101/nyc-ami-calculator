@@ -482,6 +482,23 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
     Dim groupNames As Variant
     groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (UNDER 11.5% AT 40%)", "MAX RENT / OTHER OPTIONS", "YOUR INPUT")
 
+    ' Pre-pass: the smallest positive 40%-unit count across all solver
+    ' scenarios. ANY option sitting at that minimum belongs in the FEWEST
+    ' group, whatever its key — client feedback 2026-06-11: LOW 40 SHARE at
+    ' the same 8-unit minimum looked wrong outside the FEWEST group.
+    Dim minFortyCount As Long
+    minFortyCount = -1
+    Dim preKey As Variant
+    For Each preKey In baseOrder
+        If LCase$(CStr(preKey)) <> "original" Then
+            Dim preCount As Long
+            preCount = ScenarioFortyUnitCount(scenarios(CStr(preKey)))
+            If preCount > 0 Then
+                If minFortyCount < 0 Or preCount < minFortyCount Then minFortyCount = preCount
+            End If
+        End If
+    Next preKey
+
     Dim grp As Long
     For grp = 0 To 3
         Dim k As Variant
@@ -490,14 +507,17 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
             keyStr = CStr(k)
 
             ' Classify by what the scenario actually IS, not just its key:
-            ' anything whose 40% share sits under 11.5% of the building is a
-            ' mid/low option, not a "max rent" one (client feedback — LOW 40
-            ' SHARE at 10.45% looked wrong under MAX RENT).
+            ' minimum 40%-unit count -> FEWEST group; 40% share under 11.5%
+            ' of the building -> mid; the rest -> max rent.
             Dim keyGroup As Long
-            If LCase$(Left$(keyStr, Len("fewest_40_units"))) = "fewest_40_units" Then
-                keyGroup = 0
-            ElseIf LCase$(keyStr) = "original" Then
+            Dim fortyCount As Long
+            fortyCount = ScenarioFortyUnitCount(scenarios(keyStr))
+            If LCase$(keyStr) = "original" Then
                 keyGroup = 3
+            ElseIf minFortyCount > 0 And fortyCount = minFortyCount Then
+                keyGroup = 0
+            ElseIf LCase$(Left$(keyStr, Len("fewest_40_units"))) = "fewest_40_units" Then
+                keyGroup = 0   ' name-based safety net when counts are unknowable
             Else
                 Dim fortyShare As Double
                 fortyShare = ScenarioFortyShare(scenarios(keyStr))
@@ -537,6 +557,39 @@ NextKey:
 
 Fail:
     Set BuildGroupedScenarioOrder = ordered
+End Function
+
+Private Function ScenarioFortyUnitCount(scenario As Object) As Long
+    ' Number of apartments at <=40% AMI in one scenario. Works for UAP too
+    ' (needs no building SF). Returns -1 when it cannot be computed.
+    ScenarioFortyUnitCount = -1
+    On Error GoTo Fail
+    If scenario Is Nothing Then Exit Function
+    If Not scenario.Exists("assignments") Then Exit Function
+
+    Dim assignments As Object
+    Set assignments = scenario("assignments")
+    If assignments Is Nothing Then Exit Function
+
+    Dim n As Long
+    n = 0
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If Not a Is Nothing Then
+            Dim ami As Double
+            ami = 0#
+            If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+            If ami > 2# Then ami = ami / 100#
+            If ami > 0# And ami <= 0.4000001 Then n = n + 1
+        End If
+    Next i
+
+    ScenarioFortyUnitCount = n
+    Exit Function
+Fail:
+    ScenarioFortyUnitCount = -1
 End Function
 
 Private Function ScenarioFortyShare(scenario As Object) As Double
