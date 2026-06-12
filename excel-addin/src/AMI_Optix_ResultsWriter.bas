@@ -480,7 +480,7 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
     Set baseOrder = BuildScenarioKeyOrder(scenarios)
 
     Dim groupNames As Variant
-    groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (10.5-11.5% AT 40%)", "MAX RENT / OTHER OPTIONS", "YOUR INPUT")
+    groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (UNDER 11.5% AT 40%)", "MAX RENT / OTHER OPTIONS", "YOUR INPUT")
 
     Dim grp As Long
     For grp = 0 To 3
@@ -489,15 +489,29 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
             Dim keyStr As String
             keyStr = CStr(k)
 
+            ' Classify by what the scenario actually IS, not just its key:
+            ' anything whose 40% share sits under 11.5% of the building is a
+            ' mid/low option, not a "max rent" one (client feedback — LOW 40
+            ' SHARE at 10.45% looked wrong under MAX RENT).
             Dim keyGroup As Long
             If LCase$(Left$(keyStr, Len("fewest_40_units"))) = "fewest_40_units" Then
                 keyGroup = 0
-            ElseIf LCase$(keyStr) = "mid_40_share" Then
-                keyGroup = 1
             ElseIf LCase$(keyStr) = "original" Then
                 keyGroup = 3
             Else
-                keyGroup = 2
+                Dim fortyShare As Double
+                fortyShare = ScenarioFortyShare(scenarios(keyStr))
+                If fortyShare >= 0# Then
+                    If fortyShare <= 0.115 + 0.0000001 Then
+                        keyGroup = 1
+                    Else
+                        keyGroup = 2
+                    End If
+                ElseIf LCase$(keyStr) = "mid_40_share" Then
+                    keyGroup = 1
+                Else
+                    keyGroup = 2
+                End If
             End If
             If keyGroup <> grp Then GoTo NextKey
 
@@ -525,12 +539,48 @@ Fail:
     Set BuildGroupedScenarioOrder = ordered
 End Function
 
+Private Function ScenarioFortyShare(scenario As Object) As Double
+    ' Share of the building's residential SF at <=40% AMI for one scenario.
+    ' Returns -1 when it cannot be computed (no assignments / no building SF).
+    ScenarioFortyShare = -1#
+    On Error GoTo Fail
+    If scenario Is Nothing Then Exit Function
+    If g_MihTotalBuildingSf <= 0# Then Exit Function
+    If Not scenario.Exists("assignments") Then Exit Function
+
+    Dim assignments As Object
+    Set assignments = scenario("assignments")
+    If assignments Is Nothing Then Exit Function
+
+    Dim sf40 As Double
+    sf40 = 0#
+    Dim i As Long
+    For i = 1 To assignments.Count
+        Dim a As Object
+        Set a = assignments(i)
+        If Not a Is Nothing Then
+            Dim ami As Double
+            ami = 0#
+            If a.Exists("assigned_ami") Then ami = CDbl(a("assigned_ami"))
+            If ami > 2# Then ami = ami / 100#
+            If ami > 0# And ami <= 0.4000001 Then
+                If a.Exists("net_sf") Then sf40 = sf40 + CDbl(a("net_sf"))
+            End If
+        End If
+    Next i
+
+    ScenarioFortyShare = sf40 / g_MihTotalBuildingSf
+    Exit Function
+Fail:
+    ScenarioFortyShare = -1#
+End Function
+
 Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
     ' Compact at-a-glance index of every scenario (client-approved layout):
     ' group banners + one line per scenario (# / name / bands / 40% units @
     ' share / monthly rent), with ">" marking the scenario currently shown in
     ' the working copy. Reads g_LastScenarios so every manual-block writer can
-    ' re-create it after clearing the top of the sheet. Column N stores each
+    ' re-create it after clearing the top of the sheet. Column G stores each
     ' row's key (helper data, cleared with the block).
     Dim row As Long
     row = startRow
@@ -553,7 +603,19 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
     ws.Cells(row, 1).Value = "SCENARIO OVERVIEW (" & orderedKeys.Count & " scenarios)"
     ws.Cells(row, 1).Font.Bold = True
     ws.Cells(row, 1).Font.Size = 13
-    ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Interior.Color = RGB(217, 226, 243)
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Interior.Color = RGB(217, 226, 243)
+    row = row + 1
+
+    ' Column headers so each value is self-explanatory (client feedback).
+    ws.Cells(row, 1).Value = "#"
+    ws.Cells(row, 2).Value = "Scenario"
+    ws.Cells(row, 3).Value = "Bands"
+    ws.Cells(row, 4).Value = "40% Units @ Share"
+    ws.Cells(row, 5).Value = "Monthly Rent"
+    ws.Cells(row, 7).Value = "Key"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Interior.Color = RGB(230, 230, 230)
+    ws.Cells(row, 1).HorizontalAlignment = xlRight
     row = row + 1
 
     Dim lastGroup As String
@@ -569,7 +631,7 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
         If grpLabel <> lastGroup Then
             ws.Cells(row, 1).Value = grpLabel
             ws.Cells(row, 1).Font.Bold = True
-            ws.Range(ws.Cells(row, 1), ws.Cells(row, 6)).Interior.Color = RGB(238, 238, 238)
+            ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Interior.Color = RGB(238, 238, 238)
             row = row + 1
             lastGroup = grpLabel
         End If
@@ -645,8 +707,9 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
             End If
         End If
 
-        ' Helper: scenario key for marker lookups / future automation.
-        ws.Cells(row, 14).Value = keyStr
+        ' Helper: scenario key, adjacent to the table (client feedback —
+        ' don't strand data out at column N).
+        ws.Cells(row, 7).Value = keyStr
 
         row = row + 1
 NextOverviewKey:
