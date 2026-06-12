@@ -768,6 +768,27 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
 NextOverviewKey:
     Next i
 
+    ' Compact method legend - the program's playbook in the client's own
+    ' language, so any result that contradicts it is a precise bug report.
+    row = row + 1
+    ws.Cells(row, 1).Value = "HOW THESE OPTIONS ARE BUILT:"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 9
+    row = row + 1
+    Dim legendLines As Variant
+    legendLines = Array( _
+        "1. Find the minimum number of apartments that can legally carry the 40% requirement (largest units first).", _
+        "2. Maximize rent at that minimum - bigger units at 40% leave more weighted-average room for 90% units above.", _
+        "3. Offer band variations at the same minimum (with/without 60% AMI) - the neighborhood call is yours.", _
+        "4. Mid-range and max-rent options show what more 40% space would buy.")
+    Dim li As Long
+    For li = LBound(legendLines) To UBound(legendLines)
+        ws.Cells(row, 1).Value = CStr(legendLines(li))
+        ws.Cells(row, 1).Font.Size = 9
+        ws.Cells(row, 1).Font.Italic = True
+        row = row + 1
+    Next li
+
     row = row + 1
     WriteScenarioOverview = row
     Exit Function
@@ -3239,6 +3260,25 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
     If scenario Is Nothing Then
         WriteScenarioSummaryAndTable = row
         Exit Function
+    End If
+
+    ' "Why:" strategy line - the server's one-line computed explanation of
+    ' this scenario's logic (apartments at 40%, unit-size strategy, rent
+    ' delta vs the fewest option). Display-only; distinct from "Tradeoffs:",
+    ' which lists real rule relaxations on edge scenarios.
+    If scenario.Exists("description") Then
+        Dim whyTxt As String
+        whyTxt = ""
+        On Error Resume Next
+        If Not IsObject(scenario("description")) Then whyTxt = Trim$(CStr(scenario("description")))
+        On Error GoTo 0
+        If whyTxt <> "" Then
+            ws.Cells(row, 1).Value = "Why:"
+            ws.Cells(row, 1).Font.Bold = True
+            ws.Cells(row, 2).Value = whyTxt
+            ws.Cells(row, 2).Font.Italic = True
+            row = row + 1
+        End If
     End If
 
     If scenario.Exists("waami") Then

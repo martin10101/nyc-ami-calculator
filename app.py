@@ -2038,6 +2038,141 @@ def optimize_units():
         except Exception as _e:
             notes.append(f"Note: could not build Original Scenario: {_e}")
 
+        # --- Scenario strategy lines (client request 2026-06-11) ---
+        # Every scenario carries a one-line, COMPUTED explanation of why it
+        # looks the way it does (apartments at 40%, unit-size strategy, rent
+        # delta vs the fewest option). Excel renders it as a "Why:" line.
+        # Pure display text: never touches assignments, ordering, or
+        # compliance. Edge scenarios' real violation tradeoffs are untouched;
+        # the 40-family keys stop duplicating their description into
+        # tradeoffs (the Why line replaces that).
+        try:
+            if scenarios:
+                try:
+                    pool_avg_sf = float(df_units['net_sf'].mean())
+                except Exception:
+                    pool_avg_sf = 0.0
+                if program_norm == 'MIH' and total_building_sf > 0:
+                    denom_sf_why = float(total_building_sf)
+                else:
+                    try:
+                        denom_sf_why = float(df_units['net_sf'].sum())
+                    except Exception:
+                        denom_sf_why = 0.0
+
+                def _forty_stats_why(s):
+                    n40 = 0
+                    sf40 = 0.0
+                    for u in ((s or {}).get('assignments') or []):
+                        try:
+                            ami = float(u.get('assigned_ami') or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if ami > 2:
+                            ami /= 100.0
+                        if 0 < ami <= 0.4000001:
+                            n40 += 1
+                            sf40 += float(u.get('net_sf') or 0)
+                    return n40, sf40
+
+                def _bands_txt_why(s):
+                    bands = set()
+                    for u in ((s or {}).get('assignments') or []):
+                        try:
+                            ami = float(u.get('assigned_ami') or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if ami > 2:
+                            ami /= 100.0
+                        if ami > 0:
+                            bands.add(int(round(ami * 100)))
+                    return "/".join(str(b) for b in sorted(bands))
+
+                fewest_why = scenarios.get('fewest_40_units')
+                fewest_n40_why, _ = _forty_stats_why(fewest_why) if fewest_why else (0, 0.0)
+                fewest_rent_why = None
+                if fewest_why and isinstance(fewest_why.get('rent_totals'), dict):
+                    fewest_rent_why = fewest_why['rent_totals'].get('net_monthly')
+
+                def _delta_txt_why(s):
+                    if fewest_rent_why is None:
+                        return ""
+                    nm = ((s or {}).get('rent_totals') or {}).get('net_monthly')
+                    if nm is None:
+                        return ""
+                    d = float(nm) - float(fewest_rent_why)
+                    if abs(d) < 0.5:
+                        return " Same rent as FEWEST 40 UNITS."
+                    return f" {'+' if d > 0 else '-'}${abs(d):,.0f}/mo vs FEWEST 40 UNITS."
+
+                for _sk, _sv in list(scenarios.items()):
+                    if not _sv or _sk == 'original':
+                        continue
+                    n40, sf40 = _forty_stats_why(_sv)
+                    if n40 <= 0:
+                        continue
+                    share_txt = ""
+                    if denom_sf_why > 0:
+                        share_txt = f" ({sf40 / denom_sf_why * 100:.2f}% of residential SF)"
+                    avg40_sf = sf40 / n40
+                    bands_txt = _bands_txt_why(_sv)
+
+                    if _sk == 'fewest_40_units':
+                        size_txt = ""
+                        if pool_avg_sf > 0:
+                            size_txt = f", using the largest units (avg {avg40_sf:,.0f} SF vs {pool_avg_sf:,.0f} SF pool avg)"
+                        desc = (
+                            f"{n40} apartments at 40% - the minimum possible{share_txt}"
+                            f"{size_txt}; rent-maximized."
+                        )
+                    elif str(_sk).startswith('fewest_40_units'):
+                        desc = (
+                            f"Same {n40}-apartment minimum at 40%, alternative band mix "
+                            f"({bands_txt}) for the neighborhood/clientele call.{_delta_txt_why(_sv)}"
+                        )
+                    elif _sk == 'low_40_share':
+                        desc = (
+                            f"Smallest 40% footprint{share_txt}: {n40} apartments, "
+                            f"less weighted-average room above.{_delta_txt_why(_sv)}"
+                        )
+                    elif _sk == 'mid_40_share':
+                        desc = (
+                            f"Mid-range 40% share{share_txt}: shows what extra 40% space "
+                            f"buys in this building.{_delta_txt_why(_sv)}"
+                        )
+                    elif _sk == 'max_40_share':
+                        desc = (
+                            f"40% near the legal ceiling{share_txt}: the most 40% space "
+                            f"allowed, for comparison.{_delta_txt_why(_sv)}"
+                        )
+                    elif _sk == 'absolute_best':
+                        pays_txt = ""
+                        if fewest_n40_why and n40 > fewest_n40_why:
+                            pays_txt = f" - pays with {n40 - fewest_n40_why} apartment(s) above the minimum at 40%"
+                        desc = (
+                            f"Maximum income: {n40} apartments at 40%{share_txt}{pays_txt}."
+                            f"{_delta_txt_why(_sv)}"
+                        )
+                    elif _sk == 'closest_to_60':
+                        desc = (
+                            f"WAAMI pushed closest to the 60% cap "
+                            f"({float(_sv.get('waami') or 0) * 100:.3f}%); {n40} apartments at 40%."
+                            f"{_delta_txt_why(_sv)}"
+                        )
+                    else:
+                        desc = (
+                            f"{n40} apartments at 40%{share_txt}, bands {bands_txt}."
+                            f"{_delta_txt_why(_sv)}"
+                        )
+
+                    _sv['description'] = desc
+                    # The Why line replaces the old description-in-tradeoffs
+                    # hack for the 40-family keys; real edge tradeoffs stay.
+                    if str(_sk).startswith(('fewest_40_units', 'low_40_share', 'mid_40_share')):
+                        _sv['tradeoffs'] = []
+        except Exception as _e:
+            notes.append(f"Note: scenario strategy lines failed: {_e}")
+
         # Build response
         response_start = time.perf_counter()
         safe_scenarios = _sanitize_for_json(scenarios)

@@ -244,9 +244,11 @@ def test_api_fewest_40_units_family():
         assert outcome not in seen_outcomes, f"{key} duplicates another option's outcome"
         seen_outcomes.add(outcome)
 
-        tradeoffs = scenario.get('tradeoffs') or []
-        assert tradeoffs and any('apartments at 40% ami' in str(t).lower() for t in tradeoffs), (
-            f"{key} is missing its description line"
+        # Strategy line ("Why:") lives in description since 2026-06-11;
+        # tradeoffs is reserved for real rule relaxations on edge scenarios.
+        description = str(scenario.get('description') or '')
+        assert 'apartments at 40%' in description.lower() or 'minimum' in description.lower(), (
+            f"{key} is missing its strategy description line: {description!r}"
         )
 
 
@@ -294,5 +296,5 @@ def test_api_mid_40_share_fills_the_middle_of_the_window():
     mid_canon = tuple(map(tuple, (mid.get('canonical_assignments') or [])))
     assert mid_canon not in others
 
-    tradeoffs = mid.get('tradeoffs') or []
-    assert any('mid-range' in str(t).lower() for t in tradeoffs)
+    # Strategy line lives in description since 2026-06-11.
+    assert 'mid-range' in str(mid.get('description') or '').lower()
