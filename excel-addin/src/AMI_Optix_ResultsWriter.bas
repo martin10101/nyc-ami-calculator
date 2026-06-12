@@ -499,41 +499,89 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
         End If
     Next preKey
 
+    ' Classify every key into a group (0..3) once.
+    Dim grpOf As Object
+    Set grpOf = CreateObject("Scripting.Dictionary")
+    Dim ck As Variant
+    For Each ck In baseOrder
+        Dim ks As String
+        ks = CStr(ck)
+        Dim cnt As Long
+        cnt = ScenarioFortyUnitCount(scenarios(ks))
+        Dim g As Long
+        If LCase$(ks) = "original" Then
+            g = 3
+        ElseIf minFortyCount > 0 And cnt = minFortyCount Then
+            g = 0
+        ElseIf LCase$(Left$(ks, Len("fewest_40_units"))) = "fewest_40_units" Then
+            g = 0   ' name-based safety net when counts are unknowable
+        Else
+            Dim sh As Double
+            sh = ScenarioFortyShare(scenarios(ks))
+            If sh >= 0# Then
+                If sh <= 0.115 + 0.0000001 Then
+                    g = 1
+                Else
+                    g = 2
+                End If
+            ElseIf LCase$(ks) = "mid_40_share" Then
+                g = 1
+            Else
+                g = 2
+            End If
+        End If
+        grpOf(ks) = g
+    Next ck
+
+    ' FEWEST group (0) is ordered TIGHTEST-HUG FIRST: ascending 40% share,
+    ' so Scenario 1 is the least-units option that hugs the 10% floor most
+    ' tightly (client direction 2026-06-12). Build that subset and sort it;
+    ' equal/unknown shares keep their original order (stable insertion sort).
+    Dim fewestArr() As String
+    Dim fewestN As Long
+    fewestN = 0
+    ReDim fewestArr(0 To Application.Max(0, baseOrder.Count))
+    For Each ck In baseOrder
+        If grpOf(CStr(ck)) = 0 Then
+            fewestArr(fewestN) = CStr(ck)
+            fewestN = fewestN + 1
+        End If
+    Next ck
+    If fewestN > 1 Then
+        Dim ii As Long, jj As Long
+        For ii = 1 To fewestN - 1
+            Dim cur As String
+            cur = fewestArr(ii)
+            Dim curShare As Double
+            curShare = ScenarioFortyShare(scenarios(cur))
+            jj = ii - 1
+            Do While jj >= 0
+                If ScenarioFortyShare(scenarios(fewestArr(jj))) <= curShare Then Exit Do
+                fewestArr(jj + 1) = fewestArr(jj)
+                jj = jj - 1
+            Loop
+            fewestArr(jj + 1) = cur
+        Next ii
+    End If
+
     Dim grp As Long
     For grp = 0 To 3
-        Dim k As Variant
-        For Each k In baseOrder
-            Dim keyStr As String
-            keyStr = CStr(k)
+        ' For the FEWEST group, walk the tightest-first sorted subset; for
+        ' all other groups, keep the base order.
+        Dim useFewest As Boolean
+        useFewest = (grp = 0)
+        Dim idx As Long
+        Dim loopCount As Long
+        loopCount = IIf(useFewest, fewestN, baseOrder.Count)
 
-            ' Classify by what the scenario actually IS, not just its key:
-            ' minimum 40%-unit count -> FEWEST group; 40% share under 11.5%
-            ' of the building -> mid; the rest -> max rent.
-            Dim keyGroup As Long
-            Dim fortyCount As Long
-            fortyCount = ScenarioFortyUnitCount(scenarios(keyStr))
-            If LCase$(keyStr) = "original" Then
-                keyGroup = 3
-            ElseIf minFortyCount > 0 And fortyCount = minFortyCount Then
-                keyGroup = 0
-            ElseIf LCase$(Left$(keyStr, Len("fewest_40_units"))) = "fewest_40_units" Then
-                keyGroup = 0   ' name-based safety net when counts are unknowable
+        For idx = 1 To loopCount
+            Dim keyStr As String
+            If useFewest Then
+                keyStr = fewestArr(idx - 1)
             Else
-                Dim fortyShare As Double
-                fortyShare = ScenarioFortyShare(scenarios(keyStr))
-                If fortyShare >= 0# Then
-                    If fortyShare <= 0.115 + 0.0000001 Then
-                        keyGroup = 1
-                    Else
-                        keyGroup = 2
-                    End If
-                ElseIf LCase$(keyStr) = "mid_40_share" Then
-                    keyGroup = 1
-                Else
-                    keyGroup = 2
-                End If
+                keyStr = CStr(baseOrder(idx))
             End If
-            If keyGroup <> grp Then GoTo NextKey
+            If grpOf(keyStr) <> grp Then GoTo NextKey
 
             ' De-dupe by canonical assignments (same rule the detail loop used).
             Dim canonKey As String
@@ -549,7 +597,7 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
             ordered.Add keyStr
             groupLabels.Add CStr(groupNames(grp))
 NextKey:
-        Next k
+        Next idx
     Next grp
 
     Set BuildGroupedScenarioOrder = ordered
@@ -3238,11 +3286,29 @@ Private Function GetBestScenarioKey(result As Object) As String
     If Not result.Exists("scenarios") Then Exit Function
     Set scenarios = result("scenarios")
 
-    Dim priorities As Variant
-    ' The working copy defaults to Scenario 1 (fewest units at 40%) so the
-    ' manual block and the first numbered scenario always match.
-    priorities = Array("fewest_40_units", "absolute_best", "best_3_band", "best_2_band", "alternative")
+    ' The working copy must always equal SCENARIO 1 on the sheet. Both come
+    ' from the SAME grouped order (FEWEST group first, tightest-hug first), so
+    ' the manual block can never disagree with the first numbered scenario.
+    ' Client direction 2026-06-12: this was showing ABSOLUTE BEST (more units,
+    ' higher 40% share) instead of the least-units option - the exact concept
+    ' Rachel flagged.
+    On Error GoTo Fallback
+    Dim groupLabels As Collection
+    Dim ordered As Collection
+    Set ordered = BuildGroupedScenarioOrder(scenarios, groupLabels)
+    If Not ordered Is Nothing Then
+        If ordered.Count >= 1 Then
+            GetBestScenarioKey = CStr(ordered(1))
+            Exit Function
+        End If
+    End If
 
+Fallback:
+    ' Defensive: if grouped order is unavailable, fall back to the old
+    ' name-priority list rather than returning nothing.
+    On Error Resume Next
+    Dim priorities As Variant
+    priorities = Array("fewest_40_units", "absolute_best", "best_3_band", "best_2_band", "alternative")
     Dim i As Long
     For i = LBound(priorities) To UBound(priorities)
         If scenarios.Exists(CStr(priorities(i))) Then
