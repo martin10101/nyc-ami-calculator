@@ -298,3 +298,91 @@ def test_api_mid_40_share_fills_the_middle_of_the_window():
 
     # Strategy line lives in description since 2026-06-11.
     assert 'mid-range' in str(mid.get('description') or '').lower()
+
+
+def test_api_min_count_frontier_and_recommended():
+    """Min-count 40% frontier + RECOMMENDED (client direction 2026-06-12).
+
+    For a varied MIH building the response must:
+      - set recommended_key to a minimum-40%-unit-count scenario,
+      - keep recommended income at/near the best at that count,
+      - tag any tighter-footprint option tier='tight_footprint' with a SMALLER
+        40% share AND income <= the recommended (the demoted options),
+      - never exceed the 60% WAAMI cap (incl. layouts exactly at the cap).
+    """
+    from app import app
+
+    client = app.test_client()
+    payload = {
+        'program': 'MIH',
+        'mih_option': 'Option 1',
+        'mih_residential_sf': 41000,
+        'mih_max_band_percent': 100,
+        'utilities': {'electricity': 'na', 'cooking': 'na', 'heat': 'na', 'hot_water': 'na'},
+        'units': _ladder_units(),
+    }
+    resp = client.post('/api/optimize', json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data['success'] is True
+    scenarios = data.get('scenarios') or {}
+
+    if 'low_40_share' not in scenarios:
+        pytest.skip('Rent calculator unavailable in this environment.')
+
+    resid = 41000.0
+
+    def n40(s):
+        return sum(1 for u in (s.get('assignments') or []) if float(u['assigned_ami']) <= 0.4 + 1e-12)
+
+    def sf40(s):
+        return sum(float(u['net_sf']) for u in (s.get('assignments') or []) if float(u['assigned_ami']) <= 0.4 + 1e-12)
+
+    def income(s):
+        return float((s.get('rent_totals') or {}).get('net_monthly') or 0.0)
+
+    def waami(s):
+        a = s.get('assignments') or []
+        t = sum(float(u['net_sf']) for u in a)
+        return sum(float(u['net_sf']) * float(u['assigned_ami']) for u in a) / t if t else 0.0
+
+    rk = data.get('recommended_key')
+    assert rk and rk in scenarios, f"recommended_key missing: {rk}"
+
+    solver = {k: v for k, v in scenarios.items() if v and k != 'original' and n40(v) > 0}
+    min_count = min(n40(v) for v in solver.values())
+    assert n40(scenarios[rk]) == min_count, "recommended must be a minimum-40%-unit-count scenario"
+
+    rec_income = income(scenarios[rk])
+    rec_share = sf40(scenarios[rk]) / resid
+
+    for k, v in scenarios.items():
+        if not v or k == 'original':
+            continue
+        assert waami(v) <= 0.60 + 1e-9, f"{k} WAAMI over cap"
+        if (v.get('tier') or '') == 'tight_footprint':
+            assert n40(v) == min_count, f"{k} tight_footprint not at the minimum count"
+            assert sf40(v) / resid < rec_share + 1e-9, f"{k} tight_footprint not tighter than recommended"
+            assert income(v) <= rec_income + 0.5, f"{k} tight_footprint should not out-earn recommended"
+            assert 'recommended' in str(v.get('description') or '').lower()
+
+
+def test_api_uap_has_no_recommended_or_tight_footprint():
+    """UAP is a different program; the MIH fewest-40 frontier must not apply."""
+    from app import app
+
+    client = app.test_client()
+    resp = client.post('/api/optimize', json={
+        'program': 'UAP',
+        'utilities': {'electricity': 'na', 'cooking': 'na', 'heat': 'na', 'hot_water': 'na'},
+        'units': [
+            {'unit_id': '1A', 'bedrooms': 1, 'net_sf': 200, 'floor': 1, 'balcony': False},
+            {'unit_id': '1B', 'bedrooms': 1, 'net_sf': 200, 'floor': 1, 'balcony': False},
+            {'unit_id': '2A', 'bedrooms': 2, 'net_sf': 400, 'floor': 6, 'balcony': True},
+            {'unit_id': '2B', 'bedrooms': 2, 'net_sf': 400, 'floor': 6, 'balcony': True},
+        ],
+    })
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get('recommended_key') is None
+    assert not any(k.startswith('tight_40_footprint') for k in (data.get('scenarios') or {}))

@@ -1741,6 +1741,170 @@ def optimize_units():
         except Exception as e:
             notes.append(f"Warning: mid-40 scenario failed: {str(e)}")
 
+        # --- Minimum-count 40% frontier (client direction 2026-06-12) ---
+        # At the PROVEN minimum number of apartments at 40%, surface as many
+        # distinct options as exist from the 10% floor up toward the tightest
+        # rent-strong layout — the client wants the most choices possible at
+        # the fewest units. Each tighter layout is rent-maximized at its own
+        # share ceiling and tagged tier='tight_footprint' so the display can
+        # demote + mark it with its exact rent gap vs the RECOMMENDED option
+        # (computed later). Purely additive; existing scenarios untouched.
+        try:
+            # MIH-only: the "fewest apartments at 40%" frontier is an MIH
+            # developer concept. UAP's deep-affordability rule is a different
+            # mechanism (share of affordable floor, conditional on bonus SF) —
+            # leave it untouched.
+            if program_norm == 'MIH' and rent_schedule and rent_by_band_cents:
+                fr_rules = (config.get('optimization_rules', {}) or {})
+                fr_min = None
+                for t in (fr_rules.get('share_thresholds') or []):
+                    try:
+                        if int(t.get('band_threshold', 0)) <= 40:
+                            fr_min = float(t.get('min_share') or 0.10)
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                if fr_min is None:
+                    fr_min = float(fr_rules.get('deep_affordability_min_share') or 0.10)
+                fr_cap = float(fr_rules.get('waami_cap_percent') or 60.0) / 100.0
+
+                def _fr_n40(s):
+                    n = 0
+                    for u in ((s or {}).get('assignments') or []):
+                        try:
+                            a = float(u.get('assigned_ami') or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if a > 2:
+                            a /= 100.0
+                        if 0 < a <= 0.4000001:
+                            n += 1
+                    return n
+
+                fr_counts = [_fr_n40(s) for k, s in scenarios.items()
+                             if s and k != 'original' and _fr_n40(s) > 0]
+                if fr_counts:
+                    k_star_fr = min(fr_counts)
+
+                    def _fr_solve(max_share):
+                        cfg = copy.deepcopy(config)
+                        rules = cfg.get('optimization_rules', {}) or {}
+                        for t in (rules.get('share_thresholds') or []):
+                            try:
+                                if int(t.get('band_threshold', 0)) <= 40:
+                                    t['min_share'] = fr_min
+                                    t['max_share'] = float(max_share)
+                            except (TypeError, ValueError):
+                                pass
+                        if rules.get('deep_affordability_min_share') is not None and rules.get('deep_affordability_max_share') is not None:
+                            rules['deep_affordability_min_share'] = fr_min
+                            rules['deep_affordability_max_share'] = float(max_share)
+                        # Enough combo checks to reliably find the tight layouts
+                        # near the floor (12 was too few; it missed the
+                        # absolute-tightest option).
+                        rules['max_revenue_combo_checks'] = 36
+                        cfg['optimization_rules'] = rules
+                        return find_max_revenue_scenario(
+                            df_units, cfg, rent_by_band_cents=rent_by_band_cents,
+                            waami_floor=0.58, project_overrides=project_overrides,
+                            low_band_unit_count=k_star_fr, low_band_floor_tiebreak=True)
+
+                    def _fr_sig(s):
+                        mix = ((s.get('metrics') or {}).get('band_mix')) or []
+                        rt = s.get('rent_totals') or {}
+                        if not mix or rt.get('net_monthly') is None:
+                            return None
+                        try:
+                            return (tuple(sorted((int(m.get('band')), int(m.get('units') or 0)) for m in mix)),
+                                    round(float(rt.get('net_monthly')), 2))
+                        except (TypeError, ValueError):
+                            return None
+
+                    # Denominator + the tightest 40% share already offered at the
+                    # minimum count. We only generate options STRICTLY tighter
+                    # than that — genuinely smaller footprints below the
+                    # recommended — so we never mislabel a looser/higher-rent
+                    # layout as "tighter."
+                    if fr_rules.get('residential_sf'):
+                        fr_denom = float(fr_rules['residential_sf'])
+                    elif fr_rules.get('total_building_sf'):
+                        fr_denom = float(fr_rules['total_building_sf'])
+                    else:
+                        fr_denom = float(df_units['net_sf'].sum())
+
+                    def _fr_sf40(s):
+                        sf = 0.0
+                        for u in ((s or {}).get('assignments') or []):
+                            try:
+                                a = float(u.get('assigned_ami') or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if a > 2:
+                                a /= 100.0
+                            if 0 < a <= 0.4000001:
+                                sf += float(u.get('net_sf') or 0)
+                        return sf
+
+                    fr_min_scens = [s for k, s in scenarios.items()
+                                    if s and k != 'original' and _fr_n40(s) == k_star_fr]
+                    if fr_min_scens and fr_denom > 0:
+                        upper_share = min(_fr_sf40(s) / fr_denom for s in fr_min_scens)
+                    else:
+                        upper_share = fr_min + 0.005
+
+                    taken_fr, taken_fr_canon = set(), set()
+                    for s in scenarios.values():
+                        if not s:
+                            continue
+                        sig = _fr_sig(s)
+                        if sig:
+                            taken_fr.add(sig)
+                        ck = s.get('canonical_assignments')
+                        if ck:
+                            taken_fr_canon.add(tuple(tuple(p) for p in ck))
+
+                    # Step the share ceiling finely from just above the floor up
+                    # to (but not reaching) the tightest already-offered option,
+                    # collecting every distinct rent-max layout in that band.
+                    added_fr = 0
+                    ceil = fr_min + 0.0005
+                    while ceil < upper_share - 1e-6 and added_fr < 6:
+                        cand = _fr_solve(ceil)
+                        ceil = round(ceil + 0.001, 5)
+                        if not cand or cand.get('status') != 'OPTIMAL':
+                            continue
+                        a, t = compute_rents_for_assignments(rent_schedule, cand['assignments'], utilities_clean)
+                        cand['assignments'] = a
+                        cand['rent_totals'] = t
+                        tsf = sum(float(u.get('net_sf', 0) or 0) for u in a)
+                        if tsf <= 0:
+                            continue
+                        w = sum(float(u.get('net_sf', 0) or 0) * float(u.get('assigned_ami', 0) or 0) for u in a) / tsf
+                        # 1e-9 tolerance: a layout sitting exactly at the 60.00%
+                        # cap recomputes to 60.0000000000001% in float — pure
+                        # representation noise, not a real violation. Without
+                        # this the absolute-tightest option (which often lands
+                        # right at the cap) gets falsely dropped.
+                        if w > fr_cap + 1e-9:
+                            continue
+                        # Only keep layouts genuinely tighter than the tightest
+                        # already-offered min-count option.
+                        if _fr_sf40(cand) / fr_denom >= upper_share - 1e-9:
+                            continue
+                        sig = _fr_sig(cand)
+                        ck = tuple(tuple(p) for p in (cand.get('canonical_assignments') or []))
+                        if not sig or sig in taken_fr or ck in taken_fr_canon:
+                            continue
+                        taken_fr.add(sig)
+                        taken_fr_canon.add(ck)
+                        cand['tier'] = 'tight_footprint'
+                        scenarios[f'tight_40_footprint_{added_fr + 1}'] = cand
+                        added_fr += 1
+                    if added_fr:
+                        notes.append(f"Min-count 40% frontier: added {added_fr} tighter-footprint option(s) at {k_star_fr} units.")
+        except Exception as e:
+            notes.append(f"Warning: min-count 40% frontier failed: {str(e)}")
+
         # --- Fix-02: De-dupe outcome-identical scenarios (post-processing) ---
         # Only remove scenarios when they are truly identical in outputs (band mix + rent totals),
         # then keep the best "placement" (40% units lower floors; higher AMI/higher rent higher floors).
@@ -1959,7 +2123,12 @@ def optimize_units():
                 if _tsf <= 0:
                     continue
                 _w = sum(float(_u.get('net_sf', 0) or 0) * float(_u.get('assigned_ami', 0) or 0) for _u in _a) / _tsf
-                if _w > cap_fraction_final:
+                # 1e-9 tolerance absorbs float representation noise for layouts
+                # exactly at the 60.00% cap (the solver guarantees <= cap in
+                # exact integer math; only the float recompute drifts by ~1e-16).
+                # This is NOT a real-violation allowance: 0.0000001% << any
+                # share the client cares about.
+                if _w > cap_fraction_final + 1e-9:
                     dropped_for_cap.append((_sk, _w))
                     del scenarios[_sk]
             for _k, _w in dropped_for_cap:
@@ -2038,6 +2207,70 @@ def optimize_units():
         except Exception as _e:
             notes.append(f"Note: could not build Original Scenario: {_e}")
 
+        # --- RECOMMENDED option (client direction 2026-06-12) ---
+        # Among the minimum-40%-unit-count scenarios, the RECOMMENDED is the
+        # one that hugs the 10% floor most tightly while STILL earning
+        # essentially the best income at that unit count ("closest to 10% with
+        # the best available," Rachel's way). Tighter layouts that give up real
+        # income are shown but demoted + marked. Computed here so the strategy
+        # lines below can state each option's rent gap vs the recommended, and
+        # exposed as response['recommended_key'] for the Excel ordering/label.
+        recommended_key = None
+        recommended_income = None
+        try:
+            # MIH-only (see frontier note above). UAP keeps no recommended flag.
+            if program_norm == 'MIH' and scenarios:
+                def _rk_n40(s):
+                    n = 0
+                    for u in ((s or {}).get('assignments') or []):
+                        try:
+                            a = float(u.get('assigned_ami') or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if a > 2:
+                            a /= 100.0
+                        if 0 < a <= 0.4000001:
+                            n += 1
+                    return n
+
+                def _rk_sf40(s):
+                    sf = 0.0
+                    for u in ((s or {}).get('assignments') or []):
+                        try:
+                            a = float(u.get('assigned_ami') or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if a > 2:
+                            a /= 100.0
+                        if 0 < a <= 0.4000001:
+                            sf += float(u.get('net_sf') or 0)
+                    return sf
+
+                def _rk_income(s):
+                    rt = (s or {}).get('rent_totals') or {}
+                    v = rt.get('net_monthly')
+                    try:
+                        return float(v) if v is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                rk_cands = [(k, s) for k, s in scenarios.items()
+                            if s and k != 'original' and _rk_n40(s) > 0 and _rk_income(s) is not None]
+                if rk_cands:
+                    rk_min_count = min(_rk_n40(s) for _, s in rk_cands)
+                    rk_min = [(k, s) for k, s in rk_cands if _rk_n40(s) == rk_min_count]
+                    rk_max_income = max(_rk_income(s) for _, s in rk_min)
+                    # "Essentially top income" tolerance: a tighter option that
+                    # earns within this of the best is preferred (the knee of
+                    # the curve). Small + relative so it scales with building.
+                    rk_tol = max(25.0, 0.0012 * rk_max_income)
+                    rk_top = [(k, s) for k, s in rk_min if _rk_income(s) >= rk_max_income - rk_tol]
+                    # Among top-income min-count options, the tightest footprint.
+                    recommended_key, rec_s = min(rk_top, key=lambda kv: _rk_sf40(kv[1]))
+                    recommended_income = _rk_income(rec_s)
+        except Exception as _e:
+            notes.append(f"Note: recommended-key computation failed: {_e}")
+
         # --- Scenario strategy lines (client request 2026-06-11) ---
         # Every scenario carries a one-line, COMPUTED explanation of why it
         # looks the way it does (apartments at 40%, unit-size strategy, rent
@@ -2105,6 +2338,20 @@ def optimize_units():
                         return " Same rent as FEWEST 40 UNITS."
                     return f" {'+' if d > 0 else '-'}${abs(d):,.0f}/mo vs FEWEST 40 UNITS."
 
+                def _delta_vs_rec(s):
+                    # Rent gap vs the RECOMMENDED option (the headline). Used to
+                    # mark the tighter-footprint options so the cost of going
+                    # tighter is explicit.
+                    if recommended_income is None:
+                        return ""
+                    nm = ((s or {}).get('rent_totals') or {}).get('net_monthly')
+                    if nm is None:
+                        return ""
+                    d = float(nm) - float(recommended_income)
+                    if abs(d) < 0.5:
+                        return " Same rent as the recommended option."
+                    return f" {'+' if d > 0 else '-'}${abs(d):,.0f}/mo vs the recommended option."
+
                 for _sk, _sv in list(scenarios.items()):
                     if not _sv or _sk == 'original':
                         continue
@@ -2159,16 +2406,27 @@ def optimize_units():
                             f"({float(_sv.get('waami') or 0) * 100:.3f}%); {n40} apartments at 40%."
                             f"{_delta_txt_why(_sv)}"
                         )
+                    elif str(_sk).startswith('tight_40_footprint'):
+                        desc = (
+                            f"Tighter 40% footprint{share_txt}: {n40} apartments, "
+                            f"the smallest 40% allocation available."
+                            f"{_delta_vs_rec(_sv)} Shown for comparison; not the recommended option."
+                        )
                     else:
                         desc = (
                             f"{n40} apartments at 40%{share_txt}, bands {bands_txt}."
                             f"{_delta_txt_why(_sv)}"
                         )
 
+                    # The RECOMMENDED option (least units, tightest footprint at
+                    # top income) leads with a clear label.
+                    if recommended_key is not None and _sk == recommended_key:
+                        desc = "RECOMMENDED - fewest units at 40%, tightest footprint at the best income. " + desc
+
                     _sv['description'] = desc
                     # The Why line replaces the old description-in-tradeoffs
                     # hack for the 40-family keys; real edge tradeoffs stay.
-                    if str(_sk).startswith(('fewest_40_units', 'low_40_share', 'mid_40_share')):
+                    if str(_sk).startswith(('fewest_40_units', 'low_40_share', 'mid_40_share', 'tight_40_footprint')):
                         _sv['tradeoffs'] = []
         except Exception as _e:
             notes.append(f"Note: scenario strategy lines failed: {_e}")
@@ -2210,6 +2468,10 @@ def optimize_units():
             "rent_roll_year_used": rent_meta.get("rent_roll_year_used"),
             "rent_calculator_filename": rent_meta.get("calculator_filename"),
             "rent_schedule_source": rent_meta.get("rent_schedule_source"),
+            # Which scenario the Excel side should headline + show in the
+            # manual block: least units at 40%, tightest footprint at top
+            # income. Tighter-footprint options are demoted below it.
+            "recommended_key": recommended_key,
         }
 
         if learning_info:

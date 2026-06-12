@@ -24,6 +24,9 @@ Public g_MihLow40MaxShare As Double
 ' the ">" marker in the scenario overview table. Set when results are first
 ' written and whenever the user applies a scenario via the picker.
 Public g_AMIOptixCurrentScenarioKey As String
+' Server-chosen RECOMMENDED scenario key (least units at 40%, tightest
+' footprint at the best income). Leads the FEWEST group and the manual block.
+Public g_AMIOptixRecommendedKey As String
 
 '-------------------------------------------------------------------------------
 ' LOCAL RENT CALC CACHE (Fix-06)
@@ -282,6 +285,17 @@ Public Sub CreateScenariosSheet(result As Object)
     If Not result.Exists("scenarios") Then GoTo ErrorHandler
     Set scenarios = result("scenarios")
 
+    ' Server-chosen recommended scenario (least units, tightest footprint at
+    ' best income). Drives FEWEST ordering, the manual block, and the label.
+    g_AMIOptixRecommendedKey = ""
+    On Error Resume Next
+    If result.Exists("recommended_key") Then
+        If Not IsEmpty(result("recommended_key")) And Not IsNull(result("recommended_key")) Then
+            g_AMIOptixRecommendedKey = Trim$(CStr(result("recommended_key")))
+        End If
+    End If
+    On Error GoTo ErrorHandler
+
     ' Extract total building SF for MIH share-of-building display
     g_MihTotalBuildingSf = 0#
     g_MihLow40MinShare = 0#
@@ -533,10 +547,12 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
         grpOf(ks) = g
     Next ck
 
-    ' FEWEST group (0) is ordered TIGHTEST-HUG FIRST: ascending 40% share,
-    ' so Scenario 1 is the least-units option that hugs the 10% floor most
-    ' tightly (client direction 2026-06-12). Build that subset and sort it;
-    ' equal/unknown shares keep their original order (stable insertion sort).
+    ' FEWEST group ordering (client direction 2026-06-12):
+    '  1. the RECOMMENDED option leads (least units, tightest footprint at the
+    '     best income — the server picks it),
+    '  2. then the rest by INCOME (net monthly rent) DESCENDING, so the
+    '     tighter-but-lower-rent "tight footprint" options sink to the bottom
+    '     and are clearly demoted below the rent-strong choices.
     Dim fewestArr() As String
     Dim fewestN As Long
     fewestN = 0
@@ -548,20 +564,41 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
         End If
     Next ck
     If fewestN > 1 Then
+        ' Sort by income descending (stable insertion sort).
         Dim ii As Long, jj As Long
         For ii = 1 To fewestN - 1
             Dim cur As String
             cur = fewestArr(ii)
-            Dim curShare As Double
-            curShare = ScenarioFortyShare(scenarios(cur))
+            Dim curInc As Double
+            curInc = ScenarioNetMonthly(scenarios(cur))
             jj = ii - 1
             Do While jj >= 0
-                If ScenarioFortyShare(scenarios(fewestArr(jj))) <= curShare Then Exit Do
+                If ScenarioNetMonthly(scenarios(fewestArr(jj))) >= curInc Then Exit Do
                 fewestArr(jj + 1) = fewestArr(jj)
                 jj = jj - 1
             Loop
             fewestArr(jj + 1) = cur
         Next ii
+    End If
+    ' Move the RECOMMENDED option to the front, if present in this group.
+    If Trim$(g_AMIOptixRecommendedKey) <> "" And fewestN > 0 Then
+        Dim rIdx As Long
+        rIdx = -1
+        Dim si As Long
+        For si = 0 To fewestN - 1
+            If fewestArr(si) = g_AMIOptixRecommendedKey Then
+                rIdx = si
+                Exit For
+            End If
+        Next si
+        If rIdx > 0 Then
+            Dim recKeyTmp As String
+            recKeyTmp = fewestArr(rIdx)
+            For si = rIdx To 1 Step -1
+                fewestArr(si) = fewestArr(si - 1)
+            Next si
+            fewestArr(0) = recKeyTmp
+        End If
     End If
 
     Dim grp As Long
@@ -638,6 +675,26 @@ Private Function ScenarioFortyUnitCount(scenario As Object) As Long
     Exit Function
 Fail:
     ScenarioFortyUnitCount = -1
+End Function
+
+Private Function ScenarioNetMonthly(scenario As Object) As Double
+    ' Net monthly rent for one scenario (income), -1 when unavailable.
+    ScenarioNetMonthly = -1#
+    On Error GoTo Fail
+    If scenario Is Nothing Then Exit Function
+    If Not scenario.Exists("rent_totals") Then Exit Function
+    Dim rt As Object
+    Set rt = Nothing
+    On Error Resume Next
+    Set rt = scenario("rent_totals")
+    On Error GoTo Fail
+    If rt Is Nothing Then Exit Function
+    If rt.Exists("net_monthly") Then
+        If IsNumeric(rt("net_monthly")) Then ScenarioNetMonthly = CDbl(rt("net_monthly"))
+    End If
+    Exit Function
+Fail:
+    ScenarioNetMonthly = -1#
 End Function
 
 Private Function ScenarioFortyShare(scenario As Object) As Double
@@ -752,7 +809,13 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
             ws.Cells(row, 1).Value = i
         End If
         ws.Cells(row, 1).HorizontalAlignment = xlRight
-        ws.Cells(row, 2).Value = FormatScenarioName(keyStr)
+        Dim nameTxt As String
+        nameTxt = FormatScenarioName(keyStr)
+        If Trim$(g_AMIOptixRecommendedKey) <> "" And keyStr = g_AMIOptixRecommendedKey Then
+            nameTxt = nameTxt & "  (RECOMMENDED)"
+            ws.Cells(row, 2).Font.Bold = True
+        End If
+        ws.Cells(row, 2).Value = nameTxt
 
         ' Bands (reuse the title-suffix helper, strip its " - " prefix)
         Dim bandsTxt As String
@@ -3287,12 +3350,20 @@ Private Function GetBestScenarioKey(result As Object) As String
     Set scenarios = result("scenarios")
 
     ' The working copy must always equal SCENARIO 1 on the sheet. Both come
-    ' from the SAME grouped order (FEWEST group first, tightest-hug first), so
-    ' the manual block can never disagree with the first numbered scenario.
+    ' from the SAME grouped order (RECOMMENDED leads the FEWEST group), so the
+    ' manual block can never disagree with the first numbered scenario.
     ' Client direction 2026-06-12: this was showing ABSOLUTE BEST (more units,
-    ' higher 40% share) instead of the least-units option - the exact concept
-    ' Rachel flagged.
+    ' higher 40% share) instead of the recommended least-units option.
     On Error GoTo Fallback
+
+    ' Prefer the server's RECOMMENDED key when present and valid.
+    If Trim$(g_AMIOptixRecommendedKey) <> "" Then
+        If scenarios.Exists(g_AMIOptixRecommendedKey) Then
+            GetBestScenarioKey = g_AMIOptixRecommendedKey
+            Exit Function
+        End If
+    End If
+
     Dim groupLabels As Collection
     Dim ordered As Collection
     Set ordered = BuildGroupedScenarioOrder(scenarios, groupLabels)
