@@ -2259,14 +2259,16 @@ def optimize_units():
                 if rk_cands:
                     rk_min_count = min(_rk_n40(s) for _, s in rk_cands)
                     rk_min = [(k, s) for k, s in rk_cands if _rk_n40(s) == rk_min_count]
-                    rk_max_income = max(_rk_income(s) for _, s in rk_min)
-                    # "Essentially top income" tolerance: a tighter option that
-                    # earns within this of the best is preferred (the knee of
-                    # the curve). Small + relative so it scales with building.
-                    rk_tol = max(25.0, 0.0012 * rk_max_income)
-                    rk_top = [(k, s) for k, s in rk_min if _rk_income(s) >= rk_max_income - rk_tol]
-                    # Among top-income min-count options, the tightest footprint.
-                    recommended_key, rec_s = min(rk_top, key=lambda kv: _rk_sf40(kv[1]))
+                    # RECOMMENDED = fewest apartments at 40%, then MAXIMUM rent
+                    # (client direction 2026-06-14: "least units at 40% while
+                    # maximizing rent"). Tie-break: among equal-rent layouts,
+                    # the tighter 40% footprint (don't give away more 40% SF
+                    # than the top rent requires). The even-tighter, lower-rent
+                    # layouts still appear as additional options below.
+                    recommended_key, rec_s = max(
+                        rk_min,
+                        key=lambda kv: (round(_rk_income(kv[1]), 2), -_rk_sf40(kv[1]))
+                    )
                     recommended_income = _rk_income(rec_s)
         except Exception as _e:
             notes.append(f"Note: recommended-key computation failed: {_e}")
@@ -2421,7 +2423,7 @@ def optimize_units():
                     # The RECOMMENDED option (least units, tightest footprint at
                     # top income) leads with a clear label.
                     if recommended_key is not None and _sk == recommended_key:
-                        desc = "RECOMMENDED - fewest units at 40%, tightest footprint at the best income. " + desc
+                        desc = "RECOMMENDED - fewest apartments at 40%, maximum rent. " + desc
 
                     _sv['description'] = desc
                     # The Why line replaces the old description-in-tradeoffs
