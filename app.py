@@ -888,7 +888,7 @@ def optimize_units():
                     if int(_t.get('band_threshold', 0)) == 40:
                         _t['min_share'] = mih_walk_value
                         _t['max_share'] = round(mih_walk_value + mih_window_width, 5)
-                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
+                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
                 mih_walk_last = _trial
                 if (_trial.get('scenarios') or {}).get('absolute_best'):
                     mih_walk_results = _trial
@@ -909,7 +909,7 @@ def optimize_units():
             else:
                 solver_results = mih_walk_results
         else:
-            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
+            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
         notes.extend(rent_resolution_notes)
@@ -942,7 +942,7 @@ def optimize_units():
                         relaxed_rules['deep_affordability_max_share'] = float(candidate)
                         relaxed_config['optimization_rules'] = relaxed_rules
 
-                        relaxed_results = find_optimal_scenarios(df_units, relaxed_config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents)
+                        relaxed_results = find_optimal_scenarios(df_units, relaxed_config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
                         relaxed_scenarios = relaxed_results.get('scenarios', {}) or {}
                         if relaxed_scenarios.get('absolute_best'):
                             notes.append(
