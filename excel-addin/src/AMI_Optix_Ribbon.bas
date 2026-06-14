@@ -1601,50 +1601,56 @@ Private Sub ShowScenarioList()
 End Sub
 
 Private Function FormatScenarioNameForPicker(key As String) As String
-    Select Case key
+    ' Client-facing names for the View Scenario picker. Mirrors the sheet's
+    ' FormatScenarioName labels so the picker and the sheet agree, in Title
+    ' Case for the list dialog.
+    Dim k As String
+    k = LCase$(Trim$(key))
+
+    If Left$(k, Len("fewest_40_units")) = "fewest_40_units" Then
+        FormatScenarioNameForPicker = "Fewest 40% Units"
+        Exit Function
+    End If
+    If Left$(k, Len("tight_40_footprint")) = "tight_40_footprint" Then
+        FormatScenarioNameForPicker = "Tighter 40% Footprint"
+        Exit Function
+    End If
+    If Left$(k, Len("edge_waami_floor")) = "edge_waami_floor" Then
+        FormatScenarioNameForPicker = "Higher Rent (More 40% Units)"
+        Exit Function
+    End If
+    If Left$(k, Len("edge_min_share")) = "edge_min_share" Or Left$(k, Len("edge_max_share")) = "edge_max_share" Then
+        FormatScenarioNameForPicker = "Higher Rent (Relaxed Share)"
+        Exit Function
+    End If
+
+    Select Case k
+        Case "low_40_share"
+            FormatScenarioNameForPicker = "Low 40% Share"
+        Case "mid_40_share"
+            FormatScenarioNameForPicker = "Mid-Range 40%"
+        Case "max_40_share"
+            FormatScenarioNameForPicker = "Max 40% Share"
         Case "absolute_best"
-            FormatScenarioNameForPicker = "Absolute Best"
+            FormatScenarioNameForPicker = "Maximum Rent"
         Case "best_rent_roll"
             FormatScenarioNameForPicker = "Best Rent Roll"
         Case "max_revenue"
-            FormatScenarioNameForPicker = "Max Revenue (Rent-Max)"
+            FormatScenarioNameForPicker = "Maximum Rent"
         Case "best_3_band"
-            FormatScenarioNameForPicker = "Best 3-Band"
+            FormatScenarioNameForPicker = "Three-Band Mix"
         Case "best_2_band"
-            FormatScenarioNameForPicker = "Best 2-Band"
+            FormatScenarioNameForPicker = "Two-Band Mix"
+        Case "closest_to_60"
+            FormatScenarioNameForPicker = "Closest to 60% Cap"
         Case "alternative"
-            FormatScenarioNameForPicker = "Alternative"
+            FormatScenarioNameForPicker = "Alternative Mix"
         Case "client_oriented"
-            ' Suffix "(Max Revenue)" removed 2026-04 because client_oriented
-            ' is not necessarily the highest-revenue scenario when a
-            ' best_rent_roll exists.
             FormatScenarioNameForPicker = "Client Oriented"
+        Case "original"
+            FormatScenarioNameForPicker = "Your Original Input"
         Case Else
-            If Left$(key, 15) = "edge_max_share_" Then
-                FormatScenarioNameForPicker = "Edge: 40% Max Share " & Mid$(key, 16) & "%"
-            ElseIf Left$(key, 15) = "edge_min_share_" Then
-                Dim v As Long
-                On Error Resume Next
-                v = CLng(Mid$(key, 16))
-                On Error GoTo 0
-                If v > 0 Then
-                    FormatScenarioNameForPicker = "Edge: 40% Min Share " & Format$(v / 10#, "0.0") & "%"
-                Else
-                    FormatScenarioNameForPicker = Replace(key, "_", " ")
-                End If
-            ElseIf Left$(key, 17) = "edge_waami_floor_" Then
-                Dim w As Long
-                On Error Resume Next
-                w = CLng(Mid$(key, 18))
-                On Error GoTo 0
-                If w > 0 Then
-                    FormatScenarioNameForPicker = "Edge: WAAMI Floor " & Format$(w / 10#, "0.0") & "%"
-                Else
-                    FormatScenarioNameForPicker = Replace(key, "_", " ")
-                End If
-            Else
-                FormatScenarioNameForPicker = Replace(key, "_", " ")
-            End If
+            FormatScenarioNameForPicker = Replace(key, "_", " ")
     End Select
 End Function
 

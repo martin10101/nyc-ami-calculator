@@ -3827,23 +3827,53 @@ Cleanup:
 End Function
 
 Private Function FormatScenarioName(key As String) As String
-    ' Formats scenario key into readable name
-    Select Case key
+    ' Client-facing scenario names (display only). Internal solver keys are
+    ' mapped to plain labels so the sheet reads like a person's option list,
+    ' never raw keys like "edge_waami_floor_590".
+    Dim k As String
+    k = LCase$(Trim$(key))
+
+    ' Dynamic-suffix families first.
+    If Left$(k, Len("fewest_40_units")) = "fewest_40_units" Then
+        FormatScenarioName = "FEWEST 40% UNITS"
+        Exit Function
+    End If
+    If Left$(k, Len("tight_40_footprint")) = "tight_40_footprint" Then
+        FormatScenarioName = "TIGHTER 40% FOOTPRINT"
+        Exit Function
+    End If
+    If Left$(k, Len("edge_waami_floor")) = "edge_waami_floor" Then
+        FormatScenarioName = "HIGHER RENT (MORE 40% UNITS)"
+        Exit Function
+    End If
+    If Left$(k, Len("edge_min_share")) = "edge_min_share" Or Left$(k, Len("edge_max_share")) = "edge_max_share" Then
+        FormatScenarioName = "HIGHER RENT (RELAXED SHARE)"
+        Exit Function
+    End If
+
+    Select Case k
+        Case "low_40_share"
+            FormatScenarioName = "LOW 40% SHARE"
+        Case "mid_40_share"
+            FormatScenarioName = "MID-RANGE 40%"
+        Case "max_40_share"
+            FormatScenarioName = "MAX 40% SHARE"
         Case "absolute_best"
-            FormatScenarioName = "ABSOLUTE BEST"
+            FormatScenarioName = "MAXIMUM RENT"
         Case "best_rent_roll"
             FormatScenarioName = "BEST RENT ROLL"
         Case "best_3_band"
-            FormatScenarioName = "BEST 3-BAND"
+            FormatScenarioName = "THREE-BAND MIX"
         Case "best_2_band"
-            FormatScenarioName = "BEST 2-BAND"
+            FormatScenarioName = "TWO-BAND MIX"
+        Case "closest_to_60"
+            FormatScenarioName = "CLOSEST TO 60% CAP"
         Case "alternative"
-            FormatScenarioName = "ALTERNATIVE"
+            FormatScenarioName = "ALTERNATIVE MIX"
         Case "client_oriented"
-            ' Note: not actually max revenue when there are higher-revenue
-            ' scenarios such as best_rent_roll; suffix removed 2026-04 to
-            ' avoid the misleading label.
             FormatScenarioName = "CLIENT ORIENTED"
+        Case "original"
+            FormatScenarioName = "YOUR ORIGINAL INPUT"
         Case Else
             FormatScenarioName = UCase(Replace(key, "_", " "))
     End Select
