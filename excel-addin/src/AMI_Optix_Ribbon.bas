@@ -803,7 +803,10 @@ Public Sub Ribbon_SelectRentRollYear(control As IRibbonControl, id As String, in
     On Error Resume Next
     If HasAPIKey() Then
         If HasExistingSolverScenarios() Then
-            Call ManualCalculateScenario(DetectProgramFromWorkbook())
+            ' preserveAppliedScenario:=True keeps the scenario currently pinned
+            ' to the manual block (recommended/applied) and only re-prices it at
+            ' the new year — a year change must not revert it to the raw input.
+            Call ManualCalculateScenario(DetectProgramFromWorkbook(), True)
         End If
     End If
     On Error GoTo 0

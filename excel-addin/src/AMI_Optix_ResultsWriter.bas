@@ -1320,9 +1320,13 @@ Fail:
     If Not prevSheet Is Nothing Then prevSheet.Activate
 End Sub
 
-Public Function ManualCalculateScenario(Optional programOverride As String = "") As Boolean
+Public Function ManualCalculateScenario(Optional programOverride As String = "", Optional preserveAppliedScenario As Boolean = False) As Boolean
     ' Computes the Scenario Manual results from the current sheet inputs without enforcing constraints.
     ' Uses /api/manual_calculate so we can show tradeoffs instead of reverting edits.
+    ' preserveAppliedScenario=True (year-dropdown path): re-price the scenario
+    ' currently shown in the manual block instead of re-reading the raw input
+    ' sheet, so a year change keeps the applied/recommended bands and only the
+    ' rents move. The "Manual Calculate" button leaves this False on purpose.
     On Error GoTo ErrorHandler
 
     ManualCalculateScenario = False
@@ -1371,10 +1375,22 @@ Public Function ManualCalculateScenario(Optional programOverride As String = "")
     On Error GoTo ErrorHandler
     If dataWs Is Nothing Then Exit Function
 
-    dataWs.Activate
     Dim units As Collection
-    Set units = ReadUnitData()
-    prevSheet.Activate
+    Set units = Nothing
+
+    ' Year-dropdown path: keep the scenario currently pinned to the manual
+    ' block by re-pricing its own displayed assignments, exactly as the solver
+    ' blocks are re-priced. Falls through to the raw input read if the manual
+    ' block can't be read (e.g. not yet built).
+    If preserveAppliedScenario Then
+        Set units = ReadUnitsFromManualBlock(GetOrCreateScenariosSheet())
+    End If
+
+    If units Is Nothing Then
+        dataWs.Activate
+        Set units = ReadUnitData()
+        prevSheet.Activate
+    End If
 
     If units Is Nothing Or units.Count = 0 Then
         MsgBox "Could not read units from the workbook." & vbCrLf & vbCrLf & _
@@ -1437,6 +1453,78 @@ ErrorHandler:
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     ManualCalculateScenario = False
+End Function
+
+Private Function ReadUnitsFromManualBlock(ws As Worksheet) As Collection
+    ' Reads the unit list + currently-displayed AMI bands straight from the
+    ' manual block's own table (the first "Unit / AMI / Gross Rent" table on the
+    ' sheet, which sits above the first numbered "SCENARIO N:" solver header).
+    ' Column mapping mirrors RecalculateSolverScenarioRents exactly:
+    '   col 1 = Unit, col 2 = Bedrooms, col 3 = Net SF, col 5 = AMI.
+    ' Returns Nothing if no readable manual table is found, so callers can fall
+    ' back to reading the raw input sheet.
+    On Error GoTo Fail
+    Set ReadUnitsFromManualBlock = Nothing
+    If ws Is Nothing Then Exit Function
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then Exit Function
+
+    Dim r As Long
+    Dim headerRow As Long
+    Dim cellA As String
+    headerRow = 0
+    For r = 1 To lastRow
+        cellA = Trim$(CStr(ws.Cells(r, 1).Value))
+        ' Stop at the solver section — the manual table must come before it.
+        If Left$(cellA, 9) = "SCENARIO " And InStr(1, cellA, "MANUAL", vbTextCompare) = 0 Then Exit For
+        If cellA = "Unit" And Trim$(CStr(ws.Cells(r, 5).Value)) = "AMI" _
+           And Trim$(CStr(ws.Cells(r, 6).Value)) = "Gross Rent" Then
+            headerRow = r
+            Exit For
+        End If
+    Next r
+    If headerRow = 0 Then Exit Function
+
+    Dim result As Collection
+    Set result = New Collection
+
+    Dim dataRow As Long
+    dataRow = headerRow + 1
+    Do While dataRow <= lastRow
+        Dim unitVal As Variant
+        unitVal = ws.Cells(dataRow, 1).Value
+        If IsEmpty(unitVal) Or Trim$(CStr(unitVal)) = "" Then Exit Do
+
+        Dim unit As Object
+        Set unit = CreateObject("Scripting.Dictionary")
+        unit("unit_id") = CStr(unitVal)
+
+        Dim bedroomsVal As Variant
+        bedroomsVal = ws.Cells(dataRow, 2).Value
+        If IsNumeric(bedroomsVal) Then unit("bedrooms") = CDbl(bedroomsVal) Else unit("bedrooms") = 0
+
+        Dim sfVal As Variant
+        sfVal = ws.Cells(dataRow, 3).Value
+        If IsNumeric(sfVal) Then unit("net_sf") = CDbl(sfVal) Else unit("net_sf") = 0
+
+        Dim amiVal As Double
+        Dim rawAmi As Variant
+        amiVal = 0#
+        rawAmi = ws.Cells(dataRow, 5).Value
+        If IsNumeric(rawAmi) Then amiVal = CDbl(rawAmi)
+        unit("client_ami") = amiVal
+
+        result.Add unit
+        dataRow = dataRow + 1
+    Loop
+
+    If result.Count > 0 Then Set ReadUnitsFromManualBlock = result
+    Exit Function
+
+Fail:
+    Set ReadUnitsFromManualBlock = Nothing
 End Function
 
 Public Function RefreshManualWorkingCopyLocalRents(Optional programOverride As String = "", Optional headerLabel As String = "SCENARIO MANUAL (WORKING COPY)") As Boolean
