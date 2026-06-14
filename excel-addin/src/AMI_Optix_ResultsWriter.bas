@@ -3133,8 +3133,33 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
     Dim maxA As Long
     Dim a As Long
 
+    ' Fresh net-monthly rent per scenario number, harvested as we refresh each
+    ' detail block, then pushed into the SCENARIO OVERVIEW table at the end so
+    ' the at-a-glance summary tracks year/recalc changes like everything else.
+    Dim freshRentByNum As Object
+    Set freshRentByNum = CreateObject("Scripting.Dictionary")
+    Dim scenNum As Long
+    Dim hdrScan As Long
+    Dim hdrTxt As String
+    Dim numTok As String
+    Dim colonPos As Long
+
     For tIdx = 1 To tableHeaderRows.Count
         headerRow = tableHeaderRows(tIdx)
+
+        ' This table's scenario number (matches the overview "#" column and the
+        ' "SCENARIO N:" header that sits just above the unit table).
+        scenNum = -1
+        For hdrScan = headerRow - 1 To Application.Max(1, headerRow - 25) Step -1
+            hdrTxt = Trim$(CStr(ws.Cells(hdrScan, 1).Value))
+            If Left$(hdrTxt, 9) = "SCENARIO " And InStr(1, hdrTxt, "MANUAL", vbTextCompare) = 0 Then
+                numTok = Trim$(Mid$(hdrTxt, 10))
+                colonPos = InStr(numTok, ":")
+                If colonPos > 0 Then numTok = Trim$(Left$(numTok, colonPos - 1))
+                If IsNumeric(numTok) Then scenNum = CLng(numTok)
+                Exit For
+            End If
+        Next hdrScan
 
         Application.StatusBar = "Recalculating rents for scenario " & tIdx & " of " & tableHeaderRows.Count & "..."
 
@@ -3257,6 +3282,7 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
                         If rentTotals.Exists("net_monthly") Then
                             ws.Cells(scanRow, 2).Value = CDbl(rentTotals("net_monthly"))
                             ws.Cells(scanRow, 2).NumberFormat = "$#,##0"
+                            If scenNum > 0 Then freshRentByNum(scenNum) = CDbl(rentTotals("net_monthly"))
                         End If
                     ElseIf scanVal = "Total Annual Rent:" Then
                         If rentTotals.Exists("net_annual") Then
@@ -3278,8 +3304,59 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
 NextTable:
     Next tIdx
 
+    ' Push the refreshed rents into the SCENARIO OVERVIEW summary table(s).
+    ' The detail blocks above already reflect the new year; this keeps the
+    ' one-shot overview at the top in sync instead of stranded at the rent
+    ' from the year the sheet was first written.
+    UpdateOverviewRentColumn ws, freshRentByNum, lastRow
+
 Cleanup:
     Application.StatusBar = False
+End Sub
+
+Private Sub UpdateOverviewRentColumn(ws As Worksheet, freshRentByNum As Object, lastRow As Long)
+    ' Walks every SCENARIO OVERVIEW table on the sheet (identified by its
+    ' "Monthly Rent" header in column 5) and rewrites the Monthly Rent cell of
+    ' each scenario row from freshRentByNum, keyed by the row's "#" number.
+    On Error Resume Next
+    If freshRentByNum Is Nothing Then Exit Sub
+
+    Dim r As Long
+    Dim inOverview As Boolean
+    Dim c1 As String
+    Dim numTxt As String
+    Dim n As Long
+    inOverview = False
+
+    For r = 1 To lastRow
+        c1 = Trim$(CStr(ws.Cells(r, 1).Value))
+
+        ' Header row of an overview table: start tracking its scenario rows.
+        If Trim$(CStr(ws.Cells(r, 5).Value)) = "Monthly Rent" Then
+            inOverview = True
+            GoTo ContinueRow
+        End If
+
+        If inOverview Then
+            ' Leave the overview at its legend or at the first detail block.
+            If Left$(c1, 4) = "HOW " Or Left$(c1, 9) = "SCENARIO " Then
+                inOverview = False
+                GoTo ContinueRow
+            End If
+
+            ' Scenario row: col1 is the number, optionally prefixed "> ".
+            numTxt = c1
+            If Left$(numTxt, 2) = "> " Then numTxt = Trim$(Mid$(numTxt, 3))
+            If IsNumeric(numTxt) Then
+                n = CLng(numTxt)
+                If freshRentByNum.Exists(n) Then
+                    ws.Cells(r, 5).Value = CDbl(freshRentByNum(n))
+                    ws.Cells(r, 5).NumberFormat = "$#,##0"
+                End If
+            End If
+        End If
+ContinueRow:
+    Next r
 End Sub
 
 '-------------------------------------------------------------------------------
