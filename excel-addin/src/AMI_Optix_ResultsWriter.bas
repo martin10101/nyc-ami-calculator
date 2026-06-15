@@ -545,8 +545,12 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
             g = 3
         ElseIf minFortyCount > 0 And cnt = minFortyCount Then
             g = 0
-        ElseIf LCase$(Left$(ks, Len("fewest_40_units"))) = "fewest_40_units" Then
-            g = 0   ' name-based safety net when counts are unknowable
+        ElseIf cnt <= 0 And LCase$(Left$(ks, Len("fewest_40_units"))) = "fewest_40_units" Then
+            ' Name-based safety net ONLY when the 40% unit count is unknowable (cnt <= 0).
+            ' A known count above the minimum must fall through to the share rule below,
+            ' so a "fewest_40_units_*" option that actually carries MORE units than the
+            ' minimum is not mislabeled into the FEWEST group (e.g. fewest_40_units_3 @ 4 units).
+            g = 0
         Else
             Dim sh As Double
             sh = ScenarioFortyShare(scenarios(ks))
