@@ -349,13 +349,23 @@ Fail:
 End Sub
 
 Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
-    ' Compute Scenario Manual from the current sheet inputs (even if non-compliant).
+    ' Recompute the Scenario Manual block in place, KEEPING the scenario already
+    ' shown there (recommended / applied / your edits) and only refreshing its
+    ' rents. It no longer rebuilds from the raw MIH input column, which was
+    ' swapping the displayed scenario out for a different (higher 40%) one.
+    ' MIH-column edits still flow into the block via Live Sync.
     On Error GoTo Fail
+
+    ' Cancel any debounced refresh armed by a recent edit so it can't fire ~2s
+    ' after this button and re-clear Excel's undo stack while the user works.
+    Call AMI_Optix_CancelDeferredRefresh
 
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
 
-    If Not ManualCalculateScenario(programNorm) Then
+    ' preserveAppliedScenario:=True -> re-price the manual block's own bands
+    ' (same proven path as the rent-roll-year change), not the raw input sheet.
+    If Not ManualCalculateScenario(programNorm, True) Then
         EnsureAMIOptixTabActive
         Exit Sub
     End If
