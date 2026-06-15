@@ -349,11 +349,11 @@ Fail:
 End Sub
 
 Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
-    ' Recompute the Scenario Manual block in place, KEEPING the scenario already
-    ' shown there (recommended / applied / your edits) and only refreshing its
-    ' rents. It no longer rebuilds from the raw MIH input column, which was
-    ' swapping the displayed scenario out for a different (higher 40%) one.
-    ' MIH-column edits still flow into the block via Live Sync.
+    ' Recompute the Scenario Manual block from the MIH AMI column so the two stay
+    ' in sync (Scenario Manual mirrors the MIH page). Reads the program sheet's
+    ' AMI values and rebuilds the block from them. After Run MIH both the MIH
+    ' page and the manual block already hold the recommended scenario (see
+    ' ApplyBestScenario), so this no longer swaps to a different layout.
     On Error GoTo Fail
 
     ' Cancel any debounced refresh armed by a recent edit so it can't fire ~2s
@@ -363,9 +363,10 @@ Public Sub Ribbon_ManualCalculate(control As IRibbonControl)
     Dim programNorm As String
     programNorm = DetectProgramFromWorkbook()
 
-    ' preserveAppliedScenario:=True -> re-price the manual block's own bands
-    ' (same proven path as the rent-roll-year change), not the raw input sheet.
-    If Not ManualCalculateScenario(programNorm, True) Then
+    ' preserve=False (default): read the MIH AMI column and refresh the manual
+    ' block from it, so user edits to the program sheet are reflected and the
+    ' two stay synchronized.
+    If Not ManualCalculateScenario(programNorm) Then
         EnsureAMIOptixTabActive
         Exit Sub
     End If

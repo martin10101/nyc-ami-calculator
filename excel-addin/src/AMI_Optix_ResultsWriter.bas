@@ -90,17 +90,35 @@ Public Sub ApplyBestScenario(result As Object)
 
     ' Find best scenario - use correct keys from solver
     Dim bestKey As String
+    bestKey = ""
 
-    ' Priority order for best scenario (matches solver output)
-    Dim priorities As Variant
-    priorities = Array("absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented")
-
-    For i = LBound(priorities) To UBound(priorities)
-        If scenarios.Exists(CStr(priorities(i))) Then
-            bestKey = CStr(priorities(i))
-            Exit For
+    ' Apply the SAME scenario the AMI Scenarios manual block shows: the server's
+    ' recommended_key. Previously this applied "absolute_best" (max rent, higher
+    ' 40% count) while the manual block shows the recommended (fewest-40), so the
+    ' MIH page and the manual block disagreed right after Run MIH. They must be
+    ' identical. (g_AMIOptixRecommendedKey isn't set until CreateScenariosSheet
+    ' runs later, so read recommended_key straight from the result here.)
+    If result.Exists("recommended_key") Then
+        If Not IsEmpty(result("recommended_key")) And Not IsNull(result("recommended_key")) Then
+            Dim recKey As String
+            recKey = Trim$(CStr(result("recommended_key")))
+            If recKey <> "" Then
+                If scenarios.Exists(recKey) Then bestKey = recKey
+            End If
         End If
-    Next i
+    End If
+
+    ' Fallback (e.g. UAP, or no recommended_key returned): legacy priority order.
+    If bestKey = "" Then
+        Dim priorities As Variant
+        priorities = Array("absolute_best", "best_3_band", "best_2_band", "alternative", "client_oriented")
+        For i = LBound(priorities) To UBound(priorities)
+            If scenarios.Exists(CStr(priorities(i))) Then
+                bestKey = CStr(priorities(i))
+                Exit For
+            End If
+        Next i
+    End If
 
     ' If no priority key found, take first available
     If bestKey = "" Then
