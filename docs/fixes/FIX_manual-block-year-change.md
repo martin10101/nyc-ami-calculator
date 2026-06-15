@@ -28,6 +28,40 @@ Net effect: a year change re-prices the applied/recommended bands (and any manua
 - Static checks: proc balance (ResultsWriter 16/16 Sub, 52/52 Function; Ribbon 41/41 Sub, 23/23 Function), single `Dim units` in the handler, no duplicate `Dim`s in the new helper, both preserve-path and fallback present, ribbon passes `True`.
 - Manual block uses the same `WriteScenarioSummaryAndTable` as solver blocks → identical table layout, so the read logic is the already-proven solver re-pricer mapping.
 
+## Follow-up (2026-06-14) — v1 didn't take; exact root cause found
+
+The first version still reverted on year change. Root cause: the new
+`ReadUnitsFromManualBlock` scan had an early-exit meant to stop at the solver
+section:
+
+```vb
+If Left$(cellA, 9) = "SCENARIO " And InStr(1, cellA, "MANUAL", vbTextCompare) = 0 Then Exit For
+```
+
+The **"SCENARIO OVERVIEW (N scenarios)"** summary header near the top of the
+sheet also starts with `"SCENARIO "` and contains no `"MANUAL"`, so the scan
+bailed out at ~row 4 — long before reaching the manual unit table (~row 53).
+The function returned `Nothing`, so `ManualCalculateScenario` fell through to
+`ReadUnitData()` (raw input) and the manual block reverted to original. The
+solver blocks were unaffected because `RecalculateSolverScenarioRents` uses a
+different scan; that's why Scenario 1 stayed correct while only the manual
+block reverted (and its header dropped from "CURRENT: ..." to plain
+"LIVE SYNC").
+
+Fix: stop only at the *real* solver-section start — the `GROUP:` banner or a
+**numbered** `SCENARIO 1/2/3...` header — never at `SCENARIO OVERVIEW` or
+`SCENARIO MANUAL`:
+
+```vb
+If Left$(cellA, 6) = "GROUP:" Then Exit For
+If cellA Like "SCENARIO #*" Then Exit For
+```
+
+Column layout confirmed correct (`AMI` is column 5, `Gross Rent` column 6 —
+[line ~3830](excel-addin/src/AMI_Optix_ResultsWriter.bas)), so this exit
+condition was the only defect. Scope unchanged: solver, Ctrl+Z/undo, manual
+editing, and the Manual Calculate button are all untouched.
+
 ## Deploy
 
 VBA-only → standard `.xlam` refresh (GitHub Refresh button or the from-GitHub PowerShell one-liner). No Render deploy.

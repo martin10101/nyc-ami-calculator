@@ -1477,8 +1477,13 @@ Private Function ReadUnitsFromManualBlock(ws As Worksheet) As Collection
     headerRow = 0
     For r = 1 To lastRow
         cellA = Trim$(CStr(ws.Cells(r, 1).Value))
-        ' Stop at the solver section — the manual table must come before it.
-        If Left$(cellA, 9) = "SCENARIO " And InStr(1, cellA, "MANUAL", vbTextCompare) = 0 Then Exit For
+        ' Stop only when the solver section begins: its "GROUP:" banner or a
+        ' NUMBERED "SCENARIO 1/2/3..." header. Do NOT stop at "SCENARIO
+        ' OVERVIEW" (the summary table) or "SCENARIO MANUAL" — both also start
+        ' with "SCENARIO ", and stopping at the overview was bailing out before
+        ' the manual table was ever reached (manual block reverted to input).
+        If Left$(cellA, 6) = "GROUP:" Then Exit For
+        If cellA Like "SCENARIO #*" Then Exit For
         If cellA = "Unit" And Trim$(CStr(ws.Cells(r, 5).Value)) = "AMI" _
            And Trim$(CStr(ws.Cells(r, 6).Value)) = "Gross Rent" Then
             headerRow = r
