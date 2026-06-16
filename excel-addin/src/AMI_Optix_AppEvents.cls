@@ -217,7 +217,25 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
     ' Only writes when actually needed (raw > 2) to preserve Excel's native
     ' undo stack for the common case where the user typed correctly.
-    Call NormalizeAmiInputCells(target)
+    '
+    ' CRITICAL: normalize ONLY cells in the AMI column. A multi-column paste
+    ' (e.g. pasting a whole unit schedule) delivers every changed cell here,
+    ' and normalizing the full range would divide-by-100 and stamp a "0%"
+    ' format onto FLOOR / BED / NET SF and any other numeric column, corrupting
+    ' them. Restrict to the AMI column so only AMI cells are ever touched.
+    Dim headerRow As Long
+    headerRow = FindHeaderRow(ws)
+    If headerRow > 0 Then
+        Dim amiCol As Long
+        amiCol = FindAMIColumn(ws, headerRow)
+        If amiCol > 0 Then
+            Dim amiData As Range
+            Set amiData = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(ws.Rows.Count, amiCol))
+            Dim amiTarget As Range
+            Set amiTarget = Intersect(target, amiData)
+            If Not amiTarget Is Nothing Then Call NormalizeAmiInputCells(amiTarget)
+        End If
+    End If
 
     ' DEFER the Manual Working Copy refresh by 2 seconds. Running the refresh
     ' immediately writes to other cells, which clears Excel's native Ctrl+Z
