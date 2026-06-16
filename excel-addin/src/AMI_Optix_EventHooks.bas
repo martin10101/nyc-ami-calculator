@@ -45,44 +45,46 @@ Public Sub SetLiveSyncEnabled(enabled As Boolean)
 End Sub
 
 Public Sub Auto_Open()
+    DebugLog "Auto_Open: enter (" & EventHookContext() & ")", True
     StartAMIOptixEventHooks
+    DebugLog "Auto_Open: exit", True
 End Sub
 
 Public Sub Auto_Close()
+    DebugLog "Auto_Close: enter (" & EventHookContext() & ")", True
     StopAMIOptixEventHooks
+    DebugLog "Auto_Close: exit", True
 End Sub
 
 Public Sub StartAMIOptixEventHooks()
     ' Self-heal: release any stale Ctrl+Z hijack left over from prior buggy
     ' add-in versions. Calling OnKey with no second argument resets the key
-    ' to Excel's default behavior. Idempotent and safe on fresh sessions —
-    ' must run BEFORE anything else so installs upgrading from the broken
-    ' version get their global Ctrl+Z back immediately.
-    On Error Resume Next
-    Application.OnKey "^z"
-    Application.OnKey "^+z"
-    On Error GoTo 0
+    ' to Excel's default behavior. Idempotent and safe on fresh sessions.
+    DebugLog "StartAMIOptixEventHooks: enter (" & EventHookContext() & ")", True
+    SafeResetCtrlZ "StartAMIOptixEventHooks"
 
     On Error Resume Next
     EnsureLiveSyncInitialized
     g_AMIOptixVisibilityWorkbookName = ""
     Set g_AMIOptixAppEvents = New AMI_Optix_AppEvents
     Set g_AMIOptixAppEvents.App = Application
+    If Err.Number <> 0 Then DebugLog "StartAMIOptixEventHooks: AppEvents wireup FAILED - " & Err.Number & ": " & Err.Description, True
     On Error GoTo 0
+    DebugLog "StartAMIOptixEventHooks: exit (hooked=" & (Not g_AMIOptixAppEvents Is Nothing) & ")", True
 End Sub
 
 Public Sub StopAMIOptixEventHooks()
-    ' Release any pending timers and event sinks. We deliberately do NOT wrap
-    ' the OnKey releases in On Error Resume Next — if those fail to release,
-    ' Excel's Ctrl+Z stays hijacked for the rest of the session and breaks
-    ' undo in EVERY workbook. We need to know if that ever happens.
+    ' Release pending timers/event sinks and reset Ctrl+Z to Excel's default.
+    ' NOTE: this build never hijacks Ctrl+Z (nothing assigns OnKey to a macro),
+    ' so the resets below are only a self-heal for older buggy builds and a
+    ' FAILED reset is harmless. OnKey can raise 1004 in some states (Protected
+    ' View, shutdown, no ready window); SafeResetCtrlZ logs that failure with
+    ' full context instead of throwing an unhandled 1004 at the user.
+    DebugLog "StopAMIOptixEventHooks: enter (" & EventHookContext() & ")", True
     Call AMI_Optix_CancelEnsureSheetsVisible
     Call AMI_Optix_CancelDeferredRefresh
 
-    ' Unconditional release so Excel's default shortcuts are restored even if
-    ' the AppEvents object was already torn down or never created.
-    Application.OnKey "^z"
-    Application.OnKey "^+z"
+    SafeResetCtrlZ "StopAMIOptixEventHooks"
 
     On Error Resume Next
     If Not g_AMIOptixAppEvents Is Nothing Then
@@ -90,7 +92,45 @@ Public Sub StopAMIOptixEventHooks()
     End If
     Set g_AMIOptixAppEvents = Nothing
     On Error GoTo 0
+    DebugLog "StopAMIOptixEventHooks: exit", True
 End Sub
+
+Private Sub SafeResetCtrlZ(caller As String)
+    ' Reset Ctrl+Z / Ctrl+Shift+Z to Excel defaults, logging any failure.
+    ' Never throws: OnKey can raise 1004 in some Excel states, and this build
+    ' does not hijack those keys, so a failed reset is harmless. force:=True so
+    ' the record is written even when debug logging is otherwise off.
+    On Error Resume Next
+
+    Err.Clear
+    Application.OnKey "^z"
+    If Err.Number <> 0 Then _
+        DebugLog caller & ": OnKey ^z reset FAILED [" & EventHookContext() & "] - " & Err.Number & ": " & Err.Description, True
+
+    Err.Clear
+    Application.OnKey "^+z"
+    If Err.Number <> 0 Then _
+        DebugLog caller & ": OnKey ^+z reset FAILED [" & EventHookContext() & "] - " & Err.Number & ": " & Err.Description, True
+
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Function EventHookContext() As String
+    ' Lightweight Excel-state snapshot for the debug log. Never throws.
+    On Error Resume Next
+    Dim wbCount As Long
+    Dim activeName As String
+    Dim ready As String
+    wbCount = -1
+    activeName = "(none)"
+    ready = "?"
+    wbCount = Application.Workbooks.Count
+    If Not Application.ActiveWorkbook Is Nothing Then activeName = Application.ActiveWorkbook.Name
+    ready = CStr(Application.Ready)
+    EventHookContext = "wbCount=" & wbCount & ", activeWb=" & activeName & ", appReady=" & ready
+    On Error GoTo 0
+End Function
 
 '-------------------------------------------------------------------------------
 ' SHEET VISIBILITY GUARD
