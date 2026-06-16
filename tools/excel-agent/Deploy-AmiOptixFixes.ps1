@@ -41,7 +41,13 @@ Write-Host 'Downloading fixes...' -ForegroundColor Cyan
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 foreach ($m in $Modules) {
     Invoke-WebRequest -Uri "$BaseUrl/$($m.Path)" -OutFile $m.Temp -UseBasicParsing
-    if ((Get-Content $m.Temp -Raw) -notmatch [regex]::Escape($m.Marker)) {
+    # VBA's VBComponents.Import requires CRLF line endings; GitHub serves LF.
+    # With LF the .cls header (VERSION 1.0 CLASS / BEGIN ...) spills into the
+    # code body and the module won't compile. Normalize to CRLF and strip BOM.
+    $raw = [IO.File]::ReadAllText($m.Temp)
+    $raw = $raw -replace "`r`n", "`n" -replace "`r", "`n" -replace "`n", "`r`n"
+    [IO.File]::WriteAllText($m.Temp, $raw, (New-Object Text.UTF8Encoding($false)))
+    if ($raw -notmatch [regex]::Escape($m.Marker)) {
         Fail "Downloaded $($m.Name) is missing its fix marker."
     }
 }
@@ -83,11 +89,15 @@ try {
         }
         $proj.VBComponents.Import($m.Temp) | Out-Null
 
-        # verify the imported module actually contains the fix
+        # verify the imported module contains the fix AND its file header did
+        # not leak into the code body (the classic LF line-ending import failure)
         $cm = $proj.VBComponents.Item($m.Name).CodeModule
         $code = $cm.Lines(1, $cm.CountOfLines)
         if ($code -notmatch [regex]::Escape($m.Marker)) {
             throw "Post-import verification failed for $($m.Name) - fix marker not found."
+        }
+        if ($code -match 'VERSION 1\.0 CLASS' -or $code -match 'Attribute VB_Name') {
+            throw "Import corrupted for $($m.Name) - module header leaked into code (line endings)."
         }
         Write-Host "  patched $($m.Name)" -ForegroundColor DarkGray
     }
