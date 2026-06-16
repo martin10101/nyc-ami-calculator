@@ -6,9 +6,10 @@
   PC. The form and ribbon are never touched. The master is backed up and only
   replaced after every module is patched AND verified.
 
-  Modules applied (pinned to commit 20b03d1):
+  Modules applied (pinned to commit 18f12d3):
     - AMI_Optix_AppEvents      paste no longer corrupts FLOOR/BED/NET SF
     - AMI_Optix_ResultsWriter  4-unit scenario groups under MAX RENT, not FEWEST
+    - AMI_Optix_EventHooks     OnKey reset no longer crashes (1004) + logging
 
   Run on a client PC that has the Z: drive mapped and Excel installed:
     irm <raw-url-to-this-script> | iex
@@ -20,7 +21,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = '20b03d1aa9ab555914f071f0f9eb50475ab4285f'
+$Commit  = '18f12d3e3c1cfdada73274279b76e180b069961e'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
@@ -30,6 +31,7 @@ $tmpXlam = Join-Path $env:TEMP 'AMI_Optix_patch.xlam'
 $Modules = @(
     @{ Name = 'AMI_Optix_AppEvents';     Path = 'excel-addin/src/AMI_Optix_AppEvents.cls';     Temp = (Join-Path $env:TEMP 'AMI_Optix_AppEvents.cls');     Marker = 'amiTarget' }
     @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'cnt <= 0 And' }
+    @{ Name = 'AMI_Optix_EventHooks';    Path = 'excel-addin/src/AMI_Optix_EventHooks.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_EventHooks.bas');    Marker = 'SafeResetCtrlZ' }
 )
 
 function Fail($msg) { Write-Host "FAILED: $msg" -ForegroundColor Red; exit 1 }
