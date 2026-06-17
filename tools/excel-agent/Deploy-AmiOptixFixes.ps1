@@ -6,11 +6,12 @@
   PC. The form and ribbon are never touched. The master is backed up and only
   replaced after every module is patched AND verified.
 
-  Modules applied (pinned to commit f46425f):
+  Modules applied (pinned to commit c6da60c):
     - AMI_Optix_AppEvents      AMI edits never write -> native Ctrl+Z restored
                                (also subsumes the paste FLOOR/BED/NET SF fix)
-    - AMI_Optix_ResultsWriter  FEWEST grouping fix + Manual Calculate skips
-                               market-rate (0% AMI) rows (fixes API 500)
+    - AMI_Optix_ResultsWriter  FEWEST grouping fix; Manual Calculate skips
+                               market-rate (0% AMI) rows (fixes API 500) and
+                               formats the AMI column as % on the button
     - AMI_Optix_EventHooks     OnKey reset no longer crashes (1004) + logging
 
   Run on a client PC that has the Z: drive mapped and Excel installed:
@@ -23,7 +24,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = 'f46425ff3f7678bf2ef961a0a41d496478ca71f0'
+$Commit  = 'c6da60cca16cb8bde9c1abb64c4ddbbd35d9ae1b'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
