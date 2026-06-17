@@ -3306,10 +3306,23 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
             amiVal = 0#
             rawAmi = ws.Cells(dataRow, 5).Value
             If IsNumeric(rawAmi) Then amiVal = CDbl(rawAmi)
-            unit("client_ami") = amiVal
+            ' Read-time normalization: a raw whole-percent (e.g. 50) -> 0.5.
+            If amiVal > 2# Then amiVal = amiVal / 100#
 
-            units.Add unit
-            dataRow = dataRow + 1
+            ' Skip market-rate / unassigned rows (no AMI). The rent table has no
+            ' 0% entry, so sending one makes /api/manual_calculate return 500
+            ' ("Rent table missing entry for 0% AMI / studio"). Mirrors
+            ' ReadUnitData and VerifyManualRents, which both exclude ami <= 0.
+            ' unit("row") lets the rent write-back below target the correct
+            ' sheet row even when some rows were skipped.
+            If amiVal <= 0# Then
+                dataRow = dataRow + 1
+            Else
+                unit("client_ami") = amiVal
+                unit("row") = dataRow
+                units.Add unit
+                dataRow = dataRow + 1
+            End If
         Loop
 
         If units.Count = 0 Then GoTo NextTable
@@ -3344,7 +3357,7 @@ Private Sub RecalculateSolverScenarioRents(ws As Worksheet, programNorm As Strin
             If maxA > units.Count Then maxA = units.Count
 
             For a = 1 To maxA
-                assignRow = headerRow + a
+                assignRow = units(a)("row")   ' map to the unit's real row (no-AMI rows were skipped)
                 Set apiAssign = apiAssignments(a)
 
                 If apiAssign.Exists("gross_rent") Then
