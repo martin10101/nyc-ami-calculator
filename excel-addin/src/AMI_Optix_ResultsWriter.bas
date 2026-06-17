@@ -1421,6 +1421,37 @@ Public Function ManualCalculateScenario(Optional programOverride As String = "",
         Exit Function
     End If
 
+    ' Clean up the AMI column DISPLAY at this on-demand write point: normalize
+    ' raw whole-percent entries (e.g. 50 -> 0.5) and apply "0%" so newly typed
+    ' AMI cells show the percent symbol consistently. Safe ONLY because Manual
+    ' Calculate is an intentional write point (Excel's native undo is already
+    ' cleared here) - we never format/normalize while the user is typing, which
+    ' is what keeps Ctrl+Z alive. Touches only the AMI cells of the units just
+    ' read (valid AMI); blank / market-rate rows are left untouched.
+    If Not preserveAppliedScenario Then
+        Dim fmtWs As Worksheet
+        Dim fmtCol As Long
+        Set fmtWs = GetDataSheet()
+        fmtCol = GetAMIColumn()
+        If (Not fmtWs Is Nothing) And fmtCol > 0 Then
+            Dim fmtPrevEv As Boolean
+            fmtPrevEv = Application.EnableEvents
+            Application.EnableEvents = False
+            Dim fmtUnit As Object
+            Dim fmtRow As Long
+            Dim fmtI As Long
+            For fmtI = 1 To units.Count
+                Set fmtUnit = units(fmtI)
+                If fmtUnit.Exists("row") And fmtUnit.Exists("client_ami") Then
+                    fmtRow = CLng(fmtUnit("row"))
+                    fmtWs.Cells(fmtRow, fmtCol).Value = CDbl(fmtUnit("client_ami"))
+                    fmtWs.Cells(fmtRow, fmtCol).NumberFormat = "0%"
+                End If
+            Next fmtI
+            Application.EnableEvents = fmtPrevEv
+        End If
+    End If
+
     Dim utilities As Object
     Set utilities = GetUtilitySelectionsForProgram(programNorm)
 
