@@ -213,6 +213,10 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
     On Error GoTo SafeExit
 
+    ' DIAG (Ctrl+Z investigation): external log only, no workbook writes.
+    DebugLog "[EDIT] HandleDataSheetAmiChange: sheet=" & ws.Name & " target=" & target.Address(False, False) & _
+             " cells=" & target.Cells.Count & " enableEvents=" & Application.EnableEvents, True
+
     ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
     ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
     ' Only writes when actually needed (raw > 2) to preserve Excel's native
@@ -233,7 +237,10 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
             Set amiData = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(ws.Rows.Count, amiCol))
             Dim amiTarget As Range
             Set amiTarget = Intersect(target, amiData)
-            If Not amiTarget Is Nothing Then Call NormalizeAmiInputCells(amiTarget)
+            If Not amiTarget Is Nothing Then
+                DebugLog "[EDIT] -> NormalizeAmiInputCells on " & amiTarget.Address(False, False), True
+                Call NormalizeAmiInputCells(amiTarget)
+            End If
         End If
     End If
 
@@ -246,6 +253,7 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
     ' update. The refresh self-cancels if the user switches to a different
     ' workbook during the quiet period.
     Call AMI_Optix_ScheduleDeferredRefresh(programNorm)
+    DebugLog "[EDIT] HandleDataSheetAmiChange: armed deferred refresh (+2s)", True
 
     ' Keep last selection cache consistent for subsequent edits.
     m_LastSelectionSheet = CStr(ws.Name)
@@ -276,7 +284,11 @@ Private Sub NormalizeAmiInputCells(target As Range)
         End If
     Next cCheck
 
-    If Not needsWrite Then Exit Sub  ' nothing to do, preserve undo stack
+    If Not needsWrite Then
+        DebugLog "[EDIT] NormalizeAmiInputCells: no raw>2 value -> NO workbook write (native undo preserved)", True
+        Exit Sub  ' nothing to do, preserve undo stack
+    End If
+    DebugLog "[EDIT] NormalizeAmiInputCells: raw>2 detected -> WRITING cell(s) now (this CLEARS native undo)", True
 
     Dim prevEnableEvents As Boolean
     Dim prevSuppress As Boolean

@@ -216,6 +216,7 @@ Public Sub AMI_Optix_ScheduleDeferredRefresh(programNorm As String)
     g_AMIOptixDeferredRefreshAt = Now + TimeSerial(0, 0, 2)
     Application.OnTime EarliestTime:=g_AMIOptixDeferredRefreshAt, _
                         Procedure:="'" & ThisWorkbook.Name & "'!AMI_Optix_DoDeferredRefresh"
+    DebugLog "[EDIT] ScheduleDeferredRefresh: armed +2s (wb=" & g_AMIOptixDeferredRefreshWorkbook & ")", True
 End Sub
 
 Public Sub AMI_Optix_CancelDeferredRefresh()
@@ -236,26 +237,27 @@ Public Sub AMI_Optix_DoDeferredRefresh()
     ' Manual Working Copy refresh that was previously immediate.
     On Error Resume Next
     g_AMIOptixDeferredRefreshAt = 0
+    DebugLog "[EDIT] DoDeferredRefresh: timer FIRED", True
 
     Dim prog As String
     Dim scheduledWb As String
     prog = g_AMIOptixDeferredRefreshProgramNorm
     scheduledWb = g_AMIOptixDeferredRefreshWorkbook
-    If prog = "" Then Exit Sub
+    If prog = "" Then DebugLog "[EDIT] DoDeferredRefresh: skip (no program)", True : Exit Sub
 
     ' GUARD: only refresh when the workbook that scheduled the timer is still
     ' the active workbook. If the user switched to a different workbook (or
     ' closed the AMI workbook entirely), writing 100+ cells now would clear
     ' Excel's session-wide undo stack and break Ctrl+Z in their other docs.
     ' On return, App_WorkbookActivate reschedules the refresh.
-    If ActiveWorkbook Is Nothing Then Exit Sub
+    If ActiveWorkbook Is Nothing Then DebugLog "[EDIT] DoDeferredRefresh: skip (no active wb)", True : Exit Sub
     If scheduledWb <> "" Then
-        If CStr(ActiveWorkbook.Name) <> scheduledWb Then Exit Sub
+        If CStr(ActiveWorkbook.Name) <> scheduledWb Then DebugLog "[EDIT] DoDeferredRefresh: skip (wb switched to " & ActiveWorkbook.Name & ")", True : Exit Sub
     End If
     ' Belt-and-suspenders: must have an "AMI Scenarios" sheet to be a real AMI
     ' workbook. Prevents accidental fire-through on a random workbook that
     ' happens to share a name (rare, but cheap to guard).
-    If Not WorkbookHasAmiScenariosSheet(ActiveWorkbook) Then Exit Sub
+    If Not WorkbookHasAmiScenariosSheet(ActiveWorkbook) Then DebugLog "[EDIT] DoDeferredRefresh: skip (no AMI Scenarios sheet)", True : Exit Sub
 
     Dim prevEnableEvents As Boolean
     Dim prevSuppress As Boolean
@@ -264,7 +266,9 @@ Public Sub AMI_Optix_DoDeferredRefresh()
     Application.EnableEvents = False
     g_AMIOptixSuppressEvents = True
 
+    DebugLog "[EDIT] DoDeferredRefresh: writing Manual Working Copy NOW -> this CLEARS native undo", True
     Call RefreshManualWorkingCopyLocalRents(prog)
+    DebugLog "[EDIT] DoDeferredRefresh: Manual Working Copy write DONE", True
 
     Application.EnableEvents = prevEnableEvents
     g_AMIOptixSuppressEvents = prevSuppress
