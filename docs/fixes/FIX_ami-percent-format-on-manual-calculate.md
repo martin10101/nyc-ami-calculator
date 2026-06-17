@@ -3,7 +3,9 @@
 **Branch:** `fix/ami-percent-on-manual-calc`
 **Cut from:** `feature/excel-agent-foundation` @ `c3056bb`
 **Date:** 2026-06-17
-**Risk:** Low. One added block in `ManualCalculateScenario`; writes only the AMI cells of units just read, only on the Manual Calculate button, never while typing.
+**Risk:** Low. One added block in `ManualCalculateScenario`; normalizes + percent-formats the whole AMI input range (incl. blanks) only on the Manual Calculate button, never while typing.
+
+**Update 2026-06-17:** extended from "format only valued cells" to "format the whole AMI input range (header+1 .. last unit row), including blank cells." Blank General-format cells were why a freshly typed `50` still showed `50` even with auto-percent-entry on — Excel only auto-converts in cells already formatted as percent.
 
 ## Symptom (client)
 
