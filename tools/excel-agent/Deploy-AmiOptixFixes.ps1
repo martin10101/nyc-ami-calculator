@@ -6,8 +6,8 @@
   PC. The form and ribbon are never touched. The master is backed up and only
   replaced after every module is patched AND verified.
 
-  Modules applied (pinned to commit 18f12d3):
-    - AMI_Optix_AppEvents      paste no longer corrupts FLOOR/BED/NET SF
+  Modules applied (pinned to commit c173c08):
+    - AMI_Optix_AppEvents      paste fix + external edit-path logging
     - AMI_Optix_ResultsWriter  4-unit scenario groups under MAX RENT, not FEWEST
     - AMI_Optix_EventHooks     OnKey reset no longer crashes (1004) + logging
 
@@ -21,7 +21,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = '18f12d3e3c1cfdada73274279b76e180b069961e'
+$Commit  = 'c173c088e1255611420148f3d8236f2f3833d473'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
