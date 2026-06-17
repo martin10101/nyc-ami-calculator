@@ -210,52 +210,23 @@ SafeExit:
 End Sub
 
 Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNorm As String)
-    ' Sync: when the user edits the AMI column on the data sheet, update the Scenario Manual block.
+    ' Option 1 (Ctrl+Z fix, 2026-06-17): editing the AMI column must NOT write
+    ' to the workbook. Any VBA cell write clears Excel's session-wide native
+    ' undo stack, which is why Ctrl+Z died after AMI edits. So this handler is
+    ' now passive:
+    '   - NO immediate "normalize" write. A raw entry like 50 is left as-is and
+    '     interpreted as 50% at READ time everywhere it is consumed (DataReader,
+    '     RentCalcTables, ResultsWriter, ParseAmiValue, VerifyManualRents).
+    '   - NO deferred Manual Working Copy refresh.
+    ' The Manual block is refreshed on demand only: the Manual Calculate button
+    ' or a solver run (Run MIH / Run UAP), where a write (and undo reset) is
+    ' expected because the user initiated it.
     On Error GoTo SafeExit
 
-    ' DIAG (Ctrl+Z investigation): external log only, no workbook writes.
-    DebugLog "[EDIT] HandleDataSheetAmiChange: sheet=" & ws.Name & " target=" & target.Address(False, False) & _
-             " cells=" & target.Cells.Count & " enableEvents=" & Application.EnableEvents, True
+    ' Confirmation breadcrumb (external log file only, never a workbook write).
+    DebugLog "[EDIT] AMI edit on " & target.Address(False, False) & " - passive, NO workbook write (Option 1)", True
 
-    ' Normalize user input on AMI cells. If the user typed "60" (meaning 60%)
-    ' into a cell formatted as "0%", Excel stores 60 raw and displays "6000%".
-    ' Only writes when actually needed (raw > 2) to preserve Excel's native
-    ' undo stack for the common case where the user typed correctly.
-    '
-    ' CRITICAL: normalize ONLY cells in the AMI column. A multi-column paste
-    ' (e.g. pasting a whole unit schedule) delivers every changed cell here,
-    ' and normalizing the full range would divide-by-100 and stamp a "0%"
-    ' format onto FLOOR / BED / NET SF and any other numeric column, corrupting
-    ' them. Restrict to the AMI column so only AMI cells are ever touched.
-    Dim headerRow As Long
-    headerRow = FindHeaderRow(ws)
-    If headerRow > 0 Then
-        Dim amiCol As Long
-        amiCol = FindAMIColumn(ws, headerRow)
-        If amiCol > 0 Then
-            Dim amiData As Range
-            Set amiData = ws.Range(ws.Cells(headerRow + 1, amiCol), ws.Cells(ws.Rows.Count, amiCol))
-            Dim amiTarget As Range
-            Set amiTarget = Intersect(target, amiData)
-            If Not amiTarget Is Nothing Then
-                DebugLog "[EDIT] -> NormalizeAmiInputCells on " & amiTarget.Address(False, False), True
-                Call NormalizeAmiInputCells(amiTarget)
-            End If
-        End If
-    End If
-
-    ' DEFER the Manual Working Copy refresh by 2 seconds. Running the refresh
-    ' immediately writes to other cells, which clears Excel's native Ctrl+Z
-    ' undo stack — that's the root cause of "Ctrl+Z doesn't work after AMI
-    ' edit." By debouncing the refresh, the user gets a 2-second window where
-    ' Ctrl+Z works natively. If they edit another cell within those 2 seconds,
-    ' the timer resets. After the quiet period, the refresh fires and rents
-    ' update. The refresh self-cancels if the user switches to a different
-    ' workbook during the quiet period.
-    Call AMI_Optix_ScheduleDeferredRefresh(programNorm)
-    DebugLog "[EDIT] HandleDataSheetAmiChange: armed deferred refresh (+2s)", True
-
-    ' Keep last selection cache consistent for subsequent edits.
+    ' Keep last-selection cache consistent (in-memory only, no workbook write).
     m_LastSelectionSheet = CStr(ws.Name)
     m_LastSelectionAddress = target.Address(False, False)
     m_LastSelectionValue = target.Value
@@ -263,57 +234,11 @@ Private Sub HandleDataSheetAmiChange(ws As Worksheet, target As Range, programNo
 SafeExit:
 End Sub
 
-Private Sub NormalizeAmiInputCells(target As Range)
-    ' Convert raw user-typed AMI values (e.g. 60) to fractions (0.6).
-    ' CRITICAL: only write to a cell if we actually need to normalize. Any
-    ' VBA write clears Excel's native undo stack — by NOT writing when the
-    ' input is already a valid fraction (60%, 0.6, etc.), Ctrl+Z keeps
-    ' working for those cases.
-    On Error GoTo SafeExit
-    If target Is Nothing Then Exit Sub
-
-    Dim needsWrite As Boolean
-    needsWrite = False
-    Dim cCheck As Range
-    For Each cCheck In target.Cells
-        If IsNumeric(cCheck.Value) Then
-            If CDbl(cCheck.Value) > 2# Then
-                needsWrite = True
-                Exit For
-            End If
-        End If
-    Next cCheck
-
-    If Not needsWrite Then
-        DebugLog "[EDIT] NormalizeAmiInputCells: no raw>2 value -> NO workbook write (native undo preserved)", True
-        Exit Sub  ' nothing to do, preserve undo stack
-    End If
-    DebugLog "[EDIT] NormalizeAmiInputCells: raw>2 detected -> WRITING cell(s) now (this CLEARS native undo)", True
-
-    Dim prevEnableEvents As Boolean
-    Dim prevSuppress As Boolean
-    prevEnableEvents = Application.EnableEvents
-    prevSuppress = g_AMIOptixSuppressEvents
-    Application.EnableEvents = False
-    g_AMIOptixSuppressEvents = True
-
-    Dim c As Range
-    For Each c In target.Cells
-        If IsNumeric(c.Value) Then
-            Dim raw As Double
-            raw = CDbl(c.Value)
-            If raw > 2# Then
-                c.Value = raw / 100#
-            End If
-            c.NumberFormat = "0%"
-        End If
-    Next c
-
-SafeExit:
-    On Error Resume Next
-    Application.EnableEvents = prevEnableEvents
-    g_AMIOptixSuppressEvents = prevSuppress
-End Sub
+' NOTE: NormalizeAmiInputCells was removed in the Option 1 Ctrl+Z fix
+' (2026-06-17). It rewrote AMI cells on edit (50 -> 0.5 + "0%" format), and
+' that VBA write cleared Excel's native undo stack. Raw values are now
+' normalized at READ time instead (DataReader, RentCalcTables, ResultsWriter,
+' ParseAmiValue). Do NOT reintroduce a cell write on the edit path.
 
 Private Function ChangeIsInAMIColumn(ws As Worksheet, target As Range) As Boolean
     Dim headerRow As Long
