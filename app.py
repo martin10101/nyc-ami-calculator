@@ -213,12 +213,17 @@ def _build_program_config(
             {'band_threshold': 40, 'min_share': 0.10, 'max_share': 0.125, 'denominator': 'residential'},
         ]
     else:
+        # MIH Option 4 = the Workforce Option (ZR 23-154(d); client confirmed
+        # 2026-08-04): 30% of residential SF affordable at a weighted average
+        # of <=115% AMI, set-asides >=5% at <=70% and >=5% at <=90% (encoded
+        # cumulatively: units at <=70 also count toward <=90, hence >=10% at
+        # <=90), bands up to 135%, at most 4 income bands. There is NO 40% AMI
+        # requirement in this option — the old copy of Option 1's [10%, 12.5%]
+        # at-40 window here forced ~$60K/mo of phantom deep-affordability on a
+        # real Workforce project (701 Myrtle, 2026-08).
         rules['waami_cap_percent'] = 115.0
         rules['max_bands_per_scenario'] = 4
-        # MIH Option 4: same 40% window as Option 1, plus client-workbook
-        # formulas requiring >=5% at <=70 and >=10% at <=90.
         rules['share_thresholds'] = [
-            {'band_threshold': 40, 'min_share': 0.10, 'max_share': 0.125, 'denominator': 'residential'},
             {'band_threshold': 70, 'min_share': 0.05, 'denominator': 'residential'},
             {'band_threshold': 90, 'min_share': 0.10, 'denominator': 'residential'},
         ]
@@ -231,14 +236,15 @@ def _build_program_config(
     # Provide the denominator for residential-share constraints.
     rules['residential_sf'] = float(mih_residential_sf)
 
-    # Band cap. Client decision 2026-05-18: MIH must NEVER use bands above 100% AMI
-    # (Option 1 AND Option 4). We hard-cap on the server regardless of what the
-    # client workbook sends, so we don't have to re-edit every property workbook
-    # in the field - existing workbooks may still set 130 or 135 in the Prog sheet
-    # and we silently floor that to 100.
+    # Band cap.
+    # - Option 1: client decision 2026-05-18 — never use bands above 100% AMI.
+    #   We hard-cap on the server regardless of what the workbook sends.
+    # - Option 4 (Workforce): bands up to 135% AMI are integral to the option
+    #   (avg 115% is unreachable without them). Client corrected the blanket
+    #   100 cap on 2026-08-04; ZR 23-154(d) allows bands to 135.
     # To intentionally allow a LOWER cap (e.g. 80) the workbook can still send a
     # smaller mih_max_band_percent; only the upper bound is enforced.
-    MIH_HARD_BAND_CAP = 100
+    MIH_HARD_BAND_CAP = 100 if option_norm == 'OPTION 1' else 135
     if mih_max_band_percent is None:
         mih_max_band_percent = MIH_HARD_BAND_CAP
     max_band = min(int(mih_max_band_percent), MIH_HARD_BAND_CAP)
@@ -797,6 +803,20 @@ def optimize_units():
 
         program_norm = str(program or 'UAP').strip().upper()
 
+        # Does this run have a <=40% AMI share requirement at all?
+        # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
+        # NO — there is no 40% set-aside in that option, so every 40%-centric
+        # extra (floor-walk, low/max_40_share, fewest-40 ladder, mid_40_share)
+        # must be skipped rather than re-imposing a 40% window via their
+        # 10%/12.5% fallback defaults. Non-MIH programs keep their existing
+        # behavior (UAP's deep-affordability defaults handle it downstream).
+        mih_forty_required = True
+        if program_norm == 'MIH':
+            mih_forty_required = any(
+                int(t.get('band_threshold', 0) or 0) <= 40 and (t.get('min_share') not in (None, 0))
+                for t in ((config.get('optimization_rules', {}) or {}).get('share_thresholds') or [])
+            )
+
         timing["program"] = program_norm
         timing["unit_count"] = int(len(df_units))
         timing["parse_validation_ms"] = int(round((time.perf_counter() - request_start) * 1000))
@@ -874,7 +894,7 @@ def optimize_units():
         # infeasible — slide the window up and rerun the optimizer. Mirrors the UAP widening
         # pattern below. After the walk settles, config is mutated so the same final window
         # flows into find_max_revenue_scenario later in the request.
-        if program_norm == 'MIH':
+        if program_norm == 'MIH' and mih_forty_required:
             mih_floor_start = 0.100
             mih_floor_max = 0.150
             mih_floor_step = 0.001
@@ -1064,7 +1084,9 @@ def optimize_units():
             # allocation" (max_40_share, pinned near the ceiling — typically
             # the rent-max landing zone). Both still use rent-max within the
             # narrowed window so the trade-off is purely about 40% exposure.
-            if rent_schedule and rent_by_band_cents:
+            # Skipped when the program has no <=40% requirement (MIH Option 4):
+            # the eff_min/eff_max fallbacks below would fabricate a 10% window.
+            if rent_schedule and rent_by_band_cents and mih_forty_required:
                 def _solve_with_40_window(min_share, max_share, floor_tiebreak=False):
                     v_config = copy.deepcopy(config)
                     v_rules = v_config.get('optimization_rules', {}) or {}
@@ -1420,7 +1442,9 @@ def optimize_units():
         # rent dollars). Runs AFTER the edge block so every pre-existing
         # scenario generates exactly as before (purely additive).
         try:
-            if rent_schedule and rent_by_band_cents:
+            # Skipped when no <=40% requirement exists (MIH Option 4) — the
+            # f40_eff_min fallback would fabricate a 10% at-40 requirement.
+            if rent_schedule and rent_by_band_cents and mih_forty_required:
                 f40_rules = (config.get('optimization_rules', {}) or {})
                 cap_fraction_f40 = float(f40_rules.get('waami_cap_percent') or 60.0) / 100.0
 
@@ -1679,7 +1703,9 @@ def optimize_units():
         # pre-existing scenario (edge slots included) generates exactly as
         # before — this option is purely additive, never displacing others.
         try:
-            if rent_schedule and rent_by_band_cents:
+            # Skipped when no <=40% requirement exists (MIH Option 4) — the
+            # mid_eff_min fallback would fabricate a 10% at-40 requirement.
+            if rent_schedule and rent_by_band_cents and mih_forty_required:
                 mid_rules = (config.get('optimization_rules', {}) or {})
                 mid_eff_min, mid_eff_max = None, None
                 for t in (mid_rules.get('share_thresholds') or []):
@@ -1753,8 +1779,9 @@ def optimize_units():
             # MIH-only: the "fewest apartments at 40%" frontier is an MIH
             # developer concept. UAP's deep-affordability rule is a different
             # mechanism (share of affordable floor, conditional on bonus SF) —
-            # leave it untouched.
-            if program_norm == 'MIH' and rent_schedule and rent_by_band_cents:
+            # leave it untouched. Also skipped when the MIH option has no <=40%
+            # requirement (Option 4) — the fr_min fallback would fabricate one.
+            if program_norm == 'MIH' and rent_schedule and rent_by_band_cents and mih_forty_required:
                 fr_rules = (config.get('optimization_rules', {}) or {})
                 fr_min = None
                 for t in (fr_rules.get('share_thresholds') or []):
@@ -2254,8 +2281,23 @@ def optimize_units():
                     except (TypeError, ValueError):
                         return None
 
-                rk_cands = [(k, s) for k, s in scenarios.items()
-                            if s and k != 'original' and _rk_n40(s) > 0 and _rk_income(s) is not None]
+                # MIH with no <=40% requirement (Option 4 / Workforce): the
+                # "fewest apartments at 40%" recommendation model doesn't
+                # apply — recommend the straight rent-max scenario. Without
+                # this, the picker below (which requires n40 > 0) would crown
+                # a low-rent scenario that happens to use 40s as ballast, and
+                # Excel's ApplyBestScenario would write THAT to the MIH page.
+                if not mih_forty_required:
+                    rk_all = [(k, s) for k, s in scenarios.items()
+                              if s and k != 'original' and _rk_income(s) is not None
+                              and (s or {}).get('tier') != 'reference']
+                    if rk_all:
+                        recommended_key, rec_s = max(rk_all, key=lambda kv: _rk_income(kv[1]))
+                        recommended_income = _rk_income(rec_s)
+                    rk_cands = []
+                else:
+                    rk_cands = [(k, s) for k, s in scenarios.items()
+                                if s and k != 'original' and _rk_n40(s) > 0 and _rk_income(s) is not None]
                 if rk_cands:
                     rk_min_count = min(_rk_n40(s) for _, s in rk_cands)
                     rk_min = [(k, s) for k, s in rk_cands if _rk_n40(s) == rk_min_count]

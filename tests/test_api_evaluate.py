@@ -107,24 +107,29 @@ def test_evaluate_mih_option1_floor_satisfied_passes_share_constraint():
         assert "below required 10.00%" not in err, f"Share floor incorrectly violated: {err}"
 
 
-def test_evaluate_mih_option4_enforces_40_band_min_share_floor():
-    """MIH Option 4 also requires AT LEAST 10% at <=40 band (added 2026-04)."""
+def test_evaluate_mih_option4_has_no_40_band_floor():
+    """MIH Option 4 (Workforce) has NO 40% AMI requirement — client corrected
+    the old 'same window as Option 1' rule on 2026-08-04 (ZR 23-154(d)).
+    A zero-40s allocation that satisfies the real set-asides (>=5% at <=70,
+    >=10% cumulative at <=90, WAAMI <=115%) must pass compliance."""
     client = app.test_client()
     payload = {
         "program": "MIH",
         "mih_option": "Option 4",
         "mih_residential_sf": 1000,
+        "mih_max_band_percent": 135,
         "utilities": {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"},
         "units": [
-            # All units at 90% -> 0% at <=40 band, satisfies Option 4's >=10% at <=90 rule.
-            {"unit_id": "1A", "bedrooms": 1, "net_sf": 250, "assigned_ami": 0.90},
-            {"unit_id": "1B", "bedrooms": 1, "net_sf": 250, "assigned_ami": 0.90},
-            {"unit_id": "1C", "bedrooms": 1, "net_sf": 250, "assigned_ami": 0.90},
-            {"unit_id": "1D", "bedrooms": 1, "net_sf": 250, "assigned_ami": 0.90},
+            # 100 SF at 70% = 10% of residential at <=70 AND <=90 (cumulative).
+            # 300 SF at 130% -> WAAMI = (100*0.7 + 300*1.3) / 400 = 1.15 (at cap).
+            {"unit_id": "1A", "bedrooms": 1, "net_sf": 100, "assigned_ami": 0.70},
+            {"unit_id": "1B", "bedrooms": 1, "net_sf": 100, "assigned_ami": 1.30},
+            {"unit_id": "1C", "bedrooms": 1, "net_sf": 100, "assigned_ami": 1.30},
+            {"unit_id": "1D", "bedrooms": 1, "net_sf": 100, "assigned_ami": 1.30},
         ],
     }
     resp = client.post("/api/evaluate", json=payload)
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["success"] is False
-    assert any("below required 10.00%" in err for err in data.get("errors", []))
+    assert data["success"] is True, f"zero-40s Workforce allocation must pass: {data.get('errors')}"
+    assert not any("<= 40%" in err for err in data.get("errors", []) or [])

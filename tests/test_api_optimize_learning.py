@@ -109,8 +109,11 @@ def test_optimize_mih_option1_meets_40_band_min_share_floor():
         )
 
 
-def test_optimize_mih_option4_meets_40_band_min_share_floor():
-    """MIH Option 4 also requires AT LEAST 10% at <=40 AMI band (added 2026-04)."""
+def test_optimize_mih_option4_has_no_forced_40_band_floor():
+    """MIH Option 4 (Workforce) has NO 40% AMI requirement — client corrected
+    the old 'same window as Option 1' rule on 2026-08-04 (ZR 23-154(d)).
+    The optimizer must not force 10% of residential SF into 40% AMI, and the
+    40%-centric scenario families must not be generated."""
     client = app.test_client()
     units = []
     for i in range(1, 11):
@@ -132,46 +135,52 @@ def test_optimize_mih_option4_meets_40_band_min_share_floor():
     assert "scenarios" in data and data["scenarios"]
 
     residential_sf = 1000.0
-    required = 0.10 * residential_sf
-    walked_ceiling = 0.175 * residential_sf
-    for name, scenario in data["scenarios"].items():
-        # 'original' is the client's input snapshot, exempt from compliance.
-        if name == "original" or (scenario or {}).get("tier") == "reference":
-            continue
-        assignments = scenario.get("assignments") or []
-        low_sf = 0.0
-        for a in assignments:
-            sf = float(a.get("net_sf") or 0.0)
-            ami = float(a.get("assigned_ami") or 0.0)
-            if ami <= 0.4 + 1e-12:
-                low_sf += sf
-        assert low_sf + 1e-9 >= required, (
-            f"Option 4 scenario '{name}' has {low_sf} SF at <=40 band; "
-            f"required >= {required} (10% of residential SF)"
-        )
-        assert low_sf <= walked_ceiling + 1e-9, (
-            f"Option 4 scenario '{name}' has {low_sf} SF at <=40 band; "
-            f"exceeds {walked_ceiling} (17.5% walked-up ceiling)"
+    solver = {
+        name: s for name, s in data["scenarios"].items()
+        if s and name != "original" and (s or {}).get("tier") != "reference"
+        and s.get("assignments")
+    }
+    assert solver, "expected at least one solver scenario"
+
+    # The old bug forced >=10% of residential SF into 40% AMI in EVERY
+    # scenario. Rent-max with no 40% requirement should leave it unforced.
+    def _low_sf(s):
+        return sum(
+            float(a.get("net_sf") or 0.0) for a in (s.get("assignments") or [])
+            if float(a.get("assigned_ami") or 0.0) <= 0.4 + 1e-12
         )
 
+    assert any(_low_sf(s) < 0.10 * residential_sf - 1e-9 for s in solver.values()), (
+        "Every Option 4 scenario still carries >=10% at 40% AMI — "
+        "the Option 1 window is leaking into Option 4"
+    )
 
-def test_optimize_mih_caps_bands_at_100_regardless_of_payload():
-    """MIH band cap. Client decision 2026-05-18: even if the client workbook
-    still sends mih_max_band_percent >= 110 (Option 1 OR Option 4), the server
-    must hard-cap returned scenarios at 100% AMI. No assignment in any returned
-    scenario may have assigned_ami > 1.00.
+    # 40%-centric families are Option 1 concepts; they must not appear.
+    for name in solver:
+        assert not name.startswith("fewest_40_units"), name
+        assert name not in ("low_40_share", "max_40_share", "mid_40_share"), name
+
+
+def test_optimize_mih_band_caps_option1_100_option4_135():
+    """MIH band caps, per option.
+    - Option 1 (client decision 2026-05-18): hard-cap at 100% AMI even if the
+      workbook sends 135. Unchanged.
+    - Option 4 / Workforce (client correction 2026-08-04): bands up to 135%
+      are integral to the option (avg 115% is unreachable without them) —
+      the 100 cap must NOT apply.
     """
     client = app.test_client()
     units = [
         {"unit_id": f"U{i}", "bedrooms": 1, "net_sf": 100, "floor": i, "balcony": False}
         for i in range(1, 11)
     ]
-    for option in ("Option 1", "Option 4"):
+
+    def _run(option):
         payload = {
             "program": "MIH",
             "mih_option": option,
             "mih_residential_sf": 1000,
-            "mih_max_band_percent": 135,  # Old default; server should cap to 100.
+            "mih_max_band_percent": 135,
             "utilities": {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"},
             "units": units,
         }
@@ -179,12 +188,25 @@ def test_optimize_mih_caps_bands_at_100_regardless_of_payload():
         assert resp.status_code == 200, f"{option}: HTTP {resp.status_code}"
         data = resp.get_json()
         assert data.get("success") is True, f"{option}: {data}"
-        scenarios = data.get("scenarios") or {}
-        for name, scenario in scenarios.items():
-            for a in (scenario.get("assignments") or []):
-                ami = float(a.get("assigned_ami") or 0.0)
-                assert ami <= 1.00 + 1e-9, (
-                    f"{option} scenario '{name}' contains assigned_ami={ami} "
-                    f"(unit {a.get('unit_id')}) - exceeds 100% cap"
-                )
+        return {
+            name: s for name, s in (data.get("scenarios") or {}).items()
+            if s and name != "original" and s.get("assignments")
+        }
+
+    # Option 1: never above 100%.
+    for name, scenario in _run("Option 1").items():
+        for a in scenario.get("assignments") or []:
+            ami = float(a.get("assigned_ami") or 0.0)
+            assert ami <= 1.00 + 1e-9, (
+                f"Option 1 scenario '{name}' contains assigned_ami={ami} "
+                f"(unit {a.get('unit_id')}) - exceeds 100% cap"
+            )
+
+    # Option 4: bands above 100% must be available AND used (rent-max under a
+    # 115% average cannot land entirely at <=100 for this all-equal pool).
+    opt4 = _run("Option 4")
+    assert any(
+        float(a.get("assigned_ami") or 0.0) > 1.00 + 1e-9
+        for s in opt4.values() for a in (s.get("assignments") or [])
+    ), "No Option 4 scenario uses a band above 100% - the Option 1 cap is leaking into Option 4"
 
