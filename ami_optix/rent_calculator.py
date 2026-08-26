@@ -17,12 +17,17 @@ from openpyxl import load_workbook
 
 BEDROOM_LABELS = ["studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR"]
 
-# NYC HPD regulatory haircut at the 100% AMI band: max collectable rent is
-# 97% of the published 100% AMI rent. Applied to gross rent at the source so
-# every downstream consumer (solver rent objective, display, edge scenarios)
-# uses the corrected number.
+# 100% AMI band haircut — REMOVED at client instruction (2026-08-05).
+# From 2026-06-04 to 2026-08-05 the program capped collectable rent at the
+# 100% AMI band to 97% of the published value (factor 0.97). The client has
+# directed that results show the TRUE published rent at 100% AMI, so the
+# factor is now 1.0 (no reduction). The mechanism is kept as a one-line
+# switch: if a regulatory cap ever needs to be re-applied, set the factor
+# back to the required value. haircut_applied stays False while factor is
+# 1.0, so the Excel add-in's "3% Cap Applied" / Pre-Cap display naturally
+# shows no cap without any .xlam change.
 HAIRCUT_BAND_AMI = 1.0
-HAIRCUT_FACTOR = 0.97
+HAIRCUT_FACTOR = 1.0
 
 COOKING_OPTIONS = {
     "electric": "Electric Stove",

@@ -39,32 +39,30 @@ def test_rent_allowances_reflect_utility_selection():
     assert totals["net_monthly"] == tenant_electric_components["net"]
 
 
-def test_100_pct_ami_rent_has_haircut_applied():
-    """NYC HPD caps collectable rent at 100% AMI to 97% of the headline value.
-    rent_components must apply the haircut at exactly 100% AMI so every
-    downstream rent calculation (solver objective, display, edge scenarios)
-    sees the regulatory-capped number."""
+def test_100_pct_ami_rent_shows_true_published_value():
+    """100% AMI haircut removed at client instruction (2026-08-05): the
+    program must show the TRUE published rent at 100% AMI — no 3% reduction.
+    The haircut mechanism remains as a switch and must be OFF (factor 1.0)."""
     workbook = Path(__file__).resolve().parent.parent / "2025 AMI Rent Calculator Unlocked.xlsx"
     schedule = load_rent_schedule(str(workbook))
     utilities = {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"}
 
     components = schedule.rent_components(1.0, 1, utilities)
 
-    assert components["haircut_applied"] is True
+    assert HAIRCUT_FACTOR == 1.0
+    assert components["haircut_applied"] is False
     assert components["gross_pre_haircut"] > 0
-    assert components["gross"] == pytest.approx(components["gross_pre_haircut"] * HAIRCUT_FACTOR)
-    assert components["gross"] < components["gross_pre_haircut"]
+    assert components["gross"] == pytest.approx(components["gross_pre_haircut"])
 
 
-def test_no_haircut_at_bands_other_than_100():
-    """The haircut applies ONLY at 100% AMI. Bands at 40/60/80/90 must return
-    headline rents unchanged. This guards against accidentally scaling all
-    rents by 0.97."""
+def test_no_haircut_at_any_band():
+    """No band — 100% included — may have its headline rent reduced. Guards
+    against accidentally scaling any rent by a stray factor."""
     workbook = Path(__file__).resolve().parent.parent / "2025 AMI Rent Calculator Unlocked.xlsx"
     schedule = load_rent_schedule(str(workbook))
     utilities = {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"}
 
-    for ami_band in [0.4, 0.6, 0.8, 0.9]:
+    for ami_band in [0.4, 0.6, 0.8, 0.9, 1.0]:
         components = schedule.rent_components(ami_band, 1, utilities)
         assert components["haircut_applied"] is False, f"Haircut wrongly applied at {ami_band*100:.0f}% AMI"
         assert components["gross"] == pytest.approx(components["gross_pre_haircut"]), (
@@ -72,11 +70,11 @@ def test_no_haircut_at_bands_other_than_100():
         )
 
 
-def test_compute_rents_for_assignments_reflects_haircut():
-    """Mixed-AMI rent roll: units at 100% must have 3% lower rent than they
-    would without the haircut; units at other bands are unaffected. This
-    proves the haircut flows through compute_rents_for_assignments and into
-    the rent_totals.net_monthly used by the rent-first re-ranking."""
+def test_compute_rents_for_assignments_uses_true_100_rent():
+    """Mixed-AMI rent roll: units at 100% AMI must carry the full headline
+    rent (no reduction), and totals must sum the true values. Proves the
+    removal flows through compute_rents_for_assignments into
+    rent_totals.net_monthly used by the rent-first re-ranking."""
     workbook = Path(__file__).resolve().parent.parent / "2025 AMI Rent Calculator Unlocked.xlsx"
     schedule = load_rent_schedule(str(workbook))
     utilities = {"electricity": "na", "cooking": "na", "heat": "na", "hot_water": "na"}
@@ -94,7 +92,7 @@ def test_compute_rents_for_assignments_reflects_haircut():
     )
 
     assert enriched[0]["gross_rent"] == pytest.approx(headline_60)
-    assert enriched[1]["gross_rent"] == pytest.approx(headline_100 * HAIRCUT_FACTOR)
+    assert enriched[1]["gross_rent"] == pytest.approx(headline_100)
 
-    expected_total = headline_60 + (headline_100 * HAIRCUT_FACTOR)
+    expected_total = headline_60 + headline_100
     assert totals["gross_monthly"] == pytest.approx(expected_total)
