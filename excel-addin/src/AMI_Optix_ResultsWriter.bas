@@ -493,8 +493,11 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
     ' numbered detail blocks all agree on numbering:
     '   G1  FEWEST UNITS AT 40%      fewest_40_units*
     '   G2  MID RANGE                mid_40_share
-    '   G3  MAX RENT / OTHER         everything else (existing preferred order)
+    '   G3  FOR REFERENCE ONLY       everything else (existing preferred order)
     '   G4  YOUR INPUT               original
+    ' G3 label must never start with "SCENARIO ", "GROUP:", "=" or a digit —
+    ' the sheet scanners match on those prefixes (see FindFirstScenarioHeaderRow
+    ' and UpdateOverviewRentColumn).
     ' groupLabels is a parallel collection: one label string per returned key.
     Dim ordered As New Collection
     Set groupLabels = New Collection
@@ -512,7 +515,7 @@ Public Function BuildGroupedScenarioOrder(scenarios As Object, ByRef groupLabels
     Set baseOrder = BuildScenarioKeyOrder(scenarios)
 
     Dim groupNames As Variant
-    groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (UNDER 11.5% AT 40%)", "MAX RENT / OTHER OPTIONS", "YOUR INPUT")
+    groupNames = Array("FEWEST UNITS AT 40%", "MID RANGE (UNDER 11.5% AT 40%)", "FOR REFERENCE ONLY - USES MORE 40% THAN REQUIRED", "YOUR INPUT")
 
     ' Pre-pass: the smallest positive 40%-unit count across all solver
     ' scenarios. ANY option sitting at that minimum belongs in the FEWEST
