@@ -901,27 +901,9 @@ Public Function WriteScenarioOverview(ws As Worksheet, startRow As Long) As Long
 NextOverviewKey:
     Next i
 
-    ' Compact method legend - the program's playbook in the client's own
-    ' language, so any result that contradicts it is a precise bug report.
-    row = row + 1
-    ws.Cells(row, 1).Value = "HOW THESE OPTIONS ARE BUILT:"
-    ws.Cells(row, 1).Font.Bold = True
-    ws.Cells(row, 1).Font.Size = 9
-    row = row + 1
-    Dim legendLines As Variant
-    legendLines = Array( _
-        "1. Find the minimum number of apartments that can legally carry the 40% requirement (largest units first).", _
-        "2. Maximize rent at that minimum - bigger units at 40% leave more weighted-average room for 90% units above.", _
-        "3. Offer band variations at the same minimum (with/without 60% AMI) - the neighborhood call is yours.", _
-        "4. Mid-range and max-rent options show what more 40% space would buy.")
-    Dim li As Long
-    For li = LBound(legendLines) To UBound(legendLines)
-        ws.Cells(row, 1).Value = CStr(legendLines(li))
-        ws.Cells(row, 1).Font.Size = 9
-        ws.Cells(row, 1).Font.Italic = True
-        row = row + 1
-    Next li
-
+    ' No methodology legend here: the sheet is client-facing (removal requested
+    ' by the client, 2026-09). UpdateOverviewRentColumn still recognizes the old
+    ' "HOW " legend on sheets written by earlier versions.
     row = row + 1
     WriteScenarioOverview = row
     Exit Function
@@ -3520,8 +3502,11 @@ Private Sub UpdateOverviewRentColumn(ws As Worksheet, freshRentByNum As Object, 
         End If
 
         If inOverview Then
-            ' Leave the overview at its legend or at the first detail block.
-            If Left$(c1, 4) = "HOW " Or Left$(c1, 9) = "SCENARIO " Then
+            ' Leave the overview at the first block that follows it: the SF
+            ' summary or utilities block (current layout), the legacy "HOW "
+            ' legend (sheets written by older versions), or a detail block.
+            If Left$(c1, 4) = "HOW " Or Left$(c1, 9) = "SCENARIO " _
+               Or Left$(c1, 6) = "SQUARE" Or Left$(c1, 9) = "UTILITIES" Then
                 inOverview = False
                 GoTo ContinueRow
             End If
