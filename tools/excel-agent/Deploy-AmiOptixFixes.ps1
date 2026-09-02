@@ -6,12 +6,12 @@
   PC. The form and ribbon are never touched. The master is backed up and only
   replaced after every module is patched AND verified.
 
-  Modules applied (pinned to commit c6da60c):
+  Modules applied (pinned to commit ae011fc):
     - AMI_Optix_AppEvents      AMI edits never write -> native Ctrl+Z restored
                                (also subsumes the paste FLOOR/BED/NET SF fix)
-    - AMI_Optix_ResultsWriter  FEWEST grouping fix; Manual Calculate skips
-                               market-rate (0% AMI) rows (fixes API 500) and
-                               formats the AMI column as % on the button
+    - AMI_Optix_ResultsWriter  all prior fixes + client feedback 2026-09-02:
+                               methodology legend removed; extra-40% group
+                               relabeled FOR REFERENCE ONLY
     - AMI_Optix_EventHooks     OnKey reset no longer crashes (1004) + logging
 
   Run on a client PC that has the Z: drive mapped and Excel installed:
@@ -24,7 +24,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = 'd10632d5e09e097451909828f596a7ca4bc148de'
+$Commit  = 'ae011fc239886e04a0b843371c716145a7005845'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
@@ -33,7 +33,7 @@ $tmpXlam = Join-Path $env:TEMP 'AMI_Optix_patch.xlam'
 # Each module: component name, source path in repo, local temp file, proof-of-fix marker
 $Modules = @(
     @{ Name = 'AMI_Optix_AppEvents';     Path = 'excel-addin/src/AMI_Optix_AppEvents.cls';     Temp = (Join-Path $env:TEMP 'AMI_Optix_AppEvents.cls');     Marker = 'passive, NO workbook write' }
-    @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'cnt <= 0 And' }
+    @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'FOR REFERENCE ONLY - USES MORE 40% THAN REQUIRED' }
     @{ Name = 'AMI_Optix_EventHooks';    Path = 'excel-addin/src/AMI_Optix_EventHooks.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_EventHooks.bas');    Marker = 'SafeResetCtrlZ' }
 )
 
