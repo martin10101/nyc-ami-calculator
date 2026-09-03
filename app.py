@@ -2176,7 +2176,14 @@ def optimize_units():
                 import math as _math
                 orig_assignments = []
                 for _idx, _u in df_units.iterrows():
-                    _ami = _u.get('client_ami')
+                    # Prefer the add-in's snapshot of the user's true input
+                    # (units[].original_ami, sent by add-ins with the baseline
+                    # feature). The live AMI column (client_ami) may have been
+                    # overwritten by a prior ApplyBestScenario, which made this
+                    # scenario show the previous run's OUTPUT as "your input".
+                    _ami = _u.get('original_ami')
+                    if _ami is None or (isinstance(_ami, float) and _math.isnan(_ami)):
+                        _ami = _u.get('client_ami')
                     if _ami is None:
                         continue
                     try:

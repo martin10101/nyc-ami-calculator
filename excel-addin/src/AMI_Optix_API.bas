@@ -621,6 +621,11 @@ Public Function BuildAPIPayloadV2( _
         If unit.Exists("client_ami") Then
             json = json & ", ""client_ami"": " & unit("client_ami")
         End If
+        If unit.Exists("original_ami") Then
+            ' Baseline snapshot of the user's true input (AMI_Optix_Baseline);
+            ' the server prefers it over client_ami for the Original Scenario.
+            json = json & ", ""original_ami"": " & unit("original_ami")
+        End If
 
         json = json & "}"
     Next i

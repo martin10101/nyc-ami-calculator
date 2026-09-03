@@ -182,6 +182,9 @@ Public Sub ApplyBestScenario(result As Object)
 
     Debug.Print "Applied best scenario: " & bestKey & " - Updated " & updatedCount & " units"
 
+    ' Mark this as a PROGRAM write so the next run keeps the user's baseline.
+    AMI_Optix_Baseline.RecordProgramWrite
+
     ' Best-effort learning audit: record what got auto-applied.
     On Error Resume Next
     Dim programNorm As String
@@ -1066,6 +1069,9 @@ NextPair:
     Next i
 
     Debug.Print "Applied canonical assignments - Updated " & updatedCount & " units"
+
+    ' Mark this as a PROGRAM write so the next run keeps the user's baseline.
+    AMI_Optix_Baseline.RecordProgramWrite
     GoTo Cleanup
 
 ErrorHandler:
@@ -1317,6 +1323,10 @@ Public Sub ClearProgramAmiColumn(programNorm As String)
     Set rng = dataWs.Range(dataWs.Cells(headerRow + 1, amiCol), dataWs.Cells(lastRow, amiCol))
     rng.ClearContents
     rng.Interior.Pattern = xlNone
+
+    ' Clearing is a PROGRAM write too - record it so the user's baseline
+    ' survives a year-change clear.
+    AMI_Optix_Baseline.RecordProgramWrite
 
 Cleanup:
     If Not prevSheet Is Nothing Then prevSheet.Activate
@@ -4613,6 +4623,9 @@ Public Sub ApplyScenarioByKey(scenarioKey As String)
             updatedCount = updatedCount + 1
         End If
     Next i
+
+    ' Mark this as a PROGRAM write so the next run keeps the user's baseline.
+    AMI_Optix_Baseline.RecordProgramWrite
 
     ' Refresh Scenario Manual (live sync) to match what is now applied.
     Dim manualOk As Boolean

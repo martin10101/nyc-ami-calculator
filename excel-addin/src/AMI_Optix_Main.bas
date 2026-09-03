@@ -369,6 +369,11 @@ Public Sub RunOptimizationForProgram(program As String)
     If units.Count = 0 Then GoTo NoUnitsFound
     DebugLog "ReadUnitData: units.Count=" & units.Count & " (elapsed " & Format$(ElapsedSeconds(runStart), "0.00") & "s)", True
 
+    ' Tag each unit with the user's true input (original_ami) so the server's
+    ' Original Scenario can't show a previously APPLIED scenario as "input".
+    ' Self-protected: a baseline failure never blocks the run.
+    AMI_Optix_Baseline.EnsureBaselineAndTag units
+
     ' DEBUG: Show unit count - warn if very few
     Debug.Print "=== UNITS FOUND ==="
     Debug.Print "Total units with valid AMI values: " & units.Count

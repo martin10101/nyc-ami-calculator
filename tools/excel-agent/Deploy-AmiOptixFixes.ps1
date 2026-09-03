@@ -35,6 +35,9 @@ $Modules = @(
     @{ Name = 'AMI_Optix_AppEvents';     Path = 'excel-addin/src/AMI_Optix_AppEvents.cls';     Temp = (Join-Path $env:TEMP 'AMI_Optix_AppEvents.cls');     Marker = 'passive, NO workbook write' }
     @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'FOR REFERENCE ONLY - USES MORE 40% THAN REQUIRED' }
     @{ Name = 'AMI_Optix_EventHooks';    Path = 'excel-addin/src/AMI_Optix_EventHooks.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_EventHooks.bas');    Marker = 'SafeResetCtrlZ' }
+    @{ Name = 'AMI_Optix_Baseline';      Path = 'excel-addin/src/AMI_Optix_Baseline.bas';      Temp = (Join-Path $env:TEMP 'AMI_Optix_Baseline.bas');      Marker = 'BASELINE_V1' }
+    @{ Name = 'AMI_Optix_Main';          Path = 'excel-addin/src/AMI_Optix_Main.bas';          Temp = (Join-Path $env:TEMP 'AMI_Optix_Main.bas');          Marker = 'EnsureBaselineAndTag units' }
+    @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'original_ami' }
 )
 
 function Fail($msg) { Write-Host "FAILED: $msg" -ForegroundColor Red; exit 1 }
