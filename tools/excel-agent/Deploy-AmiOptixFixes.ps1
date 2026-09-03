@@ -6,7 +6,7 @@
   PC. The form and ribbon are never touched. The master is backed up and only
   replaced after every module is patched AND verified.
 
-  Modules applied (pinned to commit ae011fc):
+  Modules applied (pinned to commit 748a7b0):
     - AMI_Optix_AppEvents      AMI edits never write -> native Ctrl+Z restored
                                (also subsumes the paste FLOOR/BED/NET SF fix)
     - AMI_Optix_ResultsWriter  all prior fixes + client feedback 2026-09-02:
@@ -24,7 +24,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = 'ae011fc239886e04a0b843371c716145a7005845'
+$Commit  = '748a7b09fe6445ec2a3de3d8bc7514dd1a044654'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
