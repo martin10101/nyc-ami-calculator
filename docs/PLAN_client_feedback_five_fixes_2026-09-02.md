@@ -1,5 +1,12 @@
 # PLAN: Five fixes from Rachel's Building D feedback (2026-09-02)
 
+> **Status 2026-09-22:** all five fixes are built and merged into `feature/excel-agent-foundation`.
+> Fix 4 shipped as a real ribbon menu (dynamicMenu "AMI Bands"), NOT the cell-based picker described below;
+> the deploy script now replaces the ribbon XML inside the .xlam. Fix 5 ships default ON for MIH (toggle
+> "Spread Across Floors"). See `docs/fixes/FIX_band-picker-ribbon.md` and `docs/fixes/FIX_floor-spread-rule.md`.
+> Not yet installed on any client PC: sandbox QA first (Rachel's PC is on the June 16 build).
+
+
 Client feedback (Building D, MIH Option 1): options 1-4 lacked 40% units on upper
 stories; 5-6 used a 60% band the owner refuses; 7-10 use more 40% units than
 required; option 11 ("YOUR ORIGINAL INPUT") was not her input; remove the
