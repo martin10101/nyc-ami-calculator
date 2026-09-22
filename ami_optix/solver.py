@@ -184,12 +184,19 @@ def floor_spread_rule_from(raw: Any) -> Optional[Dict[str, int]]:
     if not raw:
         return None
     min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
+    scope = 'all'
     if isinstance(raw, dict):
         try:
             min_units = int(raw.get('min_units_per_band', FLOOR_SPREAD_DEFAULT_MIN_UNITS))
         except (TypeError, ValueError):
             min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
-    return {'min_units_per_band': max(1, min_units)}
+        # scope: 'all' = every band with >= min_units must spread (HPD
+        # Design Guidelines wording); 'low_band' = only bands <= 40% must
+        # (the reviewer's actual objection on Building D).
+        s = str(raw.get('scope') or 'all').strip().lower()
+        if s in ('low_band', 'low', '40', 'forty'):
+            scope = 'low_band'
+    return {'min_units_per_band': max(1, min_units), 'scope': scope}
 
 
 def floor_thirds(df_affordable: pd.DataFrame) -> Optional[List[Dict[str, Any]]]:
@@ -229,6 +236,7 @@ def floor_spread_summary(
     assignments: List[Dict[str, Any]],
     thirds: Optional[List[Dict[str, Any]]],
     min_units_per_band: int = FLOOR_SPREAD_DEFAULT_MIN_UNITS,
+    scope: str = 'all',
 ) -> Optional[Dict[str, Any]]:
     """Reviewer view for one finished scenario: units per band per third, plus
     whether the thirds rule holds. Computed post-hoc from the assignments'
@@ -257,12 +265,15 @@ def floor_spread_summary(
     for b in bands:
         if band_totals[b] < min_units_per_band:
             continue
+        if scope == 'low_band' and b > 40:
+            continue
         for t in thirds:
             if counts[t['label']][b] == 0:
                 missing.append(f"{b}% AMI has no unit on the {t['label']} floors ({t['min_floor']}-{t['max_floor']})")
     return {
         'satisfied': not missing,
         'min_units_per_band': int(min_units_per_band),
+        'scope': scope,
         'bands': bands,
         'thirds': [
             {
@@ -459,7 +470,10 @@ def _solve_single_scenario(
         spread_thirds = floor_thirds(df_affordable)
         if spread_thirds:
             spread_min_units = int(spread_rule['min_units_per_band'])
+            spread_scope = str(spread_rule.get('scope') or 'all')
             for j in range(num_bands):
+                if spread_scope == 'low_band' and int(bands_to_test[j]) > 40:
+                    continue
                 band_count_expr = sum(x[i][j] for i in range(num_units))
                 is_big_band = model.NewBoolVar(f'spread_big_{j}')
                 model.Add(band_count_expr >= spread_min_units).OnlyEnforceIf(is_big_band)

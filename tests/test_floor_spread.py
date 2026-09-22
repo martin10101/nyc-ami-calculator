@@ -64,10 +64,29 @@ def test_thirds_ignore_units_without_a_floor():
 def test_rule_normalization():
     assert floor_spread_rule_from(None) is None
     assert floor_spread_rule_from(False) is None
-    assert floor_spread_rule_from(True) == {'min_units_per_band': 3}
-    assert floor_spread_rule_from({'min_units_per_band': 2}) == {'min_units_per_band': 2}
-    assert floor_spread_rule_from({'min_units_per_band': 'x'}) == {'min_units_per_band': 3}
-    assert floor_spread_rule_from({'min_units_per_band': 0}) == {'min_units_per_band': 1}
+    assert floor_spread_rule_from(True) == {'min_units_per_band': 3, 'scope': 'all'}
+    assert floor_spread_rule_from({'min_units_per_band': 2}) == {'min_units_per_band': 2, 'scope': 'all'}
+    assert floor_spread_rule_from({'min_units_per_band': 'x'}) == {'min_units_per_band': 3, 'scope': 'all'}
+    assert floor_spread_rule_from({'min_units_per_band': 0}) == {'min_units_per_band': 1, 'scope': 'all'}
+    assert floor_spread_rule_from({'scope': 'low_band'}) == {'min_units_per_band': 3, 'scope': 'low_band'}
+    assert floor_spread_rule_from({'scope': '40'})['scope'] == 'low_band'
+    assert floor_spread_rule_from({'scope': 'junk'})['scope'] == 'all'
+
+
+def test_low_band_scope_only_checks_the_forty_band():
+    thirds = floor_thirds(_df([1, 2, 3, 4, 5, 6]))
+    # 40% spread across all thirds; 80% (4 units) missing from the lower third.
+    assignments = [
+        {'unit_id': 'a', 'assigned_ami': 0.4, 'floor': 1},
+        {'unit_id': 'b', 'assigned_ami': 0.4, 'floor': 3},
+        {'unit_id': 'c', 'assigned_ami': 0.4, 'floor': 6},
+        {'unit_id': 'd', 'assigned_ami': 0.8, 'floor': 3},
+        {'unit_id': 'e', 'assigned_ami': 0.8, 'floor': 4},
+        {'unit_id': 'f', 'assigned_ami': 0.8, 'floor': 5},
+        {'unit_id': 'g', 'assigned_ami': 0.8, 'floor': 6},
+    ]
+    assert floor_spread_summary(assignments, thirds, 3, 'all')['satisfied'] is False
+    assert floor_spread_summary(assignments, thirds, 3, 'low_band')['satisfied'] is True
 
 
 def test_summary_flags_the_reviewer_complaint():

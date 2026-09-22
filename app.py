@@ -932,6 +932,7 @@ def optimize_units():
                 "applied": False,
                 "reason": "",
                 "min_units_per_band": int(floor_spread_rule['min_units_per_band']),
+                "scope": str(floor_spread_rule.get('scope') or 'all'),
                 "thirds": [],
             }
             floor_spread_thirds = floor_thirds(df_units)
@@ -948,10 +949,16 @@ def optimize_units():
                     for t in floor_spread_thirds
                 ]
                 _fs_ranges = ', '.join(f"{t['label']} ({t['min_floor']}-{t['max_floor']})" for t in floor_spread_thirds)
-                floor_spread_notes.append(
-                    f"Floor-spread rule ON: every band with {floor_spread_status['min_units_per_band']}+ apartments "
-                    f"has at least one on the {_fs_ranges} floors."
-                )
+                if floor_spread_status["scope"] == 'low_band':
+                    floor_spread_notes.append(
+                        f"Floor-spread rule ON (40% AMI band): with {floor_spread_status['min_units_per_band']}+ apartments at 40%, "
+                        f"at least one sits on each of the {_fs_ranges} floors."
+                    )
+                else:
+                    floor_spread_notes.append(
+                        f"Floor-spread rule ON: every band with {floor_spread_status['min_units_per_band']}+ apartments "
+                        f"has at least one on the {_fs_ranges} floors."
+                    )
 
         # Does this run have a <=40% AMI share requirement at all?
         # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
@@ -2673,11 +2680,12 @@ def optimize_units():
         # so legacy responses stay byte-identical.
         if floor_spread_status is not None and floor_spread_thirds:
             _fs_min_units = int(floor_spread_status.get('min_units_per_band') or 3)
+            _fs_scope = str(floor_spread_status.get('scope') or 'all')
             for _sk, _sv in list(scenarios.items()):
                 if not _sv or not _sv.get('assignments'):
                     continue
                 try:
-                    _fs_summary = floor_spread_summary(_sv['assignments'], floor_spread_thirds, _fs_min_units)
+                    _fs_summary = floor_spread_summary(_sv['assignments'], floor_spread_thirds, _fs_min_units, _fs_scope)
                 except Exception:
                     _fs_summary = None
                 if _fs_summary is not None:
