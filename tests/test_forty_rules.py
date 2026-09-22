@@ -176,20 +176,25 @@ def test_api_pins_and_exclusions_are_obeyed_in_every_scenario():
     assert any('Built with your 40% rules' in n for n in data['notes'])
 
 
-def test_api_bedroom_filter_limits_forty_to_those_types():
+def test_api_bedroom_preference_honored_when_the_window_allows_it():
     units = _pool_units()
     data = _post(units, {'forty_rules': {'bedrooms_allowed': [2]}})
     assert data['success'] is True, data.get('error')
     beds = {u['unit_id']: u['bedrooms'] for u in units}
     scen = _optimized(data)
     assert scen
+    fr = data['project_summary']['forty_rules']
+    # The 2 BR units alone can reach the 10% floor here, so the wish is fully
+    # honored (restrict) or every 2 BR is 40% (force) - either way only 2 BR at 40%.
+    assert fr['level'] in ('restrict', 'force'), fr
     for key, sc in scen.items():
         for uid in _forty_ids(sc):
-            assert beds[uid] == 2, f'{key}: {uid} ({beds[uid]} BR) at 40% despite 2 BR-only rule'
-    assert '40% only for 2 BR' in data['project_summary']['forty_rules']['summary']
+            assert beds[uid] == 2, f'{key}: {uid} ({beds[uid]} BR) at 40% despite the 2 BR preference'
+    assert '2 BR' in fr['summary']
+    assert any('Built with your 40% rules' in n for n in data['notes'])
 
 
-def test_api_floors_allowed_limits_forty_to_those_floors():
+def test_api_floor_preference_honored_when_the_window_allows_it():
     units = _pool_units()
     allowed = [3, 4, 5, 6, 7, 8, 9, 10]   # the lower half; every floor here holds 2 units
     data = _post(units, {'forty_rules': {'floors_allowed': allowed}})
@@ -197,10 +202,32 @@ def test_api_floors_allowed_limits_forty_to_those_floors():
     floors = {u['unit_id']: u['floor'] for u in units}
     scen = _optimized(data)
     assert scen
+    fr = data['project_summary']['forty_rules']
+    assert fr['level'] == 'restrict', fr
     for key, sc in scen.items():
         for uid in _forty_ids(sc):
-            assert floors[uid] in allowed, f'{key}: {uid} on floor {floors[uid]} at 40% despite the floor rule'
-    assert '40% only on floor(s) 3, 4, 5, 6, 7, 8, 9, 10' in data['project_summary']['forty_rules']['summary']
+            assert floors[uid] in allowed, f'{key}: {uid} on floor {floors[uid]} at 40% despite the floor preference'
+    assert '40% only on floor(s) 3, 4, 5, 6, 7, 8, 9, 10' in fr['summary']
+
+
+def test_api_floor_preference_too_small_is_honored_partially_not_refused():
+    # Floor 19 holds one unit (S-17, ~1.4% of residential SF): far below the
+    # 10% floor. The wish becomes "that unit IS 40%, the program fills the
+    # rest" - no error, no silent ignore.
+    units = _pool_units()
+    data = _post(units, {'forty_rules': {'floors_allowed': [19]}})
+    assert data['success'] is True, data.get('error')
+    fr = data['project_summary']['forty_rules']
+    assert fr['level'] == 'force', fr
+    assert fr['preferred_units'] == ['S-17']
+    scen = _optimized(data)
+    assert scen
+    for key, sc in scen.items():
+        assert 'S-17' in _forty_ids(sc), f'{key}: preferred unit S-17 not at 40%'
+        assert len(_forty_ids(sc)) > 1, f'{key}: the program should fill the rest of the 40% band'
+    assert 'preferred apartment(s) (floor(s) 19) are 40%' in fr['summary']
+    assert any('Built with your 40% rules' in n for n in data['notes'])
+    assert not any('could not be honored' in n for n in data['notes'])
 
 
 def test_api_floor_rule_that_blocks_a_third_skips_floor_spread_honestly():
@@ -263,11 +290,22 @@ def test_api_too_many_pins_is_a_clean_error():
     assert 'may be at most' in data['error']
 
 
-def test_api_bedroom_filter_with_too_little_sf_is_a_clean_error():
+def test_api_bedroom_preference_too_small_is_honored_partially():
     units = _pool_units()
     for u in units:
         u['bedrooms'] = 1
     units[0]['bedrooms'] = 3   # a single 3 BR cannot reach the 10% floor alone
     data = _post(units, {'forty_rules': {'bedrooms_allowed': [3]}})
+    assert data['success'] is True, data.get('error')
+    fr = data['project_summary']['forty_rules']
+    assert fr['level'] == 'force'
+    for key, sc in _optimized(data).items():
+        assert 'S-1' in _forty_ids(sc), f'{key}: the only 3 BR should be 40%'
+
+
+def test_api_keep_out_leaving_too_little_sf_is_a_clean_error():
+    # Keep OUT is an order, not a wish: excluding almost everything is refused.
+    units = _pool_units()
+    data = _post(units, {'forty_rules': {'exclude_units': [u['unit_id'] for u in units[:22]]}})
     assert data['success'] is False
-    assert 'eligible for 40%' in data['error']
+    assert "Keep OUT" in data['error']

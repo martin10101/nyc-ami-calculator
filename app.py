@@ -1046,6 +1046,9 @@ def optimize_units():
         # objective is untouched: best rent WITHIN the rules.
         forty_rules_status: dict | None = None
         forty_rules_notes: list[str] = []
+        forty_levels: list[str] = []
+        _fr_apply_level = None
+        _fr_level_text = None
         if forty_rules:
             def _forty_error(msg: str):
                 _emit_timing("forty_rules_error", {"error": msg})
@@ -1075,56 +1078,41 @@ def optimize_units():
                 )
             _fr_non_forty = [b for b in _fr_potential if b != 40]
 
-            _fr_excluded: set[str] = set(forty_rules['exclude_units'])
-            _fr_bedroom_excluded: list[str] = []
-            if forty_rules['bedrooms_allowed'] is not None:
-                _allowed_beds = set(forty_rules['bedrooms_allowed'])
-                for _uid, _br in zip(_fr_ids, df_units['bedrooms'].tolist()):
-                    try:
-                        _br_i = int(round(float(_br)))
-                    except (TypeError, ValueError):
-                        continue
-                    _ok = (_br_i in _allowed_beds) or (_br_i >= 4 and 4 in _allowed_beds)
-                    if not _ok and _uid not in forty_rules['pin_units']:
-                        _fr_excluded.add(_uid)
-                        _fr_bedroom_excluded.append(_uid)
-            _fr_floor_excluded: list[str] = []
-            if forty_rules['floors_allowed'] is not None and 'floor' in df_units.columns:
-                _allowed_floors = set(forty_rules['floors_allowed'])
-                for _uid, _fl in zip(_fr_ids, df_units['floor'].tolist()):
-                    try:
-                        if _fl is None or pd.isna(_fl):
-                            continue
-                        _fl_i = int(round(float(_fl)))
-                    except (TypeError, ValueError):
-                        continue
-                    if _fl_i not in _allowed_floors and _uid not in forty_rules['pin_units']:
-                        _fr_excluded.add(_uid)
-                        _fr_floor_excluded.append(_uid)
-                # A floor rule that keeps 40% off a whole floor third makes the
-                # floor-spread test impossible by design: skip the spread rule
-                # honestly instead of failing into its fallback.
-                if floor_spread_status is not None and floor_spread_status.get('applied') and floor_spread_thirds:
-                    _pool_floors_by_third = []
-                    for _t in floor_spread_thirds:
-                        _fl_in_third = set()
-                        for _i in _t['indices']:
-                            try:
-                                _fl_in_third.add(int(round(float(df_units['floor'].iloc[_i]))))
-                            except (TypeError, ValueError):
-                                pass
-                        _pool_floors_by_third.append((_t, _fl_in_third))
-                    _blocked = [_t for _t, _fls in _pool_floors_by_third if not (_fls & _allowed_floors)]
-                    if _blocked:
-                        (config.get('optimization_rules', {}) or {}).pop('floor_spread', None)
-                        floor_spread_status['applied'] = False
-                        _blk_txt = ', '.join(f"{_t['label']} ({_t['min_floor']}-{_t['max_floor']})" for _t in _blocked)
-                        floor_spread_status['reason'] = f"skipped: your 40% floor rule keeps 40% off the {_blk_txt} floors"
-                        floor_spread_notes = [
-                            f"Floor-spread rule skipped: your 40% Rules keep 40% off the {_blk_txt} floors, so the lower/middle/upper test cannot apply."
-                        ]
+            # --- Hard rules: pins ("these units, period") and Keep OUT. --------
+            _fr_pins = list(forty_rules['pin_units'])
+            _fr_hard_excl: set[str] = set(forty_rules['exclude_units'])
 
-            # Feasibility against the 40% share window before any solving.
+            # --- Preferences: floors and/or bedroom types for the 40% units. ---
+            # A wish, not an order: honored as far as the 40% share window and
+            # the other rules allow, then the program fills the rest itself.
+            _fr_beds = forty_rules['bedrooms_allowed']
+            _fr_floors = forty_rules['floors_allowed']
+            _fr_has_pref = (_fr_beds is not None) or (_fr_floors is not None)
+            _fr_beds_by_id: dict[str, int | None] = {}
+            _fr_floor_by_id: dict[str, int | None] = {}
+            _fr_floor_list = df_units['floor'].tolist() if 'floor' in df_units.columns else [None] * len(_fr_ids)
+            for _uid, _br, _fl in zip(_fr_ids, df_units['bedrooms'].tolist(), _fr_floor_list):
+                try:
+                    _fr_beds_by_id[_uid] = int(round(float(_br)))
+                except (TypeError, ValueError):
+                    _fr_beds_by_id[_uid] = None
+                try:
+                    _fr_floor_by_id[_uid] = None if (_fl is None or pd.isna(_fl)) else int(round(float(_fl)))
+                except (TypeError, ValueError):
+                    _fr_floor_by_id[_uid] = None
+
+            def _fr_pref_ok(uid: str) -> bool:
+                if _fr_beds is not None:
+                    b = _fr_beds_by_id.get(uid)
+                    if b is None or not ((b in _fr_beds) or (b >= 4 and 4 in _fr_beds)):
+                        return False
+                if _fr_floors is not None:
+                    f = _fr_floor_by_id.get(uid)
+                    if f is None or f not in _fr_floors:
+                        return False
+                return True
+
+            # --- The 40% share window this run must land in. ------------------
             _fr_sf = {uid: float(sf or 0.0) for uid, sf in zip(_fr_ids, df_units['net_sf'].tolist())}
             _fr_pool_sf = float(sum(_fr_sf.values()))
             _fr_min_share, _fr_max_share, _fr_denom = None, None, _fr_pool_sf
@@ -1140,60 +1128,146 @@ def optimize_units():
             if _fr_min_share is None and _fr_rules.get('deep_affordability_min_share') is not None:
                 _fr_min_share = _fr_rules.get('deep_affordability_min_share')
                 _fr_max_share = _fr_rules.get('deep_affordability_max_share')
-            _fr_pinned_sf = sum(_fr_sf.get(u, 0.0) for u in forty_rules['pin_units'])
-            _fr_eligible_sf = sum(sf for uid, sf in _fr_sf.items() if uid not in _fr_excluded)
-            if _fr_denom > 0 and _fr_max_share is not None:
+            _fr_ceiling_share = None
+            if _fr_max_share is not None:
                 # MIH may slide the window up by 5 points; UAP may widen to its cap.
-                _fr_ceiling = float(_fr_max_share) + (0.05 if program_norm == 'MIH' else max(0.0, float(_fr_rules.get('deep_affordability_widen_cap', 0.4) or 0.4) - float(_fr_max_share)))
-                if _fr_pinned_sf / _fr_denom > _fr_ceiling + 1e-9:
-                    return _forty_error(
-                        f"The units you pinned at 40% total {_fr_pinned_sf / _fr_denom * 100:.1f}% of {_fr_window_label}; "
-                        f"the 40% band may be at most {_fr_ceiling * 100:.1f}%. Un-pin some units in AMI Optix > 40% Rules."
-                    )
-            if _fr_denom > 0 and _fr_min_share is not None:
-                if _fr_eligible_sf / _fr_denom < float(_fr_min_share) - 1e-9:
-                    return _forty_error(
-                        f"Only {_fr_eligible_sf / _fr_denom * 100:.1f}% of {_fr_window_label} is eligible for 40% under your rules; "
-                        f"at least {float(_fr_min_share) * 100:.1f}% is required. Allow more bedroom types or un-exclude units "
-                        "in AMI Optix > 40% Rules."
-                    )
+                _fr_ceiling_share = float(_fr_max_share) + (0.05 if program_norm == 'MIH' else max(0.0, float(_fr_rules.get('deep_affordability_widen_cap', 0.4) or 0.4) - float(_fr_max_share)))
+            _fr_min_req = (float(_fr_min_share) * _fr_denom) if (_fr_min_share is not None and _fr_denom > 0) else 0.0
+            _fr_max_req = (_fr_ceiling_share * _fr_denom) if (_fr_ceiling_share is not None and _fr_denom > 0) else None
 
-            _fr_fixed: list[dict] = []
-            for _uid in forty_rules['pin_units']:
-                _fr_fixed.append({'unitId': _uid, 'bands': [40]})
-            for _uid in sorted(_fr_excluded):
-                _fr_fixed.append({'unitId': _uid, 'bands': list(_fr_non_forty)})
-            _merged_po = dict(project_overrides or {})
-            _merged_po['fixedUnits'] = list(_merged_po.get('fixedUnits') or []) + _fr_fixed
-            project_overrides = _merged_po
-            if forty_rules['max_per_floor']:
-                _fr_rules['forty_max_per_floor'] = int(forty_rules['max_per_floor'])
-                config['optimization_rules'] = _fr_rules
+            _fr_pinned_sf = sum(_fr_sf.get(u, 0.0) for u in _fr_pins)
+            if _fr_max_req is not None and _fr_pinned_sf > _fr_max_req + 1e-9:
+                return _forty_error(
+                    f"The units you pinned at 40% total {_fr_pinned_sf / _fr_denom * 100:.1f}% of {_fr_window_label}; "
+                    f"the 40% band may be at most {_fr_ceiling_share * 100:.1f}%. Un-pin some units in AMI Optix > 40% Rules."
+                )
+            _fr_eligible_hard = [uid for uid in _fr_ids if uid not in _fr_hard_excl]
+            _fr_elig_sf = sum(_fr_sf[u] for u in _fr_eligible_hard)
+            if _fr_min_req > 0 and _fr_elig_sf < _fr_min_req - 1e-9:
+                return _forty_error(
+                    f"Your 'Keep OUT of 40%' list leaves only {_fr_elig_sf / _fr_denom * 100:.1f}% of {_fr_window_label} "
+                    f"for the 40% band; at least {float(_fr_min_share) * 100:.1f}% is required. "
+                    "Remove some units from that list in AMI Optix > 40% Rules."
+                )
 
-            _fr_parts: list[str] = []
-            if forty_rules['pin_units']:
-                _fr_parts.append("pinned at 40%: " + ', '.join(forty_rules['pin_units']))
-            if forty_rules['exclude_units']:
-                _fr_parts.append("kept out of 40%: " + ', '.join(forty_rules['exclude_units']))
-            if forty_rules['bedrooms_allowed'] is not None:
-                _fr_parts.append("40% only for " + ', '.join(_bedroom_label(b) for b in forty_rules['bedrooms_allowed']))
-            if forty_rules['floors_allowed'] is not None:
-                _fr_parts.append("40% only on floor(s) " + ', '.join(str(f) for f in forty_rules['floors_allowed']))
-            if forty_rules['max_per_floor']:
-                _fr_parts.append(f"max {forty_rules['max_per_floor']} at 40% per floor")
+            _fr_preferred = [u for u in _fr_eligible_hard if (u in _fr_pins) or (_fr_has_pref and _fr_pref_ok(u))]
+            _fr_pref_sf = sum(_fr_sf[u] for u in _fr_preferred)
+
+            # Levels, tried in order until the solver finds scenarios:
+            #   restrict : 40% ONLY from the preferred apartments (wish fully honored)
+            #   force    : every preferred apartment IS 40%, the program fills the rest
+            #   drop     : preference (and the per-floor cap) set aside, pins/Keep OUT kept
+            if _fr_has_pref:
+                if _fr_pref_sf >= _fr_min_req - 1e-9:
+                    forty_levels.append('restrict')
+                if _fr_max_req is None or _fr_pref_sf <= _fr_max_req + 1e-9:
+                    forty_levels.append('force')
+                forty_levels.append('drop')
+            else:
+                forty_levels.append('hard_only')
+
+            _fr_pref_txt_parts: list[str] = []
+            if _fr_floors is not None:
+                _fr_pref_txt_parts.append("floor(s) " + ', '.join(str(f) for f in _fr_floors))
+            if _fr_beds is not None:
+                _fr_pref_txt_parts.append(', '.join(_bedroom_label(b) for b in _fr_beds))
+            _fr_pref_txt = ' and '.join(_fr_pref_txt_parts)
+            _fr_pref_n = len([u for u in _fr_preferred if u not in _fr_pins])
+            _fr_spread_skipped_by_pref = False
+            _fr_spread_saved_notes: list[str] = list(floor_spread_notes)
+
+            def _fr_apply_level(level: str) -> None:
+                nonlocal project_overrides
+                fixed: list[dict] = [{'unitId': u, 'bands': [40]} for u in _fr_pins]
+                excl = set(_fr_hard_excl)
+                if level == 'restrict':
+                    excl |= {u for u in _fr_eligible_hard if u not in _fr_preferred}
+                if level == 'force':
+                    fixed += [{'unitId': u, 'bands': [40]} for u in _fr_preferred if u not in _fr_pins]
+                for u in sorted(excl):
+                    fixed.append({'unitId': u, 'bands': list(_fr_non_forty)})
+                merged = dict(project_overrides or {})
+                base_fixed = [f for f in (merged.get('fixedUnits') or []) if not str(f.get('unitId', '')).strip() in _fr_id_set]
+                merged['fixedUnits'] = base_fixed + fixed
+                project_overrides = merged
+                rules_now = config.get('optimization_rules', {}) or {}
+                if forty_rules['max_per_floor'] and level != 'drop':
+                    rules_now['forty_max_per_floor'] = int(forty_rules['max_per_floor'])
+                else:
+                    rules_now.pop('forty_max_per_floor', None)
+                config['optimization_rules'] = rules_now
+                # A 'restrict' floor preference that keeps 40% off a whole floor
+                # third makes the floor-spread test impossible by design: skip it
+                # honestly at that level; put it back at any other level.
+                nonlocal _fr_spread_skipped_by_pref
+                if floor_spread_status is not None and floor_spread_thirds:
+                    blocked = []
+                    if level == 'restrict' and _fr_floors is not None:
+                        allowed_floors = set(_fr_floors)
+                        for _t in floor_spread_thirds:
+                            fls = set()
+                            for _i in _t['indices']:
+                                f = _fr_floor_by_id.get(_fr_ids[_i])
+                                if f is not None:
+                                    fls.add(f)
+                            if not (fls & allowed_floors):
+                                blocked.append(_t)
+                    if blocked and floor_spread_status.get('applied'):
+                        rules_now.pop('floor_spread', None)
+                        floor_spread_status['applied'] = False
+                        blk_txt = ', '.join(f"{_t['label']} ({_t['min_floor']}-{_t['max_floor']})" for _t in blocked)
+                        floor_spread_status['reason'] = f"skipped: your 40% floor preference keeps 40% off the {blk_txt} floors"
+                        floor_spread_notes[:] = [
+                            f"Floor-spread rule skipped: your 40% Rules keep 40% off the {blk_txt} floors, so the lower/middle/upper test cannot apply."
+                        ]
+                        _fr_spread_skipped_by_pref = True
+                    elif not blocked and _fr_spread_skipped_by_pref:
+                        rules_now['floor_spread'] = dict(floor_spread_rule)
+                        floor_spread_status['applied'] = True
+                        floor_spread_status['reason'] = ""
+                        floor_spread_notes[:] = list(_fr_spread_saved_notes)
+                        _fr_spread_skipped_by_pref = False
+
+            def _fr_level_text(level: str) -> str:
+                parts: list[str] = []
+                if _fr_pins:
+                    parts.append("pinned at 40%: " + ', '.join(_fr_pins))
+                if forty_rules['exclude_units']:
+                    parts.append("kept out of 40%: " + ', '.join(forty_rules['exclude_units']))
+                if _fr_has_pref:
+                    if level == 'restrict':
+                        parts.append(f"40% only on {_fr_pref_txt}")
+                    elif level == 'force':
+                        parts.append(
+                            f"all {_fr_pref_n} preferred apartment(s) ({_fr_pref_txt}) are 40% "
+                            f"({_fr_pref_sf / _fr_denom * 100:.1f}% of {_fr_window_label}); the program fills the rest"
+                            if _fr_denom > 0 else
+                            f"all {_fr_pref_n} preferred apartment(s) ({_fr_pref_txt}) are 40%; the program fills the rest"
+                        )
+                    else:
+                        parts.append(f"your preference ({_fr_pref_txt}) could not be honored for this building; shown without it")
+                if forty_rules['max_per_floor']:
+                    if level == 'drop':
+                        parts.append(f"max {forty_rules['max_per_floor']} at 40% per floor set aside")
+                    else:
+                        parts.append(f"max {forty_rules['max_per_floor']} at 40% per floor")
+                return '; '.join(parts)
+
             forty_rules_status = {
                 "pin_units": list(forty_rules['pin_units']),
                 "exclude_units": list(forty_rules['exclude_units']),
                 "bedrooms_allowed": forty_rules['bedrooms_allowed'],
-                "bedroom_excluded_units": _fr_bedroom_excluded,
                 "floors_allowed": forty_rules['floors_allowed'],
-                "floor_excluded_units": _fr_floor_excluded,
                 "max_per_floor": forty_rules['max_per_floor'],
+                "preferred_units": [u for u in _fr_preferred if u not in _fr_pins],
+                "preferred_share": (_fr_pref_sf / _fr_denom) if _fr_denom > 0 else None,
                 "pinned_share": (_fr_pinned_sf / _fr_denom) if _fr_denom > 0 else None,
-                "eligible_share": (_fr_eligible_sf / _fr_denom) if _fr_denom > 0 else None,
-                "summary": '; '.join(_fr_parts),
+                "eligible_share": (_fr_elig_sf / _fr_denom) if _fr_denom > 0 else None,
+                "levels": list(forty_levels),
+                "level": None,
+                "summary": "",
             }
-            forty_rules_notes.append("Built with your 40% rules: " + '; '.join(_fr_parts) + " (best rent within these rules).")
+            _fr_apply_level(forty_levels[0])
 
         # Does this run have a <=40% AMI share requirement at all?
         # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
@@ -1326,7 +1400,30 @@ def optimize_units():
                 return mih_walk_results
             return find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
 
-        solver_results = _primary_solve()
+        # 40% Rules preference ladder (Fix 6): the client's floor / bedroom
+        # wish is honored fully when the window allows it, partially when it
+        # does not, and set aside (with a plain note) only if even that breaks
+        # the program's rules. Pins and Keep OUT stay hard at every level.
+        if forty_levels and _fr_apply_level is not None and _fr_level_text is not None:
+            solver_results = {'scenarios': {}, 'notes': []}
+            for _lvl_idx, _lvl in enumerate(forty_levels):
+                if _lvl_idx > 0:
+                    _fr_apply_level(_lvl)
+                solver_results = _primary_solve()
+                forty_rules_status['level'] = _lvl
+                if (solver_results.get('scenarios') or {}).get('absolute_best'):
+                    break
+            forty_rules_status['summary'] = _fr_level_text(forty_rules_status['level'])
+            if forty_rules_status['summary']:
+                forty_rules_notes.append("Built with your 40% rules: " + forty_rules_status['summary'] + " (best rent within them).")
+            if forty_rules_status['level'] == 'drop':
+                forty_rules_notes.append(
+                    "Your 40% floor/bedroom preference could not be honored for this building "
+                    "(no band mix satisfied the 40% window with it); the options are shown without it. "
+                    "Pinned and Keep-OUT units were still respected."
+                )
+        else:
+            solver_results = _primary_solve()
 
         # Floor-spread honest fallback (Fix 5): if NO band mix satisfied the
         # rule, run once more without it and say so plainly. Every later

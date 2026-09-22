@@ -520,8 +520,8 @@ Public Function DescribeRules() As String
     Dim parts As String
     If GetPins() <> "" Then parts = parts & "Pinned at 40%: " & ListDisplay(GetPins()) & vbCrLf
     If GetExcludes() <> "" Then parts = parts & "Kept out of 40%: " & ListDisplay(GetExcludes()) & vbCrLf
-    If GetBedroomsCsv() <> "" Then parts = parts & "40% only for: " & BedsDisplay(GetBedroomsCsv()) & vbCrLf
-    If GetFloorsCsv() <> "" Then parts = parts & "40% only on floor(s): " & Replace(GetFloorsCsv(), ",", ", ") & vbCrLf
+    If GetBedroomsCsv() <> "" Then parts = parts & "Prefer 40% for: " & BedsDisplay(GetBedroomsCsv()) & vbCrLf
+    If GetFloorsCsv() <> "" Then parts = parts & "Prefer 40% on floor(s): " & Replace(GetFloorsCsv(), ",", ", ") & vbCrLf
     If GetPerFloor() > 0 Then parts = parts & "Max " & GetPerFloor() & " unit(s) at 40% per floor" & vbCrLf
     If parts = "" Then
         DescribeRules = "None - the program decides which apartments are 40%."
@@ -538,8 +538,8 @@ Public Function DescribeRulesShort() As String
     Dim s As String
     If GetPins() <> "" Then s = s & ListCount(GetPins()) & " pinned"
     If GetExcludes() <> "" Then s = s & IIf(s <> "", ", ", "") & ListCount(GetExcludes()) & " kept out"
-    If GetBedroomsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & BedsDisplay(GetBedroomsCsv()) & " only"
-    If GetFloorsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & "floors " & Replace(GetFloorsCsv(), ",", ", ") & " only"
+    If GetBedroomsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & "prefer " & BedsDisplay(GetBedroomsCsv())
+    If GetFloorsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & "prefer floors " & Replace(GetFloorsCsv(), ",", ", ")
     If GetPerFloor() > 0 Then s = s & IIf(s <> "", ", ", "") & "max " & GetPerFloor() & "/floor"
     If s = "" Then s = "none (program decides)"
     DescribeRulesShort = s
@@ -681,7 +681,7 @@ Public Function BuildFortyMenuXml() As String
     x = x & "<button id=""btnFortyUnrule"" label=""Remove rule from selected units"" imageMso=""ClearFormatting"" onAction=""Ribbon_FortyUnruleSelected""/>"
     x = x & "<menuSeparator id=""sepForty2""/>"
 
-    x = x & "<menu id=""mnuFortyBeds"" label=""Bedroom types allowed at 40%"" imageMso=""PropertySheet"">"
+    x = x & "<menu id=""mnuFortyBeds"" label=""Bedroom types for 40% (preferred)"" imageMso=""PropertySheet"">"
     Dim b As Long
     For b = 0 To 4
         x = x & "<checkBox id=""chkFortyBed" & b & """ tag=""" & b & """ label=""" & EscapeXml(BedroomLabel(b)) & """" & _
@@ -689,11 +689,11 @@ Public Function BuildFortyMenuXml() As String
     Next b
     x = x & "</menu>"
 
-    x = x & "<menu id=""mnuFortyFloors"" label=""Floors allowed for 40%"" imageMso=""TableRowsInsertAbove"">"
+    x = x & "<menu id=""mnuFortyFloors"" label=""Floors for 40% (preferred)"" imageMso=""TableRowsInsertAbove"">"
     Dim poolCsv As String
     poolCsv = PoolFloorsCsv()
     If poolCsv = "" Then
-        x = x & "<button id=""btnFortyFloorsNone"" enabled=""false"" label=""(no floor data for the affordable units)""/>"
+        x = x & "<button id=""btnFortyFloorsNone"" enabled=""false"" label=""(fill the AMI column first - any number marks an apartment as affordable)""/>"
     Else
         Dim fparts() As String
         Dim fi As Long

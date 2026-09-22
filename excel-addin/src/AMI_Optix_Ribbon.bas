@@ -1997,7 +1997,9 @@ End Sub
 Public Sub Ribbon_FortyShowRules(control As IRibbonControl)
     On Error GoTo Fail
     MsgBox "40% rules for this workbook:" & vbCrLf & vbCrLf & AMI_Optix_FortyRules.DescribeRules() & vbCrLf & _
-           "The optimizer finds the best rent within these rules.", vbInformation, "AMI Optix - 40% Rules"
+           "Pinned / Keep OUT are firm. Floor and bedroom choices are preferences: honored fully when the 40% " & _
+           "share window allows it, partly if not, and the results header says which. Best rent within them.", _
+           vbInformation, "AMI Optix - 40% Rules"
     EnsureAMIOptixTabActive
     Exit Sub
 Fail:

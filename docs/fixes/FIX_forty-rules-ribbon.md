@@ -58,6 +58,27 @@ be too tight.
 **Objective unchanged:** best rent within the rules; ranking, fewest-40
 logic, floor spread and band picker all still apply (stacking tested).
 
+## Orders vs preferences (owner clarification 2026-09-22)
+
+On a fresh client file the AMI column is a placeholder (e.g. 60% on every
+affordable row) that only marks the pool; the program decides the real
+bands. The owner wants to say, BEFORE running, "put the 40% units on
+floor 9, 2 BR / 3 BR" as a wish that never breaks the run:
+
+- **Orders (firm):** Pin selected units at 40%; Keep selected units OUT.
+  Impossible orders are refused with a plain error before solving.
+- **Preferences (wish):** Floors for 40%, Bedroom types for 40%. Server
+  ladder, tried in order until the solver finds scenarios:
+  1. `restrict` - 40% only from the preferred apartments (when their SF can
+     reach the 40% floor);
+  2. `force` - every preferred apartment IS 40%, the program fills the rest
+     (when their SF is under the ceiling);
+  3. `drop` - preference and per-floor cap set aside, pins / Keep OUT kept,
+     with a note "could not be honored".
+  `project_summary.forty_rules.level` + `summary` say which level ran; the
+  results header prints it. Floor spread is skipped only at `restrict` when
+  the chosen floors miss a whole third.
+
 ## Pool vs rules (the owner's first question)
 
 Which apartments are AFFORDABLE is Rachel's input: any row with a value in
@@ -70,7 +91,7 @@ and explaining why (a market-rate unit cannot become 40%).
 
 ## Verification
 
-- `tests/test_forty_rules.py` (16 tests): normalization; per-floor cap
+- `tests/test_forty_rules.py` (18 tests): normalization; per-floor cap
   binds and is rent-neutral, too-tight cap -> no scenario; API: absent
   field -> no metadata (identity); pins + exclusions obeyed in every
   scenario; 2 BR-only filter obeyed; max 1 per floor obeyed; rules stack
