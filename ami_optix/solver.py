@@ -488,6 +488,25 @@ def _solve_single_scenario(
                         continue
                     model.Add(sum(x[i][j] for i in third['indices']) >= 1).OnlyEnforceIf(is_big_band)
 
+    # Optional: cap on <=40% units per floor (40% Rules, Fix 6). Off when the
+    # key is absent / no floor data. Floors with fewer units than the cap
+    # need no constraint.
+    forty_cap_raw = optimization_rules.get('forty_max_per_floor')
+    if forty_cap_raw and 'floor' in df_affordable.columns:
+        try:
+            forty_cap = int(forty_cap_raw)
+        except (TypeError, ValueError):
+            forty_cap = 0
+        forty_low_j = [j for j, band in enumerate(bands_to_test) if int(band) <= 40]
+        if forty_cap > 0 and forty_low_j:
+            forty_by_floor: Dict[int, List[int]] = {}
+            for i, f in enumerate(pd.to_numeric(df_affordable['floor'], errors='coerce').tolist()):
+                if pd.notna(f):
+                    forty_by_floor.setdefault(int(round(float(f))), []).append(i)
+            for floor_idx in forty_by_floor.values():
+                if len(floor_idx) > forty_cap:
+                    model.Add(sum(x[i][j] for i in floor_idx for j in forty_low_j) <= forty_cap)
+
     objective_mode_norm = (objective_mode or "waami").strip().lower()
     primary_var = total_ami_sf_var
     if objective_mode_norm == "waami":

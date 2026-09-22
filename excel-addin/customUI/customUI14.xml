@@ -38,6 +38,13 @@
                         getPressed="Ribbon_GetFloorSpreadPressed"
                         onAction="Ribbon_ToggleFloorSpread"
                         supertip="HPD reviewer test: the 40% AMI apartments must include at least one on the lower, middle and upper floors of the affordable pool. Rent is not affected by floors. ON by default for MIH workbooks. If no option can satisfy it, results say so and are shown without it. Saved inside the workbook."/>
+          <dynamicMenu id="mnuFortyRules"
+                       label="40% Rules"
+                       size="large"
+                       imageMso="Lock"
+                       getContent="Ribbon_GetFortyMenuContent"
+                       invalidateContentOnDrop="true"
+                       supertip="Optional: decide yourself which apartments carry the 40% label. Select unit rows on the sheet, then pin them at 40% or keep them out; limit 40% to certain bedroom types; cap 40% units per floor. The optimizer still finds the best rent within your rules. 'Clear all 40% rules' lets the program decide again. Saved inside the workbook."/>
         </group>
         <group id="grpRentRoll" label="Rent Roll">
           <dropDown id="ddRentRollYear"

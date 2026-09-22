@@ -614,6 +614,14 @@ Public Function BuildAPIPayloadV2( _
     ' ribbon toggle. false = server runs exactly as before the rule existed.
     json = json & """floor_spread"": " & IIf(AMI_Optix_Bands.GetFloorSpreadEnabled(), "true", "false") & ", "
 
+    ' 40% Rules (AMI_Optix_FortyRules, Fix 6): the owner's own decisions about
+    ' which apartments carry the 40% label. Sent only when any rule is set.
+    Dim fortyRulesJson As String
+    fortyRulesJson = AMI_Optix_FortyRules.FortyRulesJson()
+    If fortyRulesJson <> "" Then
+        json = json & """forty_rules"": " & fortyRulesJson & ", "
+    End If
+
     ' Units array
     json = json & """units"": ["
     For i = 1 To units.Count

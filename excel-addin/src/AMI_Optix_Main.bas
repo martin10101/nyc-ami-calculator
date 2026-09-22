@@ -432,6 +432,18 @@ Public Sub RunOptimizationForProgram(program As String)
     End If
     DebugLog "Band rules for this run: " & AMI_Optix_Bands.DescribeSelection() & _
              "; floor spread=" & IIf(AMI_Optix_Bands.GetFloorSpreadEnabled(), "ON", "OFF"), True
+
+    ' Step 3E: 40% Rules preflight (AMI_Optix_FortyRules, Fix 6): pinned /
+    ' excluded unit IDs must exist in THIS run's unit list, and no unit may be
+    ' both pinned and excluded. Stops the run with a clear message otherwise.
+    Dim fortyMsg As String
+    fortyMsg = ""
+    If Not AMI_Optix_FortyRules.ValidateForRun(units, fortyMsg) Then
+        DebugLog "40% rules preflight stopped the run: " & fortyMsg, True
+        MsgBox fortyMsg, vbExclamation, "AMI Optix - 40% Rules"
+        GoTo Cleanup
+    End If
+    DebugLog "40% rules for this run: " & AMI_Optix_FortyRules.DescribeRulesShort(), True
     ' Refresh the ribbon's cached band/floor controls for the active workbook.
     On Error Resume Next
     AMI_Optix_Ribbon.InvalidateBandControls

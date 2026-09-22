@@ -19,10 +19,13 @@
                                fields allowed_bands + floor_spread (Fix 4/5)
     - AMI_Optix_Bands          band picker rules + menu XML (Fix 4),
                                floor-spread setting (Fix 5)
-    - AMI_Optix_Ribbon         AMI Bands menu + Spread Across Floors toggle
+    - AMI_Optix_FortyRules     owner's 40% rules: pin / exclude units,
+                               bedroom types, max per floor (Fix 6)
+    - AMI_Optix_Ribbon         AMI Bands menu, Spread Across Floors toggle,
+                               40% Rules menu
   Ribbon XML applied:
-    - customUI/customUI14.xml  new "Bands & Floors" group (AMI Bands menu +
-                               Spread Across Floors toggle)
+    - customUI/customUI14.xml  new "Bands & Floors" group (AMI Bands menu,
+                               Spread Across Floors toggle, 40% Rules menu)
 
   Run on a client PC that has the Z: drive mapped and Excel installed:
     irm <raw-url-to-this-script> | iex
@@ -43,13 +46,14 @@ $tmpXlam = Join-Path $env:TEMP 'AMI_Optix_patch.xlam'
 # Each module: component name, source path in repo, local temp file, proof-of-fix marker
 $Modules = @(
     @{ Name = 'AMI_Optix_AppEvents';     Path = 'excel-addin/src/AMI_Optix_AppEvents.cls';     Temp = (Join-Path $env:TEMP 'AMI_Optix_AppEvents.cls');     Marker = 'passive, NO workbook write' }
-    @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'Floor Spread (HPD reviewer view)' }
+    @{ Name = 'AMI_Optix_ResultsWriter'; Path = 'excel-addin/src/AMI_Optix_ResultsWriter.bas'; Temp = (Join-Path $env:TEMP 'AMI_Optix_ResultsWriter.bas'); Marker = 'WriteFortyRulesLine' }
     @{ Name = 'AMI_Optix_EventHooks';    Path = 'excel-addin/src/AMI_Optix_EventHooks.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_EventHooks.bas');    Marker = 'SafeResetCtrlZ' }
     @{ Name = 'AMI_Optix_Baseline';      Path = 'excel-addin/src/AMI_Optix_Baseline.bas';      Temp = (Join-Path $env:TEMP 'AMI_Optix_Baseline.bas');      Marker = 'BASELINE_V1' }
-    @{ Name = 'AMI_Optix_Main';          Path = 'excel-addin/src/AMI_Optix_Main.bas';          Temp = (Join-Path $env:TEMP 'AMI_Optix_Main.bas');          Marker = 'EnsureBaselineAndTag units' }
-    @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'floor_spread' }
+    @{ Name = 'AMI_Optix_Main';          Path = 'excel-addin/src/AMI_Optix_Main.bas';          Temp = (Join-Path $env:TEMP 'AMI_Optix_Main.bas');          Marker = 'AMI_Optix_FortyRules.ValidateForRun' }
+    @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'forty_rules' }
     @{ Name = 'AMI_Optix_Bands';         Path = 'excel-addin/src/AMI_Optix_Bands.bas';         Temp = (Join-Path $env:TEMP 'AMI_Optix_Bands.bas');         Marker = 'GetFloorSpreadEnabled' }
-    @{ Name = 'AMI_Optix_Ribbon';        Path = 'excel-addin/src/AMI_Optix_Ribbon.bas';        Temp = (Join-Path $env:TEMP 'AMI_Optix_Ribbon.bas');        Marker = 'Ribbon_ToggleFloorSpread' }
+    @{ Name = 'AMI_Optix_FortyRules';    Path = 'excel-addin/src/AMI_Optix_FortyRules.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_FortyRules.bas');    Marker = 'AMI_OPTIX_FORTY_RULES_V1' }
+    @{ Name = 'AMI_Optix_Ribbon';        Path = 'excel-addin/src/AMI_Optix_Ribbon.bas';        Temp = (Join-Path $env:TEMP 'AMI_Optix_Ribbon.bas');        Marker = 'Ribbon_FortyClear' }
 )
 
 # Ribbon XML part inside the .xlam (an .xlam is a zip package). Replaced AFTER
@@ -57,7 +61,7 @@ $Modules = @(
 $RibbonPath   = 'excel-addin/customUI/customUI14.xml'
 $RibbonEntry  = 'customUI/customUI14.xml'
 $RibbonTemp   = Join-Path $env:TEMP 'AMI_Optix_customUI14.xml'
-$RibbonMarker = 'tglFloorSpread'
+$RibbonMarker = 'mnuFortyRules'
 
 function Fail($msg) { Write-Host "FAILED: $msg" -ForegroundColor Red; exit 1 }
 

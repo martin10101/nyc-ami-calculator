@@ -1799,6 +1799,7 @@ AfterRent:
     ' Band picker / floor-spread echo from the last optimize response (survives local refresh).
     row = WriteBandRulesLine(ws, row, Nothing)
     row = WriteFloorSpreadLine(ws, row, Nothing)
+    row = WriteFortyRulesLine(ws, row, Nothing)
     row = row + 1
 
     ' At-a-glance index of all scenarios (survives year switches / AMI edits).
@@ -3133,6 +3134,41 @@ Private Function WriteFloorSpreadLine(ws As Worksheet, startRow As Long, resp As
 Done:
 End Function
 
+Private Function WriteFortyRulesLine(ws As Worksheet, startRow As Long, resp As Object) As Long
+    ' 40% Rules echo (Fix 6). Written ONLY when the run carried owner rules
+    ' (project_summary.forty_rules present), quoting the server's summary of
+    ' exactly what it obeyed. Local writers pass Nothing -> last response.
+    WriteFortyRulesLine = startRow
+    On Error GoTo Done
+    Dim src As Object
+    Set src = resp
+    If src Is Nothing Then Set src = g_LastScenarios
+    If src Is Nothing Then Exit Function
+    If Not src.Exists("project_summary") Then Exit Function
+    Dim ps As Object
+    Set ps = src("project_summary")
+    If ps Is Nothing Then Exit Function
+    If Not ps.Exists("forty_rules") Then Exit Function
+    Dim fr As Object
+    Set fr = Nothing
+    On Error Resume Next
+    Set fr = ps("forty_rules")
+    On Error GoTo Done
+    If fr Is Nothing Then Exit Function
+    Dim txt As String
+    txt = ""
+    If fr.Exists("summary") Then
+        If Not IsObject(fr("summary")) Then txt = Trim$(CStr(fr("summary")))
+    End If
+    If txt = "" Then Exit Function
+    ws.Cells(startRow, 1).Value = "40% Rules:"
+    ws.Cells(startRow, 1).Font.Bold = True
+    ws.Cells(startRow, 2).Value = txt & "  (your rules - AMI Optix > 40% Rules; best rent within them)"
+    ws.Cells(startRow, 2).Font.Bold = True
+    WriteFortyRulesLine = startRow + 1
+Done:
+End Function
+
 Private Function WriteFloorSpreadTable(ws As Worksheet, startRow As Long, scenario As Object) As Long
     ' Per-scenario reviewer view (Fix 5): apartments per band on the lower /
     ' middle / upper floors - exactly what the HPD reviewer reads off the
@@ -3247,6 +3283,8 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     row = WriteBandRulesLine(ws, row, result)
     ' Floor-spread echo: what the run enforced (only when the rule was requested).
     row = WriteFloorSpreadLine(ws, row, result)
+    ' 40% Rules echo: the owner's own 40% decisions this run obeyed (only when set).
+    row = WriteFortyRulesLine(ws, row, result)
     row = row + 1
 
     Dim scenarioKey As String

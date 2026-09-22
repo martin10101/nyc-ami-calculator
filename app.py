@@ -197,6 +197,64 @@ def _normalize_allowed_bands(raw) -> list[int] | None:
     return sorted(out)
 
 
+def _normalize_forty_rules(raw) -> dict | None:
+    """Parse the add-in's optional ``forty_rules`` payload (ribbon "40% Rules").
+
+    {
+      "pin_units": ["2A", "3A"],        # must carry the 40% label
+      "exclude_units": ["5B"],          # may never carry the 40% label
+      "bedrooms_allowed": [1, 2],       # only these bedroom counts may be 40% (4 = 4+)
+      "max_per_floor": 2                # at most N units at 40% on any one floor
+    }
+    Returns None when nothing usable is set (= the program decides, legacy).
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def _ids(key: str) -> list[str]:
+        vals = raw.get(key)
+        if not isinstance(vals, (list, tuple)):
+            return []
+        out: list[str] = []
+        for v in vals:
+            s = str(v).strip() if v is not None else ''
+            if s and s not in out:
+                out.append(s)
+        return out
+
+    pins = _ids('pin_units')
+    excludes = _ids('exclude_units')
+    bedrooms: list[int] | None = None
+    b_raw = raw.get('bedrooms_allowed')
+    if isinstance(b_raw, (list, tuple)):
+        bset: set[int] = set()
+        for v in b_raw:
+            try:
+                bset.add(int(round(float(v))))
+            except (TypeError, ValueError):
+                continue
+        if bset:
+            bedrooms = sorted(bset)
+    max_per_floor: int | None = None
+    try:
+        m = raw.get('max_per_floor')
+        if m is not None and int(round(float(m))) > 0:
+            max_per_floor = int(round(float(m)))
+    except (TypeError, ValueError):
+        max_per_floor = None
+    if not pins and not excludes and bedrooms is None and max_per_floor is None:
+        return None
+    return {'pin_units': pins, 'exclude_units': excludes, 'bedrooms_allowed': bedrooms, 'max_per_floor': max_per_floor}
+
+
+def _bedroom_label(n: int) -> str:
+    if n <= 0:
+        return 'Studio'
+    if n >= 4:
+        return '4+ BR'
+    return f'{n} BR'
+
+
 def _apply_allowed_bands(rules: dict, program_norm: str, option_norm: str | None, allowed_bands: list[int] | None) -> None:
     """Narrow ``rules['potential_bands']`` to the user's band selection.
 
@@ -859,6 +917,9 @@ def optimize_units():
         # Band picker (ribbon "AMI Bands" menu). Absent -> every band the
         # program allows, exactly as before the picker existed.
         allowed_bands = _normalize_allowed_bands(data.get('allowed_bands'))
+        # 40% Rules (ribbon "40% Rules" menu): the owner's own decisions about
+        # WHICH apartments carry the 40% label. Absent -> the program decides.
+        forty_rules = _normalize_forty_rules(data.get('forty_rules'))
 
         # Convert units to DataFrame (same format parser produces)
         df_units = pd.DataFrame(units)
@@ -959,6 +1020,124 @@ def optimize_units():
                         f"Floor-spread rule ON: every band with {floor_spread_status['min_units_per_band']}+ apartments "
                         f"has at least one on the {_fs_ranges} floors."
                     )
+
+        # 40% Rules (Fix 6): translate the owner's decisions into solver inputs.
+        # Pins / exclusions / bedroom filter become per-unit band rules through
+        # the existing project_overrides.fixedUnits path (every solver call in
+        # this request already receives project_overrides); the per-floor cap
+        # is an optimization_rules key read by _solve_single_scenario. The
+        # objective is untouched: best rent WITHIN the rules.
+        forty_rules_status: dict | None = None
+        forty_rules_notes: list[str] = []
+        if forty_rules:
+            def _forty_error(msg: str):
+                _emit_timing("forty_rules_error", {"error": msg})
+                return jsonify({"success": False, "error": msg, "notes": []}), 200
+
+            _fr_rules = config.get('optimization_rules', {}) or {}
+            _fr_potential = sorted(int(b) for b in (_fr_rules.get('potential_bands') or []))
+            _fr_ids = [str(v).strip() for v in df_units['unit_id'].tolist()]
+            _fr_id_set = set(_fr_ids)
+            _fr_unknown = [u for u in forty_rules['pin_units'] + forty_rules['exclude_units'] if u not in _fr_id_set]
+            if _fr_unknown:
+                return _forty_error(
+                    "Your 40% rules refer to unit(s) not in this run's affordable list: "
+                    + ', '.join(_fr_unknown[:10]) + (" ..." if len(_fr_unknown) > 10 else "")
+                    + ". Open AMI Optix > 40% Rules and clear or re-pin them."
+                )
+            _fr_both = sorted(set(forty_rules['pin_units']) & set(forty_rules['exclude_units']))
+            if _fr_both:
+                return _forty_error(
+                    "Unit(s) " + ', '.join(_fr_both) + " are both pinned at 40% and kept out of 40%. "
+                    "Open AMI Optix > 40% Rules and fix the selection."
+                )
+            if 40 not in _fr_potential:
+                return _forty_error(
+                    "40% AMI is not an allowed band for this run, so 40% rules cannot apply. "
+                    "Check AMI Optix > AMI Bands."
+                )
+            _fr_non_forty = [b for b in _fr_potential if b != 40]
+
+            _fr_excluded: set[str] = set(forty_rules['exclude_units'])
+            _fr_bedroom_excluded: list[str] = []
+            if forty_rules['bedrooms_allowed'] is not None:
+                _allowed_beds = set(forty_rules['bedrooms_allowed'])
+                for _uid, _br in zip(_fr_ids, df_units['bedrooms'].tolist()):
+                    try:
+                        _br_i = int(round(float(_br)))
+                    except (TypeError, ValueError):
+                        continue
+                    _ok = (_br_i in _allowed_beds) or (_br_i >= 4 and 4 in _allowed_beds)
+                    if not _ok and _uid not in forty_rules['pin_units']:
+                        _fr_excluded.add(_uid)
+                        _fr_bedroom_excluded.append(_uid)
+
+            # Feasibility against the 40% share window before any solving.
+            _fr_sf = {uid: float(sf or 0.0) for uid, sf in zip(_fr_ids, df_units['net_sf'].tolist())}
+            _fr_pool_sf = float(sum(_fr_sf.values()))
+            _fr_min_share, _fr_max_share, _fr_denom = None, None, _fr_pool_sf
+            _fr_window_label = 'affordable SF'
+            for _t in (_fr_rules.get('share_thresholds') or []):
+                if int(_t.get('band_threshold', 0) or 0) <= 40:
+                    _fr_min_share = _t.get('min_share')
+                    _fr_max_share = _t.get('max_share')
+                    if str(_t.get('denominator') or '').lower() == 'residential' and _fr_rules.get('residential_sf'):
+                        _fr_denom = float(_fr_rules['residential_sf'])
+                        _fr_window_label = 'residential SF'
+                    break
+            if _fr_min_share is None and _fr_rules.get('deep_affordability_min_share') is not None:
+                _fr_min_share = _fr_rules.get('deep_affordability_min_share')
+                _fr_max_share = _fr_rules.get('deep_affordability_max_share')
+            _fr_pinned_sf = sum(_fr_sf.get(u, 0.0) for u in forty_rules['pin_units'])
+            _fr_eligible_sf = sum(sf for uid, sf in _fr_sf.items() if uid not in _fr_excluded)
+            if _fr_denom > 0 and _fr_max_share is not None:
+                # MIH may slide the window up by 5 points; UAP may widen to its cap.
+                _fr_ceiling = float(_fr_max_share) + (0.05 if program_norm == 'MIH' else max(0.0, float(_fr_rules.get('deep_affordability_widen_cap', 0.4) or 0.4) - float(_fr_max_share)))
+                if _fr_pinned_sf / _fr_denom > _fr_ceiling + 1e-9:
+                    return _forty_error(
+                        f"The units you pinned at 40% total {_fr_pinned_sf / _fr_denom * 100:.1f}% of {_fr_window_label}; "
+                        f"the 40% band may be at most {_fr_ceiling * 100:.1f}%. Un-pin some units in AMI Optix > 40% Rules."
+                    )
+            if _fr_denom > 0 and _fr_min_share is not None:
+                if _fr_eligible_sf / _fr_denom < float(_fr_min_share) - 1e-9:
+                    return _forty_error(
+                        f"Only {_fr_eligible_sf / _fr_denom * 100:.1f}% of {_fr_window_label} is eligible for 40% under your rules; "
+                        f"at least {float(_fr_min_share) * 100:.1f}% is required. Allow more bedroom types or un-exclude units "
+                        "in AMI Optix > 40% Rules."
+                    )
+
+            _fr_fixed: list[dict] = []
+            for _uid in forty_rules['pin_units']:
+                _fr_fixed.append({'unitId': _uid, 'bands': [40]})
+            for _uid in sorted(_fr_excluded):
+                _fr_fixed.append({'unitId': _uid, 'bands': list(_fr_non_forty)})
+            _merged_po = dict(project_overrides or {})
+            _merged_po['fixedUnits'] = list(_merged_po.get('fixedUnits') or []) + _fr_fixed
+            project_overrides = _merged_po
+            if forty_rules['max_per_floor']:
+                _fr_rules['forty_max_per_floor'] = int(forty_rules['max_per_floor'])
+                config['optimization_rules'] = _fr_rules
+
+            _fr_parts: list[str] = []
+            if forty_rules['pin_units']:
+                _fr_parts.append("pinned at 40%: " + ', '.join(forty_rules['pin_units']))
+            if forty_rules['exclude_units']:
+                _fr_parts.append("kept out of 40%: " + ', '.join(forty_rules['exclude_units']))
+            if forty_rules['bedrooms_allowed'] is not None:
+                _fr_parts.append("40% only for " + ', '.join(_bedroom_label(b) for b in forty_rules['bedrooms_allowed']))
+            if forty_rules['max_per_floor']:
+                _fr_parts.append(f"max {forty_rules['max_per_floor']} at 40% per floor")
+            forty_rules_status = {
+                "pin_units": list(forty_rules['pin_units']),
+                "exclude_units": list(forty_rules['exclude_units']),
+                "bedrooms_allowed": forty_rules['bedrooms_allowed'],
+                "bedroom_excluded_units": _fr_bedroom_excluded,
+                "max_per_floor": forty_rules['max_per_floor'],
+                "pinned_share": (_fr_pinned_sf / _fr_denom) if _fr_denom > 0 else None,
+                "eligible_share": (_fr_eligible_sf / _fr_denom) if _fr_denom > 0 else None,
+                "summary": '; '.join(_fr_parts),
+            }
+            forty_rules_notes.append("Built with your 40% rules: " + '; '.join(_fr_parts) + " (best rent within these rules).")
 
         # Does this run have a <=40% AMI share requirement at all?
         # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
@@ -1119,6 +1298,7 @@ def optimize_units():
         notes.extend(rent_resolution_notes)
         notes.extend(band_rules_notes)
         notes.extend(floor_spread_notes)
+        notes.extend(forty_rules_notes)
 
         # Optional: baseline run for learning compare (runs strict rules without overrides).
         baseline_scenarios = None
@@ -1166,6 +1346,11 @@ def optimize_units():
         timing["find_optimal_scenarios_ms"] = int(round((time.perf_counter() - solver_start) * 1000))
 
         if not scenarios or not scenarios.get('absolute_best'):
+            if forty_rules_status is not None:
+                notes.append(
+                    "Your 40% rules may be too tight for this building (pins, bedroom types or the per-floor cap "
+                    "together with the 40% share window). Open AMI Optix > 40% Rules and loosen or clear them."
+                )
             _emit_timing("no_solution", {"notes_count": int(len(notes or []))})
             return jsonify({
                 "success": False,
@@ -2713,6 +2898,9 @@ def optimize_units():
             # Floor-spread echo: requested / applied / reason / thirds, so the
             # Excel header can state exactly what this run enforced.
             project_summary["floor_spread"] = floor_spread_status
+        if forty_rules_status is not None:
+            # 40% Rules echo: exactly which owner decisions this run obeyed.
+            project_summary["forty_rules"] = forty_rules_status
         if mih_constraint_injected:
             project_summary["total_building_sf"] = total_building_sf
             # Effective 40% AMI window (post floor-walk) so Excel can render

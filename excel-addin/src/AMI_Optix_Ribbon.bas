@@ -1838,6 +1838,150 @@ Public Sub InvalidateBandControls()
     ' The floor-spread toggle is a cached pressed state: refresh it too.
     Call InvalidateRibbonControl("mnuBands")
     Call InvalidateRibbonControl("tglFloorSpread")
+    Call InvalidateRibbonControl("mnuFortyRules")
+End Sub
+
+'-------------------------------------------------------------------------------
+' RIBBON CALLBACKS - 40% RULES MENU (AMI_Optix_FortyRules, Fix 6)
+'-------------------------------------------------------------------------------
+
+Public Sub Ribbon_GetFortyMenuContent(control As IRibbonControl, ByRef returnedVal)
+    On Error GoTo Fail
+    returnedVal = AMI_Optix_FortyRules.BuildFortyMenuXml()
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_GetFortyMenuContent"
+    returnedVal = AMI_Optix_FortyRules.BuildFortyMenuXmlFallback()
+End Sub
+
+Public Sub Ribbon_FortyPinSelected(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim msg As String
+    If AMI_Optix_FortyRules.PinSelected(msg) Then
+        MsgBox msg, vbInformation, "AMI Optix - 40% Rules"
+    Else
+        MsgBox msg, vbExclamation, "AMI Optix - 40% Rules"
+    End If
+    DebugLog "Ribbon_FortyPinSelected: " & AMI_Optix_FortyRules.DescribeRulesShort(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyPinSelected"
+    MsgBox "Could not pin the selected units: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_FortyExcludeSelected(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim msg As String
+    If AMI_Optix_FortyRules.ExcludeSelected(msg) Then
+        MsgBox msg, vbInformation, "AMI Optix - 40% Rules"
+    Else
+        MsgBox msg, vbExclamation, "AMI Optix - 40% Rules"
+    End If
+    DebugLog "Ribbon_FortyExcludeSelected: " & AMI_Optix_FortyRules.DescribeRulesShort(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyExcludeSelected"
+    MsgBox "Could not exclude the selected units: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_FortyUnruleSelected(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim msg As String
+    If AMI_Optix_FortyRules.UnruleSelected(msg) Then
+        MsgBox msg, vbInformation, "AMI Optix - 40% Rules"
+    Else
+        MsgBox msg, vbExclamation, "AMI Optix - 40% Rules"
+    End If
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyUnruleSelected"
+    MsgBox "Could not update the selected units: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_GetFortyBedroomPressed(control As IRibbonControl, ByRef returnedVal)
+    On Error GoTo Fail
+    returnedVal = CBool(AMI_Optix_FortyRules.IsBedroomAllowed(CLng(Val(control.Tag))))
+    Exit Sub
+Fail:
+    returnedVal = True
+End Sub
+
+Public Sub Ribbon_ToggleFortyBedroom(control As IRibbonControl, pressed As Boolean)
+    On Error GoTo Fail
+    Dim why As String
+    why = AMI_Optix_FortyRules.ToggleBedroom(CLng(Val(control.Tag)), pressed)
+    If why <> "" Then MsgBox why, vbExclamation, "AMI Optix - 40% Rules"
+    DebugLog "Ribbon_ToggleFortyBedroom: bed=" & control.Tag & " pressed=" & pressed & " -> " & AMI_Optix_FortyRules.DescribeRulesShort(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_ToggleFortyBedroom"
+    MsgBox "Could not change the bedroom rule: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_GetFortyPerFloorPressed(control As IRibbonControl, ByRef returnedVal)
+    On Error GoTo Fail
+    returnedVal = (AMI_Optix_FortyRules.GetPerFloor() = CLng(Val(control.Tag)))
+    Exit Sub
+Fail:
+    returnedVal = False
+End Sub
+
+Public Sub Ribbon_SelectFortyPerFloor(control As IRibbonControl, pressed As Boolean)
+    ' Radio-style: checking N sets the cap to N; un-checking the current cap
+    ' clears it. The menu rebuilds on every drop so only one item shows checked.
+    On Error GoTo Fail
+    Dim n As Long
+    n = CLng(Val(control.Tag))
+    If pressed Then
+        AMI_Optix_FortyRules.SetPerFloor n
+    ElseIf AMI_Optix_FortyRules.GetPerFloor() = n Then
+        AMI_Optix_FortyRules.SetPerFloor 0
+    End If
+    DebugLog "Ribbon_SelectFortyPerFloor: " & AMI_Optix_FortyRules.DescribeRulesShort(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_SelectFortyPerFloor"
+    MsgBox "Could not change the per-floor rule: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_FortyShowRules(control As IRibbonControl)
+    On Error GoTo Fail
+    MsgBox "40% rules for this workbook:" & vbCrLf & vbCrLf & AMI_Optix_FortyRules.DescribeRules() & vbCrLf & _
+           "The optimizer finds the best rent within these rules.", vbInformation, "AMI Optix - 40% Rules"
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyShowRules"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_FortyClear(control As IRibbonControl)
+    On Error GoTo Fail
+    AMI_Optix_FortyRules.ClearAllRules
+    InvalidateBandControls
+    MsgBox "All 40% rules cleared for this workbook. The program decides which apartments are 40% again.", _
+           vbInformation, "AMI Optix - 40% Rules"
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyClear"
+    MsgBox "Could not clear the 40% rules: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_GetFloorSpreadPressed(control As IRibbonControl, ByRef returnedVal)
