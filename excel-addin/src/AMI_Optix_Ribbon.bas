@@ -1827,3 +1827,64 @@ Private Function FindYearInText(text As String) As Long
         End If
     Next y
 End Function
+
+'-------------------------------------------------------------------------------
+' RIBBON CALLBACKS - BANDS & FLOORS GROUP (AMI_Optix_Bands, Fix 4)
+'-------------------------------------------------------------------------------
+
+Public Sub InvalidateBandControls()
+    ' The AMI Bands menu rebuilds on every drop (invalidateContentOnDrop), but
+    ' an explicit invalidate keeps the ribbon in step right after a toggle.
+    Call InvalidateRibbonControl("mnuBands")
+End Sub
+
+Public Sub Ribbon_GetBandsMenuContent(control As IRibbonControl, ByRef returnedVal)
+    ' dynamicMenu getContent: menu XML generated per program/option.
+    On Error GoTo Fail
+    returnedVal = AMI_Optix_Bands.BuildBandsMenuXml()
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_GetBandsMenuContent"
+    returnedVal = AMI_Optix_Bands.BuildBandsMenuXmlFallback()
+End Sub
+
+Public Sub Ribbon_GetBandPressed(control As IRibbonControl, ByRef returnedVal)
+    ' checkBox getPressed: control.Tag carries the band percent (e.g. "60").
+    On Error GoTo Fail
+    returnedVal = CBool(AMI_Optix_Bands.IsBandAllowed(CLng(Val(control.Tag))))
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_GetBandPressed"
+    returnedVal = True
+End Sub
+
+Public Sub Ribbon_ToggleBand(control As IRibbonControl, pressed As Boolean)
+    ' checkBox onAction: apply the change, or explain why it was refused.
+    On Error GoTo Fail
+    Dim why As String
+    why = AMI_Optix_Bands.ToggleBand(CLng(Val(control.Tag)), pressed)
+    If why <> "" Then
+        MsgBox why, vbExclamation, "AMI Optix - AMI Bands"
+    End If
+    DebugLog "Ribbon_ToggleBand: band=" & control.Tag & " pressed=" & pressed & " -> " & AMI_Optix_Bands.DescribeSelection(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_ToggleBand"
+    MsgBox "Could not change the band selection: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_BandsAllowAll(control As IRibbonControl)
+    On Error GoTo Fail
+    AMI_Optix_Bands.ClearBandSelection
+    InvalidateBandControls
+    MsgBox "All AMI bands are allowed for this workbook again.", vbInformation, "AMI Optix - AMI Bands"
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_BandsAllowAll"
+    MsgBox "Could not reset the band selection: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub

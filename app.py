@@ -167,12 +167,98 @@ def _load_rent_schedule_cached(workbook_path: str) -> tuple[object | None, bool]
     return schedule, False
 
 
+def _normalize_allowed_bands(raw) -> list[int] | None:
+    """Parse the add-in's optional ``allowed_bands`` payload field.
+
+    Accepts a list of percents (40, 70, "80") or fractions (0.4, 0.7).
+    Returns a sorted, de-duplicated list of ints, or None when the field is
+    absent / empty / unusable (absent field == legacy behavior: every band the
+    program allows stays available).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out: set[int] = set()
+    for v in raw:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f <= 0:
+            continue
+        pct = int(round(f * 100)) if f <= 2.0 else int(round(f))
+        if pct <= 0:
+            continue
+        out.add(pct)
+    if not out:
+        return None
+    return sorted(out)
+
+
+def _apply_allowed_bands(rules: dict, program_norm: str, option_norm: str | None, allowed_bands: list[int] | None) -> None:
+    """Narrow ``rules['potential_bands']`` to the user's band selection.
+
+    Lock 2 of 3 for the band picker (lock 1 = ribbon validation, lock 3 = the
+    solver's own band domain). The selection can only NARROW the program's
+    candidate list - it can never add a band the program/option forbids, so
+    the client caps (100 for Option 1, 135 for Option 4) stay server-side.
+
+    Raises ValueError with a plain-English reason when the selection cannot
+    produce a legal scenario, so Excel shows it verbatim instead of silently
+    running with a different band set.
+    """
+    if allowed_bands is None:
+        rules['allowed_bands_source'] = 'default'
+        return
+
+    potential = [int(b) for b in (rules.get('potential_bands') or [])]
+    requested = sorted({int(b) for b in allowed_bands})
+    effective = [b for b in potential if b in requested]
+    ignored = [b for b in requested if b not in potential]
+
+    if program_norm == 'MIH' and option_norm == 'OPTION 1':
+        label = 'MIH Option 1'
+    elif program_norm == 'MIH' and option_norm == 'OPTION 4':
+        label = 'MIH Option 4'
+    else:
+        label = 'UAP'
+
+    # 40% AMI is mandatory wherever the program has a <=40% set-aside
+    # (Option 1's 10-12.5% window; UAP's 20-21% deep-affordability share).
+    # Option 4 (Workforce) has no 40% requirement, so it may be excluded there.
+    forty_required = not (program_norm == 'MIH' and option_norm == 'OPTION 4')
+    if forty_required and 40 not in effective:
+        raise ValueError(
+            f"40% AMI is required for {label} and cannot be excluded. "
+            "Open AMI Optix > AMI Bands and keep 40% checked."
+        )
+    if program_norm == 'MIH' and option_norm == 'OPTION 4':
+        if not any(b <= 70 for b in effective):
+            raise ValueError(
+                "MIH Option 4 needs at least one band at or below 70% AMI "
+                "(the 5% set-aside). Open AMI Optix > AMI Bands and allow 40%, 60% or 70%."
+            )
+    if len(effective) < 2:
+        have = ', '.join(f"{b}%" for b in effective) or 'none'
+        raise ValueError(
+            f"Your band selection leaves fewer than 2 usable bands for {label} ({have}). "
+            "Every scenario needs at least 2 bands. Open AMI Optix > AMI Bands and allow another band."
+        )
+
+    rules['potential_bands'] = effective
+    rules['allowed_bands_source'] = 'picker'
+    rules['allowed_bands_requested'] = requested
+    rules['allowed_bands_ignored'] = ignored
+
+
 def _build_program_config(
     base_config: dict,
     program: str,
     mih_option: str | None = None,
     mih_residential_sf: float | None = None,
     mih_max_band_percent: int | None = None,
+    allowed_bands: list[int] | None = None,
 ) -> dict:
     config = copy.deepcopy(base_config)
     rules = config.get('optimization_rules', {}) or {}
@@ -182,6 +268,7 @@ def _build_program_config(
         raise ValueError("Invalid program. Expected 'UAP' or 'MIH'.")
 
     if program_norm == 'UAP':
+        _apply_allowed_bands(rules, 'UAP', None, allowed_bands)
         config['optimization_rules'] = rules
         return config
 
@@ -250,6 +337,11 @@ def _build_program_config(
     max_band = min(int(mih_max_band_percent), MIH_HARD_BAND_CAP)
     candidate_bands = [40, 60, 70, 80, 90, 100, 110, 120, 130, 135]
     rules['potential_bands'] = [b for b in candidate_bands if b <= max_band and b != 50]
+
+    # Band picker (client feedback 2026-09-02): the add-in may send the bands
+    # the owner is willing to use. Applied AFTER the option cap so it can only
+    # narrow, never widen.
+    _apply_allowed_bands(rules, 'MIH', option_norm, allowed_bands)
 
     # Disable UAP-specific deep affordability defaults.
     rules['deep_affordability_min_share'] = None
@@ -763,6 +855,9 @@ def optimize_units():
         print(f"[MIH-DEBUG] raw project_overrides type={type(raw_po).__name__}, value={str(raw_po)[:200]}", flush=True)
         project_overrides = raw_po if isinstance(raw_po, dict) else None
         compare_baseline = bool(data.get('compare_baseline')) if data.get('compare_baseline') is not None else False
+        # Band picker (ribbon "AMI Bands" menu). Absent -> every band the
+        # program allows, exactly as before the picker existed.
+        allowed_bands = _normalize_allowed_bands(data.get('allowed_bands'))
 
         # Convert units to DataFrame (same format parser produces)
         df_units = pd.DataFrame(units)
@@ -792,6 +887,7 @@ def optimize_units():
                 mih_option=mih_option,
                 mih_residential_sf=mih_residential_sf,
                 mih_max_band_percent=mih_max_band_percent,
+                allowed_bands=allowed_bands,
             )
         except ValueError as e:
             _emit_timing("config_error", {"error": str(e)})
@@ -802,6 +898,25 @@ def optimize_units():
             }), 200
 
         program_norm = str(program or 'UAP').strip().upper()
+
+        # Echo the band rules this run was built with, so the Excel header can
+        # state them and a narrowed run can never look like a default run.
+        _br_rules = config.get('optimization_rules', {}) or {}
+        band_rules_echo = {
+            "source": _br_rules.get('allowed_bands_source') or 'default',
+            "allowed_bands": sorted(int(b) for b in (_br_rules.get('potential_bands') or [])),
+            "requested_bands": list(_br_rules.get('allowed_bands_requested') or []),
+            "ignored_bands": list(_br_rules.get('allowed_bands_ignored') or []),
+        }
+        band_rules_notes: list[str] = []
+        if band_rules_echo["source"] == 'picker':
+            _allowed_txt = ', '.join(f"{b}%" for b in band_rules_echo["allowed_bands"])
+            band_rules_notes.append(f"Built with your band rules: {_allowed_txt} (AMI Optix > AMI Bands).")
+            if band_rules_echo["ignored_bands"]:
+                _ign_txt = ', '.join(f"{b}%" for b in band_rules_echo["ignored_bands"])
+                band_rules_notes.append(
+                    f"Band(s) {_ign_txt} were checked but are not available for this program/option, so they were ignored."
+                )
 
         # Does this run have a <=40% AMI share requirement at all?
         # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
@@ -933,6 +1048,7 @@ def optimize_units():
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
         notes.extend(rent_resolution_notes)
+        notes.extend(band_rules_notes)
 
         # Optional: baseline run for learning compare (runs strict rules without overrides).
         baseline_scenarios = None
@@ -2492,6 +2608,9 @@ def optimize_units():
                 "program": (program or 'UAP'),
                 "mih_option": mih_option,
                 "mih_residential_sf": mih_residential_sf,
+                # Band picker echo: which bands this run could use and whether
+                # that came from the ribbon selection or the program default.
+                "band_rules": band_rules_echo,
         }
         if mih_constraint_injected:
             project_summary["total_building_sf"] = total_building_sf

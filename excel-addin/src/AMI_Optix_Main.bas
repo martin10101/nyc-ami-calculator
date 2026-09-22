@@ -419,6 +419,18 @@ Public Sub RunOptimizationForProgram(program As String)
     Dim projectOverridesJson As String
     projectOverridesJson = ""
 
+    ' Step 3D: Band picker preflight (AMI_Optix_Bands, Fix 4). Re-validates
+    ' the workbook's stored band selection against the program/option of
+    ' THIS run; a stale or unusable selection stops the run with a clear
+    ' message instead of silently running with different bands.
+    Dim bandMsg As String
+    bandMsg = ""
+    If Not AMI_Optix_Bands.ValidateSelectionForRun(programNorm, mihOption, bandMsg) Then
+        DebugLog "Band picker preflight stopped the run: " & bandMsg, True
+        MsgBox bandMsg, vbExclamation, "AMI Optix - AMI Bands"
+        GoTo Cleanup
+    End If
+
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."
     DebugLog "Step 4: Building request payload...", True

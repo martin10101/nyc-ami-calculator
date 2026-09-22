@@ -1,18 +1,25 @@
 <#
   Deploy-AmiOptixFixes.ps1
 
-  One-shot deploy for the current AMI Optix VBA fixes. Swaps ONLY the changed
-  modules into a copy of the Z: master AMI_Optix.xlam, then installs it to this
-  PC. The form and ribbon are never touched. The master is backed up and only
-  replaced after every module is patched AND verified.
+  One-shot deploy for the current AMI Optix fixes. Swaps ONLY the changed
+  modules into a copy of the Z: master AMI_Optix.xlam, replaces the ribbon
+  XML part (customUI/customUI14.xml) inside that copy, then installs it to
+  this PC. The Utilities form is never touched. The master is backed up and
+  only replaced after every module AND the ribbon XML are patched and verified.
 
-  Modules applied (pinned to commit 748a7b0):
+  Modules applied (pinned to $Commit below):
     - AMI_Optix_AppEvents      AMI edits never write -> native Ctrl+Z restored
                                (also subsumes the paste FLOOR/BED/NET SF fix)
     - AMI_Optix_ResultsWriter  all prior fixes + client feedback 2026-09-02:
                                methodology legend removed; extra-40% group
-                               relabeled FOR REFERENCE ONLY
+                               relabeled FOR REFERENCE ONLY; band-rules header
     - AMI_Optix_EventHooks     OnKey reset no longer crashes (1004) + logging
+    - AMI_Optix_Baseline       YOUR ORIGINAL INPUT snapshot (Fix 3)
+    - AMI_Optix_Main / API     baseline hook, band-picker preflight + payload
+    - AMI_Optix_Bands          band picker rules + menu XML (Fix 4)
+    - AMI_Optix_Ribbon         AMI Bands menu callbacks (Fix 4)
+  Ribbon XML applied:
+    - customUI/customUI14.xml  new "Bands & Floors" group (AMI Bands menu)
 
   Run on a client PC that has the Z: drive mapped and Excel installed:
     irm <raw-url-to-this-script> | iex
@@ -37,8 +44,17 @@ $Modules = @(
     @{ Name = 'AMI_Optix_EventHooks';    Path = 'excel-addin/src/AMI_Optix_EventHooks.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_EventHooks.bas');    Marker = 'SafeResetCtrlZ' }
     @{ Name = 'AMI_Optix_Baseline';      Path = 'excel-addin/src/AMI_Optix_Baseline.bas';      Temp = (Join-Path $env:TEMP 'AMI_Optix_Baseline.bas');      Marker = 'BASELINE_V1' }
     @{ Name = 'AMI_Optix_Main';          Path = 'excel-addin/src/AMI_Optix_Main.bas';          Temp = (Join-Path $env:TEMP 'AMI_Optix_Main.bas');          Marker = 'EnsureBaselineAndTag units' }
-    @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'original_ami' }
+    @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'allowed_bands' }
+    @{ Name = 'AMI_Optix_Bands';         Path = 'excel-addin/src/AMI_Optix_Bands.bas';         Temp = (Join-Path $env:TEMP 'AMI_Optix_Bands.bas');         Marker = 'AMI_OPTIX_BANDS_V1' }
+    @{ Name = 'AMI_Optix_Ribbon';        Path = 'excel-addin/src/AMI_Optix_Ribbon.bas';        Temp = (Join-Path $env:TEMP 'AMI_Optix_Ribbon.bas');        Marker = 'Ribbon_GetBandsMenuContent' }
 )
+
+# Ribbon XML part inside the .xlam (an .xlam is a zip package). Replaced AFTER
+# the COM module swap, verified, and only then promoted with the modules.
+$RibbonPath   = 'excel-addin/customUI/customUI14.xml'
+$RibbonEntry  = 'customUI/customUI14.xml'
+$RibbonTemp   = Join-Path $env:TEMP 'AMI_Optix_customUI14.xml'
+$RibbonMarker = 'mnuBands'
 
 function Fail($msg) { Write-Host "FAILED: $msg" -ForegroundColor Red; exit 1 }
 
@@ -60,6 +76,17 @@ foreach ($m in $Modules) {
     }
 }
 
+# Ribbon XML: must be well-formed (Excel silently drops the whole tab on a
+# malformed part) and must carry the marker of the version we expect.
+Invoke-WebRequest -Uri "$BaseUrl/$RibbonPath" -OutFile $RibbonTemp -UseBasicParsing
+$ribbonXmlText = [IO.File]::ReadAllText($RibbonTemp)
+$ribbonXmlText = $ribbonXmlText.TrimStart([char]0xFEFF)
+if ($ribbonXmlText -notmatch [regex]::Escape($RibbonMarker)) { Fail 'Downloaded ribbon XML is missing its fix marker.' }
+try { [xml]$ribbonProbe = $ribbonXmlText } catch { Fail "Downloaded ribbon XML is not well-formed: $($_.Exception.Message)" }
+if ($ribbonProbe.DocumentElement.NamespaceURI -ne 'http://schemas.microsoft.com/office/2009/07/customui') {
+    Fail 'Downloaded ribbon XML is not an Office 2010+ customUI part.'
+}
+
 # --- 2) Enable programmatic VBA access (needed to import modules) ---------
 Get-ChildItem 'HKCU:\Software\Microsoft\Office' -ErrorAction SilentlyContinue |
   Where-Object { $_.PSChildName -match '^\d+\.\d+$' } |
@@ -76,7 +103,7 @@ Get-Process excel -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorActi
 Start-Sleep -Seconds 1
 
 # --- 4) Patch a TEMP copy of the master ----------------------------------
-Write-Host 'Patching add-in (form & ribbon untouched)...' -ForegroundColor Cyan
+Write-Host 'Patching add-in modules (form untouched)...' -ForegroundColor Cyan
 Copy-Item $Master $tmpXlam -Force
 
 $xl = $null; $wb = $null
@@ -123,6 +150,57 @@ finally {
     if ($wb) { [Runtime.InteropServices.Marshal]::ReleaseComObject($wb) | Out-Null }
     if ($xl) { [Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null }
 }
+[GC]::Collect(); [GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 1
+
+# --- 4b) Replace the ribbon XML part inside the patched copy --------------
+# The .xlam is a zip package; Excel keeps the customUI part intact across the
+# COM save above, so we swap it here with .NET zip APIs (no OfficeRibbonXEditor
+# needed). Nothing is promoted unless the part reads back with the marker.
+Write-Host 'Replacing ribbon XML (customUI14.xml)...' -ForegroundColor Cyan
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = $null
+try {
+    $zip = [System.IO.Compression.ZipFile]::Open($tmpXlam, [System.IO.Compression.ZipArchiveMode]::Update)
+    $entry = $null
+    foreach ($e in @($zip.Entries)) { if ($e.FullName -ieq $RibbonEntry) { $entry = $e; break } }
+    if ($null -eq $entry) {
+        throw "The add-in has no $RibbonEntry part. Open the master once in OfficeRibbonXEditor, insert an 'Office 2010+ Custom UI Part', save, then re-run."
+    }
+    $entryName = $entry.FullName
+    $entry.Delete()
+    $newEntry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+    $stream = $newEntry.Open()
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($ribbonXmlText)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Dispose()
+    $zip.Dispose(); $zip = $null
+}
+catch {
+    if ($zip) { try { $zip.Dispose() } catch {} }
+    Fail "Ribbon XML replace failed: $($_.Exception.Message)"
+}
+
+# Verify by reading the part back out of the patched file.
+try {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($tmpXlam)
+    $entry = $null
+    foreach ($e in @($zip.Entries)) { if ($e.FullName -ieq $RibbonEntry) { $entry = $e; break } }
+    if ($null -eq $entry) { throw 'part missing after replace' }
+    $reader = New-Object IO.StreamReader($entry.Open())
+    $check = $reader.ReadToEnd()
+    $reader.Dispose()
+    $zip.Dispose(); $zip = $null
+    if ($check -notmatch [regex]::Escape($RibbonMarker)) { throw 'marker not found after replace' }
+    $checkProbe = [xml]$check
+    if ($null -eq $checkProbe.DocumentElement) { throw 'part is not XML after replace' }
+    Write-Host '  patched customUI14.xml' -ForegroundColor DarkGray
+}
+catch {
+    if ($zip) { try { $zip.Dispose() } catch {} }
+    Fail "Ribbon XML verification failed: $($_.Exception.Message)"
+}
 
 # --- 5) Back up the master, then promote the patched copy ----------------
 Copy-Item $Master "$Master.bak" -Force          # rollback copy on Z:
@@ -131,7 +209,8 @@ Copy-Item $tmpXlam $Local  -Force               # this PC's installed add-in
 Unblock-File $Local
 
 Write-Host ''
-Write-Host 'SUCCESS - both fixes applied.' -ForegroundColor Green
+Write-Host 'SUCCESS - modules + ribbon applied.' -ForegroundColor Green
 Write-Host "  - Z: master updated:  $Master   (backup: $Master.bak)"
 Write-Host "  - This PC updated:    $Local"
-Write-Host 'Reopen Excel. Other PCs: just re-copy from Z: (close Excel first).'
+Write-Host 'Reopen Excel: the AMI Optix tab should now show a "Bands & Floors" group.'
+Write-Host 'Other PCs: just re-copy from Z: (close Excel first).'

@@ -601,6 +601,15 @@ Public Function BuildAPIPayloadV2( _
         End If
     End If
 
+    ' Band picker (AMI_Optix_Bands, Fix 4): sent only when the user narrowed
+    ' the bands for this workbook. Absent field = server default (all bands
+    ' the program allows) - identical to the pre-picker behavior.
+    Dim allowedBandsJson As String
+    allowedBandsJson = AMI_Optix_Bands.AllowedBandsJsonArray()
+    If allowedBandsJson <> "" Then
+        json = json & """allowed_bands"": " & allowedBandsJson & ", "
+    End If
+
     ' Units array
     json = json & """units"": ["
     For i = 1 To units.Count

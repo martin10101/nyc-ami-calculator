@@ -1796,6 +1796,8 @@ AfterRent:
     If selectedYear > 0 Then
         row = WriteRentRollYearLine(ws, row, CStr(selectedYear) & " (local)")
     End If
+    ' Band picker echo from the last optimize response (survives local refresh).
+    row = WriteBandRulesLine(ws, row, Nothing)
     row = row + 1
 
     ' At-a-glance index of all scenarios (survives year switches / AMI edits).
@@ -3005,6 +3007,56 @@ Private Function ResolveRentYearLabelFromResponse(resp As Object) As String
     ResolveRentYearLabelFromResponse = label
 End Function
 
+Private Function WriteBandRulesLine(ws As Worksheet, startRow As Long, resp As Object) As Long
+    ' Band picker echo (AMI_Optix_Bands, Fix 4). Written ONLY when the run was
+    ' built with a narrowed band list (project_summary.band_rules.source =
+    ' "picker"), so a restricted run can never be mistaken for a default run
+    ' and the default sheet stays byte-identical to before the picker.
+    ' Local-refresh writers pass Nothing: the line is then taken from the last
+    ' optimize response so it survives Manual Calculate / year changes.
+    WriteBandRulesLine = startRow
+    On Error GoTo Done
+    Dim src As Object
+    Set src = resp
+    If src Is Nothing Then Set src = g_LastScenarios
+    If src Is Nothing Then Exit Function
+    If Not src.Exists("project_summary") Then Exit Function
+    Dim ps As Object
+    Set ps = src("project_summary")
+    If ps Is Nothing Then Exit Function
+    If Not ps.Exists("band_rules") Then Exit Function
+    Dim br As Object
+    Set br = ps("band_rules")
+    If br Is Nothing Then Exit Function
+    If Not br.Exists("source") Then Exit Function
+    If LCase$(Trim$(CStr(br("source")))) <> "picker" Then Exit Function
+
+    Dim txt As String
+    txt = ""
+    If br.Exists("allowed_bands") Then
+        Dim arr As Object
+        Set arr = Nothing
+        On Error Resume Next
+        Set arr = br("allowed_bands")
+        On Error GoTo Done
+        If Not arr Is Nothing Then
+            Dim i As Long
+            For i = 1 To arr.Count
+                If txt <> "" Then txt = txt & ", "
+                txt = txt & Format(arr(i), "0") & "%"
+            Next i
+        End If
+    End If
+    If txt = "" Then Exit Function
+
+    ws.Cells(startRow, 1).Value = "AMI Bands Allowed:"
+    ws.Cells(startRow, 1).Font.Bold = True
+    ws.Cells(startRow, 2).Value = txt & "  (your selection - AMI Optix > AMI Bands)"
+    ws.Cells(startRow, 2).Font.Bold = True
+    WriteBandRulesLine = startRow + 1
+Done:
+End Function
+
 Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object) As Long
     ClearManualBlock ws
 
@@ -3019,6 +3071,8 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     ' Rent-roll year guardrail: always show which rent table priced these
     ' results. A 2025-vs-2026 mismatch must never be invisible again.
     row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(result))
+    ' Band picker echo: which bands this run was allowed to use (only when narrowed).
+    row = WriteBandRulesLine(ws, row, result)
     row = row + 1
 
     Dim scenarioKey As String

@@ -23,6 +23,15 @@
                   onAction="Ribbon_ViewScenarios"
                   supertip="View and apply different optimization scenarios from the last solver run."/>
         </group>
+        <group id="grpBands" label="Bands &amp; Floors">
+          <dynamicMenu id="mnuBands"
+                       label="AMI Bands"
+                       size="large"
+                       imageMso="FilterBySelection"
+                       getContent="Ribbon_GetBandsMenuContent"
+                       invalidateContentOnDrop="true"
+                       supertip="Choose which AMI bands the optimizer may use for THIS workbook (e.g. uncheck 60%). The list adapts to the program and MIH option; 40% stays on where the program requires it. Saved inside the workbook."/>
+        </group>
         <group id="grpRentRoll" label="Rent Roll">
           <dropDown id="ddRentRollYear"
                     label="Rent Roll Year"
