@@ -1796,8 +1796,9 @@ AfterRent:
     If selectedYear > 0 Then
         row = WriteRentRollYearLine(ws, row, CStr(selectedYear) & " (local)")
     End If
-    ' Band picker echo from the last optimize response (survives local refresh).
+    ' Band picker / floor-spread echo from the last optimize response (survives local refresh).
     row = WriteBandRulesLine(ws, row, Nothing)
+    row = WriteFloorSpreadLine(ws, row, Nothing)
     row = row + 1
 
     ' At-a-glance index of all scenarios (survives year switches / AMI edits).
@@ -3057,6 +3058,170 @@ Private Function WriteBandRulesLine(ws As Worksheet, startRow As Long, resp As O
 Done:
 End Function
 
+Private Function WriteFloorSpreadLine(ws As Worksheet, startRow As Long, resp As Object) As Long
+    ' Floor-spread echo (Fix 5). Written ONLY when the run requested the rule
+    ' (project_summary.floor_spread present): states whether it was enforced
+    ' and the floor thirds used, or why it was skipped / fell back. Local
+    ' writers pass Nothing -> taken from the last optimize response.
+    WriteFloorSpreadLine = startRow
+    On Error GoTo Done
+    Dim src As Object
+    Set src = resp
+    If src Is Nothing Then Set src = g_LastScenarios
+    If src Is Nothing Then Exit Function
+    If Not src.Exists("project_summary") Then Exit Function
+    Dim ps As Object
+    Set ps = src("project_summary")
+    If ps Is Nothing Then Exit Function
+    If Not ps.Exists("floor_spread") Then Exit Function
+    Dim fs As Object
+    Set fs = Nothing
+    On Error Resume Next
+    Set fs = ps("floor_spread")
+    On Error GoTo Done
+    If fs Is Nothing Then Exit Function
+
+    Dim applied As Boolean
+    applied = False
+    If fs.Exists("applied") Then applied = CBool(fs("applied"))
+
+    Dim txt As String
+    If applied Then
+        Dim minUnits As String
+        minUnits = "3"
+        If fs.Exists("min_units_per_band") Then minUnits = Format(fs("min_units_per_band"), "0")
+        Dim ranges As String
+        ranges = ""
+        If fs.Exists("thirds") Then
+            Dim thirds As Object
+            Set thirds = Nothing
+            On Error Resume Next
+            Set thirds = fs("thirds")
+            On Error GoTo Done
+            If Not thirds Is Nothing Then
+                Dim i As Long
+                For i = 1 To thirds.Count
+                    Dim t As Object
+                    Set t = thirds(i)
+                    If Not t Is Nothing Then
+                        If ranges <> "" Then ranges = ranges & ", "
+                        ranges = ranges & CStr(t("label")) & " " & Format(t("min_floor"), "0") & "-" & Format(t("max_floor"), "0")
+                    End If
+                Next i
+            End If
+        End If
+        txt = "ON - every band with " & minUnits & "+ apartments has one on the " & ranges & " floors"
+    Else
+        txt = "requested but not applied"
+        If fs.Exists("reason") Then
+            If Trim$(CStr(fs("reason"))) <> "" Then txt = txt & ": " & Trim$(CStr(fs("reason")))
+        End If
+    End If
+
+    ws.Cells(startRow, 1).Value = "Floor Spread:"
+    ws.Cells(startRow, 1).Font.Bold = True
+    ws.Cells(startRow, 2).Value = txt
+    ws.Cells(startRow, 2).Font.Bold = True
+    WriteFloorSpreadLine = startRow + 1
+Done:
+End Function
+
+Private Function WriteFloorSpreadTable(ws As Worksheet, startRow As Long, scenario As Object) As Long
+    ' Per-scenario reviewer view (Fix 5): apartments per band on the lower /
+    ' middle / upper floors - exactly what the HPD reviewer reads off the
+    ' stacking chart - plus whether the thirds rule holds for THIS scenario.
+    ' Present only when the run requested the rule (scenario.floor_spread).
+    WriteFloorSpreadTable = startRow
+    On Error GoTo Done
+    If scenario Is Nothing Then Exit Function
+    If Not scenario.Exists("floor_spread") Then Exit Function
+    Dim fs As Object
+    Set fs = Nothing
+    On Error Resume Next
+    Set fs = scenario("floor_spread")
+    On Error GoTo Done
+    If fs Is Nothing Then Exit Function
+    If Not fs.Exists("thirds") Or Not fs.Exists("bands") Then Exit Function
+
+    Dim bands As Object
+    Dim thirds As Object
+    Set bands = fs("bands")
+    Set thirds = fs("thirds")
+    If bands Is Nothing Or thirds Is Nothing Then Exit Function
+    If bands.Count = 0 Or thirds.Count = 0 Then Exit Function
+
+    Dim row As Long
+    row = startRow + 1
+
+    ws.Cells(row, 1).Value = "Floor Spread (HPD reviewer view):"
+    ws.Cells(row, 1).Font.Bold = True
+    Dim ok As Boolean
+    ok = False
+    If fs.Exists("satisfied") Then ok = CBool(fs("satisfied"))
+    ws.Cells(row, 2).Value = IIf(ok, "Rule satisfied: Yes", "Rule satisfied: NO")
+    ws.Cells(row, 2).Font.Bold = True
+    If Not ok Then ws.Cells(row, 2).Font.Color = RGB(192, 0, 0)
+    row = row + 1
+
+    ' Header: Floors | 40% | 70% | ... | Total
+    ws.Cells(row, 1).Value = "Floors"
+    Dim b As Long
+    For b = 1 To bands.Count
+        ws.Cells(row, 1 + b).Value = Format(bands(b), "0") & "%"
+    Next b
+    ws.Cells(row, 2 + bands.Count).Value = "Total"
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2 + bands.Count)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 2 + bands.Count)).Interior.Color = RGB(230, 230, 230)
+    row = row + 1
+
+    Dim i As Long
+    For i = thirds.Count To 1 Step -1   ' upper floors first, like a stacking chart
+        Dim t As Object
+        Set t = thirds(i)
+        If Not t Is Nothing Then
+            Dim lbl As String
+            lbl = CStr(t("label"))
+            lbl = UCase$(Left$(lbl, 1)) & Mid$(lbl, 2)
+            ws.Cells(row, 1).Value = lbl & " (" & Format(t("min_floor"), "0") & "-" & Format(t("max_floor"), "0") & ")"
+            Dim byBand As Object
+            Set byBand = Nothing
+            On Error Resume Next
+            Set byBand = t("by_band")
+            On Error GoTo Done
+            For b = 1 To bands.Count
+                Dim cnt As Long
+                cnt = 0
+                If Not byBand Is Nothing Then
+                    If byBand.Exists(Format(bands(b), "0")) Then cnt = CLng(byBand(Format(bands(b), "0")))
+                End If
+                ws.Cells(row, 1 + b).Value = cnt
+            Next b
+            If t.Exists("units") Then ws.Cells(row, 2 + bands.Count).Value = CLng(t("units"))
+            row = row + 1
+        End If
+    Next i
+
+    ' Why it fails (when it does) - the reviewer's exact objection.
+    If Not ok And fs.Exists("missing") Then
+        Dim missing As Object
+        Set missing = Nothing
+        On Error Resume Next
+        Set missing = fs("missing")
+        On Error GoTo Done
+        If Not missing Is Nothing Then
+            Dim m As Long
+            For m = 1 To Application.Min(4, missing.Count)
+                ws.Cells(row, 1).Value = "- " & CStr(missing(m))
+                ws.Cells(row, 1).Font.Color = RGB(192, 0, 0)
+                row = row + 1
+            Next m
+        End If
+    End If
+
+    WriteFloorSpreadTable = row
+Done:
+End Function
+
 Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As Object) As Long
     ClearManualBlock ws
 
@@ -3073,6 +3238,8 @@ Private Function WriteManualScenarioBlockFromResult(ws As Worksheet, result As O
     row = WriteRentRollYearLine(ws, row, ResolveRentYearLabelFromResponse(result))
     ' Band picker echo: which bands this run was allowed to use (only when narrowed).
     row = WriteBandRulesLine(ws, row, result)
+    ' Floor-spread echo: what the run enforced (only when the rule was requested).
+    row = WriteFloorSpreadLine(ws, row, result)
     row = row + 1
 
     Dim scenarioKey As String
@@ -3899,6 +4066,10 @@ Private Function WriteScenarioSummaryAndTable(ws As Worksheet, startRow As Long,
             row = WriteMihComplianceLines(ws, row, bandMix)
         End If
     End If
+
+    ' Floor-spread reviewer view for THIS scenario (Fix 5; only when the run
+    ' requested the rule - otherwise the block is byte-identical to before).
+    row = WriteFloorSpreadTable(ws, row, scenario)
 
     If scenario.Exists("rent_totals") Then
         Dim rentTotals As Object

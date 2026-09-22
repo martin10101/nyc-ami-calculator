@@ -29,6 +29,47 @@ Private Const BANDS_NAME As String = "AMI_Optix_AllowedBands"
 Private Const ALL_BANDS As String = "40,60,70,80,90,100,110,120,130,135"
 Private Const CUSTOMUI_NS As String = "http://schemas.microsoft.com/office/2009/07/customui"
 
+' Floor-spread rule (Fix 5, ribbon toggle "Spread Across Floors"). Stored per
+' workbook as AMI_Optix_FloorSpread = "1"/"0". Unset = ON for MIH workbooks
+' (the HPD reviewer test that rejected Building D options 1-4), OFF for UAP.
+Private Const FLOOR_SPREAD_NAME As String = "AMI_Optix_FloorSpread"
+
+Public Function GetFloorSpreadEnabled() As Boolean
+    On Error GoTo Fallback
+    Dim wb As Workbook
+    Set wb = TargetWorkbook()
+    If wb Is Nothing Then GoTo Fallback
+
+    Dim nm As Name
+    Set nm = Nothing
+    On Error Resume Next
+    Set nm = wb.Names(FLOOR_SPREAD_NAME)
+    On Error GoTo Fallback
+    If nm Is Nothing Then GoTo Fallback
+
+    Dim raw As String
+    raw = CStr(nm.RefersTo)
+    raw = Replace(raw, "=", "")
+    raw = Replace(raw, """", "")
+    GetFloorSpreadEnabled = (Trim$(raw) = "1")
+    Exit Function
+Fallback:
+    On Error Resume Next
+    GetFloorSpreadEnabled = (DetectProgramFromWorkbook() = "MIH")
+End Function
+
+Public Sub SetFloorSpreadEnabled(enabled As Boolean)
+    On Error GoTo Done
+    Dim wb As Workbook
+    Set wb = TargetWorkbook()
+    If wb Is Nothing Then Exit Sub
+    On Error Resume Next
+    wb.Names(FLOOR_SPREAD_NAME).Delete
+    On Error GoTo Done
+    wb.Names.Add Name:=FLOOR_SPREAD_NAME, RefersTo:="=""" & IIf(enabled, "1", "0") & """", Visible:=False
+Done:
+End Sub
+
 '-------------------------------------------------------------------------------
 ' Context: what program/option is this workbook, and what bands does it allow?
 '-------------------------------------------------------------------------------

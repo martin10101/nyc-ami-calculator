@@ -430,6 +430,12 @@ Public Sub RunOptimizationForProgram(program As String)
         MsgBox bandMsg, vbExclamation, "AMI Optix - AMI Bands"
         GoTo Cleanup
     End If
+    DebugLog "Band rules for this run: " & AMI_Optix_Bands.DescribeSelection() & _
+             "; floor spread=" & IIf(AMI_Optix_Bands.GetFloorSpreadEnabled(), "ON", "OFF"), True
+    ' Refresh the ribbon's cached band/floor controls for the active workbook.
+    On Error Resume Next
+    AMI_Optix_Ribbon.InvalidateBandControls
+    On Error GoTo ErrorHandler
 
     ' Step 4: Build API payload
     Application.StatusBar = "AMI Optix: Building request..."

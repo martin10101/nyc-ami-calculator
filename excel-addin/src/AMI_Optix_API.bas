@@ -610,6 +610,10 @@ Public Function BuildAPIPayloadV2( _
         json = json & """allowed_bands"": " & allowedBandsJson & ", "
     End If
 
+    ' Floor-spread rule (AMI_Optix_Bands, Fix 5): explicit true/false from the
+    ' ribbon toggle. false = server runs exactly as before the rule existed.
+    json = json & """floor_spread"": " & IIf(AMI_Optix_Bands.GetFloorSpreadEnabled(), "true", "false") & ", "
+
     ' Units array
     json = json & """units"": ["
     For i = 1 To units.Count

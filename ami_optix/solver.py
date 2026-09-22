@@ -159,6 +159,125 @@ def _assignments_to_canonical(assignments: List[Dict[str, Any]]) -> tuple:
     ))
 
 
+# ---------------------------------------------------------------------------
+# Floor-spread rule (client feedback 2026-09-02, Fix 5)
+#
+# HPD Design Guidelines 2026 s4.1.4-4.1.6: income bands "must be distributed
+# throughout the building ... both horizontally and vertically". No numeric
+# rule exists, so we encode the reviewer's test: split the floors spanned by
+# the affordable pool into lower/middle/upper thirds; every band with >= N
+# units (default 3) must place at least one unit in each third. 1-2 unit
+# bands are exempt ("to the maximum extent feasible"). Regulated rent is
+# band + bedrooms only, so the rule is rent-neutral except through the SF
+# share quotas.
+# ---------------------------------------------------------------------------
+
+FLOOR_SPREAD_DEFAULT_MIN_UNITS = 3
+
+
+def floor_spread_rule_from(raw: Any) -> Optional[Dict[str, int]]:
+    """Normalize the optional ``floor_spread`` request field / rule.
+
+    True -> default rule; {'min_units_per_band': n} -> custom threshold;
+    anything falsy/unusable -> None (rule off, byte-identical legacy behavior).
+    """
+    if not raw:
+        return None
+    min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
+    if isinstance(raw, dict):
+        try:
+            min_units = int(raw.get('min_units_per_band', FLOOR_SPREAD_DEFAULT_MIN_UNITS))
+        except (TypeError, ValueError):
+            min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
+    return {'min_units_per_band': max(1, min_units)}
+
+
+def floor_thirds(df_affordable: pd.DataFrame) -> Optional[List[Dict[str, Any]]]:
+    """Cut the floors spanned by the pool into lower / middle / upper thirds.
+
+    Cut by DISTINCT floor numbers (HPD stacking charts are per story), any
+    remainder going to the upper thirds (pool floors 3-19 -> 3-7 / 8-13 /
+    14-19, which is exactly the split Rachel's reviewer used). Returns None
+    when there is no floor column or fewer than 3 distinct floors. Units with
+    no floor value belong to no third and are never constrained.
+    """
+    if df_affordable is None or 'floor' not in df_affordable.columns:
+        return None
+    floors = pd.to_numeric(df_affordable['floor'], errors='coerce')
+    distinct = sorted({int(round(float(v))) for v in floors.dropna().tolist()})
+    if len(distinct) < 3:
+        return None
+    base, rem = divmod(len(distinct), 3)
+    sizes = [base + (1 if k >= 3 - rem else 0) for k in range(3)]
+    labels = ['lower', 'middle', 'upper']
+    floor_list = floors.tolist()
+    thirds: List[Dict[str, Any]] = []
+    pos = 0
+    for k in range(3):
+        group = distinct[pos:pos + sizes[k]]
+        pos += sizes[k]
+        lo, hi = int(group[0]), int(group[-1])
+        indices = [
+            i for i, v in enumerate(floor_list)
+            if pd.notna(v) and lo <= int(round(float(v))) <= hi
+        ]
+        thirds.append({'label': labels[k], 'min_floor': lo, 'max_floor': hi, 'indices': indices})
+    return thirds
+
+
+def floor_spread_summary(
+    assignments: List[Dict[str, Any]],
+    thirds: Optional[List[Dict[str, Any]]],
+    min_units_per_band: int = FLOOR_SPREAD_DEFAULT_MIN_UNITS,
+) -> Optional[Dict[str, Any]]:
+    """Reviewer view for one finished scenario: units per band per third, plus
+    whether the thirds rule holds. Computed post-hoc from the assignments'
+    own floor values, so it is honest even for scenarios solved without the
+    rule (the fallback path)."""
+    if not thirds or not assignments:
+        return None
+    bands = sorted({int(round(float(u['assigned_ami']) * 100)) for u in assignments})
+    counts: Dict[str, Dict[int, int]] = {t['label']: {b: 0 for b in bands} for t in thirds}
+    band_totals: Dict[int, int] = {b: 0 for b in bands}
+    for u in assignments:
+        b = int(round(float(u['assigned_ami']) * 100))
+        band_totals[b] += 1
+        f = u.get('floor')
+        try:
+            if f is None or pd.isna(f):
+                continue
+            fi = int(round(float(f)))
+        except (TypeError, ValueError):
+            continue
+        for t in thirds:
+            if t['min_floor'] <= fi <= t['max_floor']:
+                counts[t['label']][b] += 1
+                break
+    missing: List[str] = []
+    for b in bands:
+        if band_totals[b] < min_units_per_band:
+            continue
+        for t in thirds:
+            if counts[t['label']][b] == 0:
+                missing.append(f"{b}% AMI has no unit on the {t['label']} floors ({t['min_floor']}-{t['max_floor']})")
+    return {
+        'satisfied': not missing,
+        'min_units_per_band': int(min_units_per_band),
+        'bands': bands,
+        'thirds': [
+            {
+                'label': t['label'],
+                'min_floor': t['min_floor'],
+                'max_floor': t['max_floor'],
+                'units': sum(counts[t['label']].values()),
+                'by_band': {str(b): counts[t['label']][b] for b in bands},
+            }
+            for t in thirds
+        ],
+        'missing': missing,
+    }
+
+
 def _solve_single_scenario(
     df_affordable: pd.DataFrame,
     bands_to_test: List[int],
@@ -328,6 +447,28 @@ def _solve_single_scenario(
             if match_terms:
                 model.Add(sum(match_terms) <= max_matches)
 
+    # Optional: floor-spread rule (Fix 5). Every band that ends up with at
+    # least `min_units_per_band` units must place >= 1 unit in each floor
+    # third of the pool. Off (rule absent / no floor data / < 3 floors) =
+    # identical model to before. Infeasible under the rule = NO_SOLUTION for
+    # this combo; the API falls back honestly (rule off + note) only when no
+    # combo at all satisfies it.
+    spread_thirds: Optional[List[Dict[str, Any]]] = None
+    spread_rule = floor_spread_rule_from(optimization_rules.get('floor_spread'))
+    if spread_rule:
+        spread_thirds = floor_thirds(df_affordable)
+        if spread_thirds:
+            spread_min_units = int(spread_rule['min_units_per_band'])
+            for j in range(num_bands):
+                band_count_expr = sum(x[i][j] for i in range(num_units))
+                is_big_band = model.NewBoolVar(f'spread_big_{j}')
+                model.Add(band_count_expr >= spread_min_units).OnlyEnforceIf(is_big_band)
+                model.Add(band_count_expr <= spread_min_units - 1).OnlyEnforceIf(is_big_band.Not())
+                for third in spread_thirds:
+                    if not third['indices']:
+                        continue
+                    model.Add(sum(x[i][j] for i in third['indices']) >= 1).OnlyEnforceIf(is_big_band)
+
     objective_mode_norm = (objective_mode or "waami").strip().lower()
     primary_var = total_ami_sf_var
     if objective_mode_norm == "waami":
@@ -424,7 +565,22 @@ def _solve_single_scenario(
                     for i in range(num_units)
                     for j in low_band_indices
                 )
-                model.Minimize(low_floor_expr)
+                if spread_thirds:
+                    # Floor-spread ON: instead of sinking the 40% units to the
+                    # lowest floors, keep their average floor as close as
+                    # possible to the pool's average floor (HPD "distributed
+                    # throughout the building"). Still a free tie-break among
+                    # equal-rent optima.
+                    pool_avg_floor_int = int(round(float(floor_series.mean()) * 100))
+                    low_count_expr = sum(
+                        x[i][j] for i in range(num_units) for j in low_band_indices
+                    )
+                    max_dev = int(floor_ints.abs().sum()) + 1
+                    floor_dev = model.NewIntVar(0, max_dev, 'low_band_floor_dev')
+                    model.AddAbsEquality(floor_dev, low_floor_expr - low_count_expr * pool_avg_floor_int)
+                    model.Minimize(floor_dev)
+                else:
+                    model.Minimize(low_floor_expr)
                 tiebreak_limit = 0.25
                 if time_limit_seconds is not None:
                     tiebreak_limit = min(tiebreak_limit, float(time_limit_seconds))

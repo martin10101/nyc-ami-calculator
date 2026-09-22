@@ -16,6 +16,7 @@ from ami_optix.narrator import generate_internal_summary
 from ami_optix.report_generator import create_excel_reports
 from ami_optix.config_loader import load_config
 from ami_optix.solver import find_optimal_scenarios, find_max_revenue_scenario, _build_metrics
+from ami_optix.solver import floor_spread_rule_from, floor_thirds, floor_spread_summary
 from ami_optix.rent_calculator import load_rent_schedule, compute_rents_for_assignments
 
 app = Flask(__name__)
@@ -918,6 +919,40 @@ def optimize_units():
                     f"Band(s) {_ign_txt} were checked but are not available for this program/option, so they were ignored."
                 )
 
+        # Floor-spread rule (Fix 5, ribbon "Spread Across Floors"): opt-in per
+        # request. Applied only when the pool has floor data spanning >= 3
+        # distinct floors. Absent/false -> no rule and no metadata (legacy).
+        floor_spread_rule = floor_spread_rule_from(data.get('floor_spread'))
+        floor_spread_status: dict | None = None
+        floor_spread_thirds = None
+        floor_spread_notes: list[str] = []
+        if floor_spread_rule:
+            floor_spread_status = {
+                "requested": True,
+                "applied": False,
+                "reason": "",
+                "min_units_per_band": int(floor_spread_rule['min_units_per_band']),
+                "thirds": [],
+            }
+            floor_spread_thirds = floor_thirds(df_units)
+            if not floor_spread_thirds:
+                floor_spread_status["reason"] = "no floor data for the affordable units (or fewer than 3 floors) - rule skipped"
+                floor_spread_notes.append(
+                    "Floor-spread rule skipped: the affordable units have no floor data (or span fewer than 3 floors)."
+                )
+            else:
+                (config.setdefault('optimization_rules', {}))['floor_spread'] = dict(floor_spread_rule)
+                floor_spread_status["applied"] = True
+                floor_spread_status["thirds"] = [
+                    {"label": t['label'], "min_floor": t['min_floor'], "max_floor": t['max_floor'], "units": len(t['indices'])}
+                    for t in floor_spread_thirds
+                ]
+                _fs_ranges = ', '.join(f"{t['label']} ({t['min_floor']}-{t['max_floor']})" for t in floor_spread_thirds)
+                floor_spread_notes.append(
+                    f"Floor-spread rule ON: every band with {floor_spread_status['min_units_per_band']}+ apartments "
+                    f"has at least one on the {_fs_ranges} floors."
+                )
+
         # Does this run have a <=40% AMI share requirement at all?
         # MIH Option 1: yes (the [10%, 12.5%] window). MIH Option 4 (Workforce):
         # NO — there is no 40% set-aside in that option, so every 40%-centric
@@ -1009,46 +1044,70 @@ def optimize_units():
         # infeasible — slide the window up and rerun the optimizer. Mirrors the UAP widening
         # pattern below. After the walk settles, config is mutated so the same final window
         # flows into find_max_revenue_scenario later in the request.
-        if program_norm == 'MIH' and mih_forty_required:
-            mih_floor_start = 0.100
-            mih_floor_max = 0.150
-            mih_floor_step = 0.001
-            mih_window_width = 0.025  # max_share = min_share + 2.5%
-            mih_walk_results = None
-            mih_walk_last = None
-            mih_walk_value = mih_floor_start
+        def _primary_solve() -> dict:
+            # The strict primary solve (MIH floor-walk or plain). Wrapped so the
+            # floor-spread fallback below can run it a second time without the
+            # rule. Reads/mutates the enclosing `config` exactly as before.
+            if program_norm == 'MIH' and mih_forty_required:
+                mih_floor_start = 0.100
+                mih_floor_max = 0.150
+                mih_floor_step = 0.001
+                mih_window_width = 0.025  # max_share = min_share + 2.5%
+                mih_walk_results = None
+                mih_walk_last = None
+                mih_walk_value = mih_floor_start
 
-            while mih_walk_value <= mih_floor_max + 1e-9:
-                for _t in (config.get('optimization_rules', {}) or {}).get('share_thresholds', []):
-                    if int(_t.get('band_threshold', 0)) == 40:
-                        _t['min_share'] = mih_walk_value
-                        _t['max_share'] = round(mih_walk_value + mih_window_width, 5)
-                _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
-                mih_walk_last = _trial
-                if (_trial.get('scenarios') or {}).get('absolute_best'):
-                    mih_walk_results = _trial
-                    if mih_walk_value > mih_floor_start + 1e-9:
-                        _max_pct = (mih_walk_value + mih_window_width) * 100
-                        mih_walk_results.setdefault('notes', []).append(
-                            f"40% AMI window slid up to [{mih_walk_value*100:.1f}%, {_max_pct:.1f}%] to find feasible scenarios for this building."
-                        )
-                    break
-                mih_walk_value = round(mih_walk_value + mih_floor_step, 5)
+                while mih_walk_value <= mih_floor_max + 1e-9:
+                    for _t in (config.get('optimization_rules', {}) or {}).get('share_thresholds', []):
+                        if int(_t.get('band_threshold', 0)) == 40:
+                            _t['min_share'] = mih_walk_value
+                            _t['max_share'] = round(mih_walk_value + mih_window_width, 5)
+                    _trial = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
+                    mih_walk_last = _trial
+                    if (_trial.get('scenarios') or {}).get('absolute_best'):
+                        mih_walk_results = _trial
+                        if mih_walk_value > mih_floor_start + 1e-9:
+                            _max_pct = (mih_walk_value + mih_window_width) * 100
+                            mih_walk_results.setdefault('notes', []).append(
+                                f"40% AMI window slid up to [{mih_walk_value*100:.1f}%, {_max_pct:.1f}%] to find feasible scenarios for this building."
+                            )
+                        break
+                    mih_walk_value = round(mih_walk_value + mih_floor_step, 5)
 
-            if mih_walk_results is None:
-                solver_results = mih_walk_last or {'scenarios': {}, 'notes': []}
-                _max_pct = (mih_floor_max + mih_window_width) * 100
-                solver_results.setdefault('notes', []).append(
-                    f"No feasible MIH scenarios found with 40% AMI window slid from [{mih_floor_start*100:.1f}%, {(mih_floor_start+mih_window_width)*100:.1f}%] up to [{mih_floor_max*100:.1f}%, {_max_pct:.1f}%]."
-                )
-            else:
-                solver_results = mih_walk_results
-        else:
-            solver_results = find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
+                if mih_walk_results is None:
+                    _results = mih_walk_last or {'scenarios': {}, 'notes': []}
+                    _max_pct = (mih_floor_max + mih_window_width) * 100
+                    _results.setdefault('notes', []).append(
+                        f"No feasible MIH scenarios found with 40% AMI window slid from [{mih_floor_start*100:.1f}%, {(mih_floor_start+mih_window_width)*100:.1f}%] up to [{mih_floor_max*100:.1f}%, {_max_pct:.1f}%]."
+                    )
+                    return _results
+                return mih_walk_results
+            return find_optimal_scenarios(df_units, config, project_overrides=project_overrides, rent_by_band_cents=rent_by_band_cents, low_band_floor_tiebreak=True)
+
+        solver_results = _primary_solve()
+
+        # Floor-spread honest fallback (Fix 5): if NO band mix satisfied the
+        # rule, run once more without it and say so plainly. Every later
+        # ladder shares `config`, so the whole response is consistently
+        # "without the rule", and each scenario's reviewer view still shows
+        # the true floor placement.
+        if floor_spread_status is not None and floor_spread_status.get('applied') \
+                and not (solver_results.get('scenarios') or {}).get('absolute_best'):
+            (config.get('optimization_rules', {}) or {}).pop('floor_spread', None)
+            floor_spread_status['applied'] = False
+            floor_spread_status['reason'] = "could not be satisfied for this building - options are shown without it"
+            floor_spread_notes = [
+                "Floor-spread rule could not be satisfied for this building (no band mix can place every "
+                f"{floor_spread_status['min_units_per_band']}+ apartment band on the lower, middle and upper floors); "
+                "options are shown without it."
+            ]
+            solver_results = _primary_solve()
+
         scenarios = solver_results.get('scenarios', {}) or {}
         notes = solver_results.get('notes', []) or []
         notes.extend(rent_resolution_notes)
         notes.extend(band_rules_notes)
+        notes.extend(floor_spread_notes)
 
         # Optional: baseline run for learning compare (runs strict rules without overrides).
         baseline_scenarios = None
@@ -2318,12 +2377,21 @@ def optimize_units():
                         _net_sf_f = 0.0
                     if _net_sf_f <= 0 or _math.isnan(_net_sf_f):
                         continue
-                    orig_assignments.append({
+                    _orig_entry = {
                         'unit_id': str(_u.get('unit_id', '')),
                         'assigned_ami': _ami_f,
                         'bedrooms': _u.get('bedrooms'),
                         'net_sf': _net_sf_f,
-                    })
+                    }
+                    # Keep the floor so the floor-spread reviewer view can be
+                    # computed for the Original Scenario too.
+                    _orig_floor = _u.get('floor')
+                    try:
+                        if _orig_floor is not None and not _math.isnan(float(_orig_floor)):
+                            _orig_entry['floor'] = float(_orig_floor)
+                    except (TypeError, ValueError):
+                        pass
+                    orig_assignments.append(_orig_entry)
                 if orig_assignments:
                     _enriched, _totals = compute_rents_for_assignments(
                         rent_schedule, orig_assignments, utilities_clean
@@ -2598,6 +2666,23 @@ def optimize_units():
         except Exception as _e:
             notes.append(f"Note: scenario strategy lines failed: {_e}")
 
+        # Floor-spread reviewer view (Fix 5): units per band per floor third
+        # for every scenario (Original included) plus whether the thirds rule
+        # holds - computed from each scenario's own floor placement, so it is
+        # honest on the fallback path too. Only when the rule was requested,
+        # so legacy responses stay byte-identical.
+        if floor_spread_status is not None and floor_spread_thirds:
+            _fs_min_units = int(floor_spread_status.get('min_units_per_band') or 3)
+            for _sk, _sv in list(scenarios.items()):
+                if not _sv or not _sv.get('assignments'):
+                    continue
+                try:
+                    _fs_summary = floor_spread_summary(_sv['assignments'], floor_spread_thirds, _fs_min_units)
+                except Exception:
+                    _fs_summary = None
+                if _fs_summary is not None:
+                    _sv['floor_spread'] = _fs_summary
+
         # Build response
         response_start = time.perf_counter()
         safe_scenarios = _sanitize_for_json(scenarios)
@@ -2612,6 +2697,10 @@ def optimize_units():
                 # that came from the ribbon selection or the program default.
                 "band_rules": band_rules_echo,
         }
+        if floor_spread_status is not None:
+            # Floor-spread echo: requested / applied / reason / thirds, so the
+            # Excel header can state exactly what this run enforced.
+            project_summary["floor_spread"] = floor_spread_status
         if mih_constraint_injected:
             project_summary["total_building_sf"] = total_building_sf
             # Effective 40% AMI window (post floor-walk) so Excel can render

@@ -1835,7 +1835,43 @@ End Function
 Public Sub InvalidateBandControls()
     ' The AMI Bands menu rebuilds on every drop (invalidateContentOnDrop), but
     ' an explicit invalidate keeps the ribbon in step right after a toggle.
+    ' The floor-spread toggle is a cached pressed state: refresh it too.
     Call InvalidateRibbonControl("mnuBands")
+    Call InvalidateRibbonControl("tglFloorSpread")
+End Sub
+
+Public Sub Ribbon_GetFloorSpreadPressed(control As IRibbonControl, ByRef returnedVal)
+    ' toggleButton getPressed (Fix 5): per-workbook setting; unset = ON for MIH.
+    On Error GoTo Fail
+    returnedVal = CBool(AMI_Optix_Bands.GetFloorSpreadEnabled())
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_GetFloorSpreadPressed"
+    returnedVal = False
+End Sub
+
+Public Sub Ribbon_ToggleFloorSpread(control As IRibbonControl, pressed As Boolean)
+    ' toggleButton onAction (Fix 5): save for this workbook and confirm.
+    On Error GoTo Fail
+    AMI_Optix_Bands.SetFloorSpreadEnabled pressed
+    DebugLog "Ribbon_ToggleFloorSpread: pressed=" & pressed, True
+    Call InvalidateRibbonControl("tglFloorSpread")
+    If pressed Then
+        MsgBox "Spread Across Floors is ON for this workbook." & vbCrLf & vbCrLf & _
+               "Every band with 3 or more apartments will have at least one on the lower, middle and upper floors " & _
+               "(the HPD reviewer's test). If no option can satisfy it, results say so and are shown without it.", _
+               vbInformation, "AMI Optix - Spread Across Floors"
+    Else
+        MsgBox "Spread Across Floors is OFF for this workbook." & vbCrLf & vbCrLf & _
+               "Bands may be placed on any floors (previous behavior).", _
+               vbInformation, "AMI Optix - Spread Across Floors"
+    End If
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_ToggleFloorSpread"
+    MsgBox "Could not change the floor-spread setting: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
 End Sub
 
 Public Sub Ribbon_GetBandsMenuContent(control As IRibbonControl, ByRef returnedVal)
