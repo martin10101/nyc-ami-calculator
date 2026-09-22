@@ -52,8 +52,8 @@ $Modules = @(
     @{ Name = 'AMI_Optix_Main';          Path = 'excel-addin/src/AMI_Optix_Main.bas';          Temp = (Join-Path $env:TEMP 'AMI_Optix_Main.bas');          Marker = 'AMI_Optix_FortyRules.ValidateForRun' }
     @{ Name = 'AMI_Optix_API';           Path = 'excel-addin/src/AMI_Optix_API.bas';           Temp = (Join-Path $env:TEMP 'AMI_Optix_API.bas');           Marker = 'forty_rules' }
     @{ Name = 'AMI_Optix_Bands';         Path = 'excel-addin/src/AMI_Optix_Bands.bas';         Temp = (Join-Path $env:TEMP 'AMI_Optix_Bands.bas');         Marker = 'GetFloorSpreadEnabled' }
-    @{ Name = 'AMI_Optix_FortyRules';    Path = 'excel-addin/src/AMI_Optix_FortyRules.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_FortyRules.bas');    Marker = 'AMI_OPTIX_FORTY_RULES_V1' }
-    @{ Name = 'AMI_Optix_Ribbon';        Path = 'excel-addin/src/AMI_Optix_Ribbon.bas';        Temp = (Join-Path $env:TEMP 'AMI_Optix_Ribbon.bas');        Marker = 'Ribbon_FortyClear' }
+    @{ Name = 'AMI_Optix_FortyRules';    Path = 'excel-addin/src/AMI_Optix_FortyRules.bas';    Temp = (Join-Path $env:TEMP 'AMI_Optix_FortyRules.bas');    Marker = 'AMI_OPTIX_FORTY_RULES_V2' }
+    @{ Name = 'AMI_Optix_Ribbon';        Path = 'excel-addin/src/AMI_Optix_Ribbon.bas';        Temp = (Join-Path $env:TEMP 'AMI_Optix_Ribbon.bas');        Marker = 'Ribbon_ToggleFortyFloor' }
 )
 
 # Ribbon XML part inside the .xlam (an .xlam is a zip package). Replaced AFTER

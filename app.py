@@ -242,9 +242,26 @@ def _normalize_forty_rules(raw) -> dict | None:
             max_per_floor = int(round(float(m)))
     except (TypeError, ValueError):
         max_per_floor = None
-    if not pins and not excludes and bedrooms is None and max_per_floor is None:
+    floors: list[int] | None = None
+    f_raw = raw.get('floors_allowed')
+    if isinstance(f_raw, (list, tuple)):
+        fset: set[int] = set()
+        for v in f_raw:
+            try:
+                fset.add(int(round(float(v))))
+            except (TypeError, ValueError):
+                continue
+        if fset:
+            floors = sorted(fset)
+    if not pins and not excludes and bedrooms is None and max_per_floor is None and floors is None:
         return None
-    return {'pin_units': pins, 'exclude_units': excludes, 'bedrooms_allowed': bedrooms, 'max_per_floor': max_per_floor}
+    return {
+        'pin_units': pins,
+        'exclude_units': excludes,
+        'bedrooms_allowed': bedrooms,
+        'max_per_floor': max_per_floor,
+        'floors_allowed': floors,
+    }
 
 
 def _bedroom_label(n: int) -> str:
@@ -1071,6 +1088,41 @@ def optimize_units():
                     if not _ok and _uid not in forty_rules['pin_units']:
                         _fr_excluded.add(_uid)
                         _fr_bedroom_excluded.append(_uid)
+            _fr_floor_excluded: list[str] = []
+            if forty_rules['floors_allowed'] is not None and 'floor' in df_units.columns:
+                _allowed_floors = set(forty_rules['floors_allowed'])
+                for _uid, _fl in zip(_fr_ids, df_units['floor'].tolist()):
+                    try:
+                        if _fl is None or pd.isna(_fl):
+                            continue
+                        _fl_i = int(round(float(_fl)))
+                    except (TypeError, ValueError):
+                        continue
+                    if _fl_i not in _allowed_floors and _uid not in forty_rules['pin_units']:
+                        _fr_excluded.add(_uid)
+                        _fr_floor_excluded.append(_uid)
+                # A floor rule that keeps 40% off a whole floor third makes the
+                # floor-spread test impossible by design: skip the spread rule
+                # honestly instead of failing into its fallback.
+                if floor_spread_status is not None and floor_spread_status.get('applied') and floor_spread_thirds:
+                    _pool_floors_by_third = []
+                    for _t in floor_spread_thirds:
+                        _fl_in_third = set()
+                        for _i in _t['indices']:
+                            try:
+                                _fl_in_third.add(int(round(float(df_units['floor'].iloc[_i]))))
+                            except (TypeError, ValueError):
+                                pass
+                        _pool_floors_by_third.append((_t, _fl_in_third))
+                    _blocked = [_t for _t, _fls in _pool_floors_by_third if not (_fls & _allowed_floors)]
+                    if _blocked:
+                        (config.get('optimization_rules', {}) or {}).pop('floor_spread', None)
+                        floor_spread_status['applied'] = False
+                        _blk_txt = ', '.join(f"{_t['label']} ({_t['min_floor']}-{_t['max_floor']})" for _t in _blocked)
+                        floor_spread_status['reason'] = f"skipped: your 40% floor rule keeps 40% off the {_blk_txt} floors"
+                        floor_spread_notes = [
+                            f"Floor-spread rule skipped: your 40% Rules keep 40% off the {_blk_txt} floors, so the lower/middle/upper test cannot apply."
+                        ]
 
             # Feasibility against the 40% share window before any solving.
             _fr_sf = {uid: float(sf or 0.0) for uid, sf in zip(_fr_ids, df_units['net_sf'].tolist())}
@@ -1125,6 +1177,8 @@ def optimize_units():
                 _fr_parts.append("kept out of 40%: " + ', '.join(forty_rules['exclude_units']))
             if forty_rules['bedrooms_allowed'] is not None:
                 _fr_parts.append("40% only for " + ', '.join(_bedroom_label(b) for b in forty_rules['bedrooms_allowed']))
+            if forty_rules['floors_allowed'] is not None:
+                _fr_parts.append("40% only on floor(s) " + ', '.join(str(f) for f in forty_rules['floors_allowed']))
             if forty_rules['max_per_floor']:
                 _fr_parts.append(f"max {forty_rules['max_per_floor']} at 40% per floor")
             forty_rules_status = {
@@ -1132,6 +1186,8 @@ def optimize_units():
                 "exclude_units": list(forty_rules['exclude_units']),
                 "bedrooms_allowed": forty_rules['bedrooms_allowed'],
                 "bedroom_excluded_units": _fr_bedroom_excluded,
+                "floors_allowed": forty_rules['floors_allowed'],
+                "floor_excluded_units": _fr_floor_excluded,
                 "max_per_floor": forty_rules['max_per_floor'],
                 "pinned_share": (_fr_pinned_sf / _fr_denom) if _fr_denom > 0 else None,
                 "eligible_share": (_fr_eligible_sf / _fr_denom) if _fr_denom > 0 else None,

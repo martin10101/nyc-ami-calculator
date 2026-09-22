@@ -25,11 +25,16 @@ Floors group, rebuilt on every drop:
   with no affordable units is refused with a message.
 - Bedroom types allowed at 40% (Studio / 1 / 2 / 3 / 4+ BR; default all;
   at least one must stay checked).
+- Floors allowed for 40% (one checkbox per floor of the affordable pool,
+  default all; at least one must stay checked; "Allow all floors" resets).
+  Added 2026-09-22 after the owner's first test: "which floors" was the
+  original ask. If the floor rule keeps 40% off a whole floor third, the
+  floor-spread test is skipped with a note instead of failing.
 - Max 40% units per floor (No limit / 1 / 2 / 3 / 4), radio-style.
 - Show current 40% rules; Clear all 40% rules (program decides).
 
 **VBA** (new `AMI_Optix_FortyRules.bas`): per-workbook storage in four
-hidden defined names (`AMI_Optix_Forty_Pins/Excludes/Bedrooms/PerFloor`),
+hidden defined names (`AMI_Optix_Forty_Pins/Excludes/Bedrooms/Floors/PerFloor`),
 selection mapping, rule edits, payload JSON, run preflight (pinned /
 excluded ids must exist in this run; no unit both pinned and excluded -
 stops the run with a clear message). Callbacks in `AMI_Optix_Ribbon`;
@@ -53,9 +58,19 @@ be too tight.
 **Objective unchanged:** best rent within the rules; ranking, fewest-40
 logic, floor spread and band picker all still apply (stacking tested).
 
+## Pool vs rules (the owner's first question)
+
+Which apartments are AFFORDABLE is Rachel's input: any row with a value in
+the AMI column is in the pool; a blank AMI row is market rate and the
+program never touches it. Which BAND each pooled apartment gets is the
+program's decision on every run. 40% Rules are inputs set before Run that
+override that decision for the pooled apartments they name. Selecting a
+blank-AMI row and clicking Pin is refused with a message naming the rows
+and explaining why (a market-rate unit cannot become 40%).
+
 ## Verification
 
-- `tests/test_forty_rules.py` (13 tests): normalization; per-floor cap
+- `tests/test_forty_rules.py` (16 tests): normalization; per-floor cap
   binds and is rent-neutral, too-tight cap -> no scenario; API: absent
   field -> no metadata (identity); pins + exclusions obeyed in every
   scenario; 2 BR-only filter obeyed; max 1 per floor obeyed; rules stack

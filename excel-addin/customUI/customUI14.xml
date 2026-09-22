@@ -44,7 +44,7 @@
                        imageMso="Lock"
                        getContent="Ribbon_GetFortyMenuContent"
                        invalidateContentOnDrop="true"
-                       supertip="Optional: decide yourself which apartments carry the 40% label. Select unit rows on the sheet, then pin them at 40% or keep them out; limit 40% to certain bedroom types; cap 40% units per floor. The optimizer still finds the best rent within your rules. 'Clear all 40% rules' lets the program decide again. Saved inside the workbook."/>
+                       supertip="Optional: decide yourself which affordable apartments carry the 40% label (only rows with an AMI value count; blank AMI = market rate). Select unit rows on the sheet, then pin them at 40% or keep them out; limit 40% to certain bedroom types or floors; cap 40% units per floor. The optimizer still finds the best rent within your rules. 'Clear all 40% rules' lets the program decide again. Saved inside the workbook."/>
         </group>
         <group id="grpRentRoll" label="Rent Roll">
           <dropDown id="ddRentRollYear"

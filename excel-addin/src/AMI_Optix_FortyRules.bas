@@ -1,24 +1,30 @@
 Attribute VB_Name = "AMI_Optix_FortyRules"
 Option Explicit
 
-' AMI_OPTIX_FORTY_RULES_V1
+' AMI_OPTIX_FORTY_RULES_V2
 '
 ' 40% Rules - ribbon "40% Rules" menu (owner request 2026-09-22, Fix 6).
 '
 ' Optional. The owner decides WHICH apartments carry the 40% label; the
-' optimizer still finds the best rent within those decisions. Four rules,
+' optimizer still finds the best rent within those decisions. Five rules,
 ' each independent, all clearable:
 '   - Pin selected units at 40%      (select unit rows on the sheet, click)
 '   - Keep selected units OUT of 40% (select rows, click)
 '   - Bedroom types allowed at 40%   (Studio / 1 / 2 / 3 / 4+; default all)
+'   - Floors allowed for 40%         (the pool's floors; default all)
 '   - Max 40% units per floor        (no limit / 1 / 2 / 3 / 4)
 ' "Clear all 40% rules" returns the workbook to "the program decides".
+'
+' Only apartments IN THE AFFORDABLE POOL (rows with a numeric AMI value)
+' can be ruled; blank-AMI rows are market rate and the program never
+' touches them.
 '
 ' Storage: hidden defined names in the DATA workbook (each building keeps
 ' its own rules):
 '   AMI_Optix_Forty_Pins      "2A|3A"        unit ids, "|"-separated
 '   AMI_Optix_Forty_Excludes  "5B"
 '   AMI_Optix_Forty_Bedrooms  "1,2"          "" = all bedroom types
+'   AMI_Optix_Forty_Floors    "5,6,7"        "" = all floors
 '   AMI_Optix_Forty_PerFloor  "2"            "" = no limit
 ' No stored rule = payload field not sent = legacy behavior.
 '
@@ -31,6 +37,7 @@ Option Explicit
 Private Const PINS_NAME As String = "AMI_Optix_Forty_Pins"
 Private Const EXCL_NAME As String = "AMI_Optix_Forty_Excludes"
 Private Const BEDS_NAME As String = "AMI_Optix_Forty_Bedrooms"
+Private Const FLOORS_NAME As String = "AMI_Optix_Forty_Floors"
 Private Const FLOOR_NAME As String = "AMI_Optix_Forty_PerFloor"
 Private Const SEP As String = "|"
 Private Const ALL_BEDS As String = "0,1,2,3,4"
@@ -107,14 +114,21 @@ Public Sub SetPerFloor(n As Long)
     If n <= 0 Then WriteName FLOOR_NAME, "" Else WriteName FLOOR_NAME, CStr(n)
 End Sub
 
+Public Function GetFloorsCsv() As String
+    ' "" = 40% allowed on every floor.
+    GetFloorsCsv = ReadName(FLOORS_NAME)
+End Function
+
 Public Function HasAnyRule() As Boolean
-    HasAnyRule = (GetPins() <> "") Or (GetExcludes() <> "") Or (GetBedroomsCsv() <> "") Or (GetPerFloor() > 0)
+    HasAnyRule = (GetPins() <> "") Or (GetExcludes() <> "") Or (GetBedroomsCsv() <> "") Or _
+                 (GetFloorsCsv() <> "") Or (GetPerFloor() > 0)
 End Function
 
 Public Sub ClearAllRules()
     WriteName PINS_NAME, ""
     WriteName EXCL_NAME, ""
     WriteName BEDS_NAME, ""
+    WriteName FLOORS_NAME, ""
     WriteName FLOOR_NAME, ""
 End Sub
 
@@ -228,7 +242,16 @@ Public Function SelectedUnitIds(ByRef msg As String) As String
         End If
     Next i
     If out = "" Then
-        msg = "None of the selected rows is an affordable unit (a unit needs a numeric AMI value to count)."
+        Dim rowList As String
+        Dim k As Variant
+        For Each k In rows.Keys
+            If rowList <> "" Then rowList = rowList & ", "
+            rowList = rowList & CStr(k)
+        Next k
+        msg = "The selected row(s) (" & rowList & ") are not in the affordable pool." & vbCrLf & vbCrLf & _
+              "Only apartments with a value in the AMI column (for example 40% or 80%) are affordable and can get a 40% rule. " & _
+              "Rows with a blank AMI are market rate and the program never touches them." & vbCrLf & vbCrLf & _
+              "Click a row that shows an AMI value, then try again."
         Exit Function
     End If
     SelectedUnitIds = out
@@ -368,6 +391,103 @@ Fail:
     ToggleBedroom = "Could not save the bedroom rule: " & Err.Description
 End Function
 
+'-------------------------------------------------------------------------------
+' Floors allowed for 40%
+'-------------------------------------------------------------------------------
+
+Public Function PoolFloorsCsv() As String
+    ' Distinct floors of the affordable pool, ascending ("3,4,5,..."). "" when
+    ' the workbook has no unit data or no floor column.
+    On Error GoTo Fail
+    Dim units As Collection
+    Set units = ReadUnitData()
+    If units Is Nothing Then Exit Function
+    Dim seen As Object
+    Set seen = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    Dim unit As Object
+    For i = 1 To units.Count
+        Set unit = units(i)
+        If unit.Exists("floor") Then
+            If IsNumeric(unit("floor")) Then seen(CLng(Round(CDbl(unit("floor")), 0))) = True
+        End If
+    Next i
+    If seen.Count = 0 Then Exit Function
+    Dim keys() As Variant
+    keys = seen.Keys
+    ' simple insertion sort (few dozen floors at most)
+    Dim a As Long, b As Long
+    Dim tmp As Variant
+    For a = 1 To UBound(keys)
+        tmp = keys(a)
+        b = a - 1
+        Do While b >= 0
+            If CLng(keys(b)) <= CLng(tmp) Then Exit Do
+            keys(b + 1) = keys(b)
+            b = b - 1
+        Loop
+        keys(b + 1) = tmp
+    Next a
+    Dim out As String
+    For a = 0 To UBound(keys)
+        If out <> "" Then out = out & ","
+        out = out & CStr(keys(a))
+    Next a
+    PoolFloorsCsv = out
+    Exit Function
+Fail:
+    PoolFloorsCsv = ""
+End Function
+
+Public Function IsFloorAllowed(fl As Long) As Boolean
+    Dim csv As String
+    csv = GetFloorsCsv()
+    If csv = "" Then IsFloorAllowed = True Else IsFloorAllowed = CsvContains(csv, fl)
+End Function
+
+Public Function ToggleFloor(fl As Long, pressed As Boolean) As String
+    ' Returns "" on success, else the reason the change was refused.
+    On Error GoTo Fail
+    Dim poolCsv As String
+    poolCsv = PoolFloorsCsv()
+    If poolCsv = "" Then
+        ToggleFloor = "No floor data found for the affordable units."
+        Exit Function
+    End If
+    Dim csv As String
+    csv = GetFloorsCsv()
+    If csv = "" Then csv = poolCsv
+    Dim parts() As String
+    Dim i As Long
+    Dim nextCsv As String
+    ' Rebuild in pool order: keep allowed floors, apply the toggle.
+    parts = Split(poolCsv, ",")
+    For i = LBound(parts) To UBound(parts)
+        Dim f As Long
+        f = CLng(Val(parts(i)))
+        Dim keep As Boolean
+        keep = CsvContains(csv, f)
+        If f = fl Then keep = pressed
+        If keep Then
+            If nextCsv <> "" Then nextCsv = nextCsv & ","
+            nextCsv = nextCsv & CStr(f)
+        End If
+    Next i
+    If nextCsv = "" Then
+        ToggleFloor = "At least one floor must stay allowed for 40%."
+        Exit Function
+    End If
+    If nextCsv = poolCsv Then WriteName FLOORS_NAME, "" Else WriteName FLOORS_NAME, nextCsv
+    ToggleFloor = ""
+    Exit Function
+Fail:
+    ToggleFloor = "Could not save the floor rule: " & Err.Description
+End Function
+
+Public Sub AllowAllFloors()
+    WriteName FLOORS_NAME, ""
+End Sub
+
 Public Function BedroomLabel(bed As Long) As String
     If bed <= 0 Then
         BedroomLabel = "Studio"
@@ -401,6 +521,7 @@ Public Function DescribeRules() As String
     If GetPins() <> "" Then parts = parts & "Pinned at 40%: " & ListDisplay(GetPins()) & vbCrLf
     If GetExcludes() <> "" Then parts = parts & "Kept out of 40%: " & ListDisplay(GetExcludes()) & vbCrLf
     If GetBedroomsCsv() <> "" Then parts = parts & "40% only for: " & BedsDisplay(GetBedroomsCsv()) & vbCrLf
+    If GetFloorsCsv() <> "" Then parts = parts & "40% only on floor(s): " & Replace(GetFloorsCsv(), ",", ", ") & vbCrLf
     If GetPerFloor() > 0 Then parts = parts & "Max " & GetPerFloor() & " unit(s) at 40% per floor" & vbCrLf
     If parts = "" Then
         DescribeRules = "None - the program decides which apartments are 40%."
@@ -418,6 +539,7 @@ Public Function DescribeRulesShort() As String
     If GetPins() <> "" Then s = s & ListCount(GetPins()) & " pinned"
     If GetExcludes() <> "" Then s = s & IIf(s <> "", ", ", "") & ListCount(GetExcludes()) & " kept out"
     If GetBedroomsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & BedsDisplay(GetBedroomsCsv()) & " only"
+    If GetFloorsCsv() <> "" Then s = s & IIf(s <> "", ", ", "") & "floors " & Replace(GetFloorsCsv(), ",", ", ") & " only"
     If GetPerFloor() > 0 Then s = s & IIf(s <> "", ", ", "") & "max " & GetPerFloor() & "/floor"
     If s = "" Then s = "none (program decides)"
     DescribeRulesShort = s
@@ -464,6 +586,9 @@ Public Function FortyRulesJson() As String
     j = j & ", ""exclude_units"": " & ListToJsonArray(GetExcludes())
     If GetBedroomsCsv() <> "" Then
         j = j & ", ""bedrooms_allowed"": [" & Replace(GetBedroomsCsv(), ",", ", ") & "]"
+    End If
+    If GetFloorsCsv() <> "" Then
+        j = j & ", ""floors_allowed"": [" & Replace(GetFloorsCsv(), ",", ", ") & "]"
     End If
     If GetPerFloor() > 0 Then
         j = j & ", ""max_per_floor"": " & CStr(GetPerFloor())
@@ -562,6 +687,24 @@ Public Function BuildFortyMenuXml() As String
         x = x & "<checkBox id=""chkFortyBed" & b & """ tag=""" & b & """ label=""" & EscapeXml(BedroomLabel(b)) & """" & _
                 " getPressed=""Ribbon_GetFortyBedroomPressed"" onAction=""Ribbon_ToggleFortyBedroom""/>"
     Next b
+    x = x & "</menu>"
+
+    x = x & "<menu id=""mnuFortyFloors"" label=""Floors allowed for 40%"" imageMso=""TableRowsInsertAbove"">"
+    Dim poolCsv As String
+    poolCsv = PoolFloorsCsv()
+    If poolCsv = "" Then
+        x = x & "<button id=""btnFortyFloorsNone"" enabled=""false"" label=""(no floor data for the affordable units)""/>"
+    Else
+        Dim fparts() As String
+        Dim fi As Long
+        fparts = Split(poolCsv, ",")
+        For fi = LBound(fparts) To UBound(fparts)
+            x = x & "<checkBox id=""chkFortyFloorAllow" & Trim$(fparts(fi)) & """ tag=""" & Trim$(fparts(fi)) & """ label=""Floor " & Trim$(fparts(fi)) & """" & _
+                    " getPressed=""Ribbon_GetFortyFloorPressed"" onAction=""Ribbon_ToggleFortyFloor""/>"
+        Next fi
+        x = x & "<menuSeparator id=""sepFortyFloors""/>"
+        x = x & "<button id=""btnFortyAllFloors"" label=""Allow all floors"" imageMso=""Refresh"" onAction=""Ribbon_FortyAllFloors""/>"
+    End If
     x = x & "</menu>"
 
     x = x & "<menu id=""mnuFortyFloor"" label=""Max 40% units per floor"" imageMso=""TableRowsDistribute"">"

@@ -1930,6 +1930,41 @@ Fail:
     EnsureAMIOptixTabActive
 End Sub
 
+Public Sub Ribbon_GetFortyFloorPressed(control As IRibbonControl, ByRef returnedVal)
+    On Error GoTo Fail
+    returnedVal = CBool(AMI_Optix_FortyRules.IsFloorAllowed(CLng(Val(control.Tag))))
+    Exit Sub
+Fail:
+    returnedVal = True
+End Sub
+
+Public Sub Ribbon_ToggleFortyFloor(control As IRibbonControl, pressed As Boolean)
+    On Error GoTo Fail
+    Dim why As String
+    why = AMI_Optix_FortyRules.ToggleFloor(CLng(Val(control.Tag)), pressed)
+    If why <> "" Then MsgBox why, vbExclamation, "AMI Optix - 40% Rules"
+    DebugLog "Ribbon_ToggleFortyFloor: floor=" & control.Tag & " pressed=" & pressed & " -> " & AMI_Optix_FortyRules.DescribeRulesShort(), True
+    InvalidateBandControls
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_ToggleFortyFloor"
+    MsgBox "Could not change the floor rule: " & Err.Description, vbExclamation, "AMI Optix"
+    EnsureAMIOptixTabActive
+End Sub
+
+Public Sub Ribbon_FortyAllFloors(control As IRibbonControl)
+    On Error GoTo Fail
+    AMI_Optix_FortyRules.AllowAllFloors
+    InvalidateBandControls
+    MsgBox "40% is allowed on every floor again.", vbInformation, "AMI Optix - 40% Rules"
+    EnsureAMIOptixTabActive
+    Exit Sub
+Fail:
+    DebugLogError "Ribbon_FortyAllFloors"
+    EnsureAMIOptixTabActive
+End Sub
+
 Public Sub Ribbon_GetFortyPerFloorPressed(control As IRibbonControl, ByRef returnedVal)
     On Error GoTo Fail
     returnedVal = (AMI_Optix_FortyRules.GetPerFloor() = CLng(Val(control.Tag)))

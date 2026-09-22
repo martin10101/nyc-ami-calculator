@@ -22,8 +22,18 @@ def test_normalize_full_payload():
         'exclude_units': ['5B'],
         'bedrooms_allowed': [2, '1', 2.0],
         'max_per_floor': '2',
+        'floors_allowed': [7, '5', 6.0, 5],
     })
-    assert got == {'pin_units': ['2A', '3A'], 'exclude_units': ['5B'], 'bedrooms_allowed': [1, 2], 'max_per_floor': 2}
+    assert got == {
+        'pin_units': ['2A', '3A'], 'exclude_units': ['5B'], 'bedrooms_allowed': [1, 2],
+        'max_per_floor': 2, 'floors_allowed': [5, 6, 7],
+    }
+
+
+def test_normalize_floors_only():
+    got = _normalize_forty_rules({'floors_allowed': [3, 4]})
+    assert got['floors_allowed'] == [3, 4]
+    assert got['pin_units'] == [] and got['bedrooms_allowed'] is None and got['max_per_floor'] is None
 
 
 def test_normalize_absent_or_empty_means_program_decides():
@@ -177,6 +187,30 @@ def test_api_bedroom_filter_limits_forty_to_those_types():
         for uid in _forty_ids(sc):
             assert beds[uid] == 2, f'{key}: {uid} ({beds[uid]} BR) at 40% despite 2 BR-only rule'
     assert '40% only for 2 BR' in data['project_summary']['forty_rules']['summary']
+
+
+def test_api_floors_allowed_limits_forty_to_those_floors():
+    units = _pool_units()
+    allowed = [3, 4, 5, 6, 7, 8, 9, 10]   # the lower half; every floor here holds 2 units
+    data = _post(units, {'forty_rules': {'floors_allowed': allowed}})
+    assert data['success'] is True, data.get('error')
+    floors = {u['unit_id']: u['floor'] for u in units}
+    scen = _optimized(data)
+    assert scen
+    for key, sc in scen.items():
+        for uid in _forty_ids(sc):
+            assert floors[uid] in allowed, f'{key}: {uid} on floor {floors[uid]} at 40% despite the floor rule'
+    assert '40% only on floor(s) 3, 4, 5, 6, 7, 8, 9, 10' in data['project_summary']['forty_rules']['summary']
+
+
+def test_api_floor_rule_that_blocks_a_third_skips_floor_spread_honestly():
+    units = _pool_units()
+    data = _post(units, {'forty_rules': {'floors_allowed': [3, 4, 5, 6, 7, 8, 9, 10]}, 'floor_spread': True})
+    assert data['success'] is True, data.get('error')
+    fs = data['project_summary']['floor_spread']
+    assert fs['requested'] is True and fs['applied'] is False
+    assert 'upper (14-19)' in fs['reason']
+    assert any('Floor-spread rule skipped' in n and '40% Rules' in n for n in data['notes'])
 
 
 def test_api_max_per_floor_is_obeyed_in_every_scenario():
