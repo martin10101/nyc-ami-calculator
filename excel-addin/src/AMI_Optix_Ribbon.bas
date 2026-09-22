@@ -1858,8 +1858,9 @@ Public Sub Ribbon_ToggleFloorSpread(control As IRibbonControl, pressed As Boolea
     Call InvalidateRibbonControl("tglFloorSpread")
     If pressed Then
         MsgBox "Spread Across Floors is ON for this workbook." & vbCrLf & vbCrLf & _
-               "Every band with 3 or more apartments will have at least one on the lower, middle and upper floors " & _
-               "(the HPD reviewer's test). If no option can satisfy it, results say so and are shown without it.", _
+               "The 40% AMI apartments will include at least one on the lower, middle and upper floors " & _
+               "(the HPD reviewer's test). Rent is not affected by floors. " & _
+               "If no option can satisfy it, results say so and are shown without it.", _
                vbInformation, "AMI Optix - Spread Across Floors"
     Else
         MsgBox "Spread Across Floors is OFF for this workbook." & vbCrLf & vbCrLf & _

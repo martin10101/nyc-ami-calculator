@@ -173,6 +173,7 @@ def _assignments_to_canonical(assignments: List[Dict[str, Any]]) -> tuple:
 # ---------------------------------------------------------------------------
 
 FLOOR_SPREAD_DEFAULT_MIN_UNITS = 3
+FLOOR_SPREAD_DEFAULT_SCOPE = 'low_band'
 
 
 def floor_spread_rule_from(raw: Any) -> Optional[Dict[str, int]]:
@@ -184,17 +185,21 @@ def floor_spread_rule_from(raw: Any) -> Optional[Dict[str, int]]:
     if not raw:
         return None
     min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
-    scope = 'all'
+    # scope: 'low_band' (DEFAULT, owner decision 2026-09-22) = only bands
+    # <= 40% must spread - the reviewer's actual objection on Building D,
+    # and measured rent-neutral on the test pool; 'all' = every band with
+    # >= min_units must spread (strict reading of HPD Design Guidelines
+    # s4.1.4-6; cost ~$490/mo and lost the 100% band on the same pool).
+    scope = FLOOR_SPREAD_DEFAULT_SCOPE
     if isinstance(raw, dict):
         try:
             min_units = int(raw.get('min_units_per_band', FLOOR_SPREAD_DEFAULT_MIN_UNITS))
         except (TypeError, ValueError):
             min_units = FLOOR_SPREAD_DEFAULT_MIN_UNITS
-        # scope: 'all' = every band with >= min_units must spread (HPD
-        # Design Guidelines wording); 'low_band' = only bands <= 40% must
-        # (the reviewer's actual objection on Building D).
-        s = str(raw.get('scope') or 'all').strip().lower()
-        if s in ('low_band', 'low', '40', 'forty'):
+        s = str(raw.get('scope') or FLOOR_SPREAD_DEFAULT_SCOPE).strip().lower()
+        if s in ('all', 'all_bands', 'every', 'every_band'):
+            scope = 'all'
+        elif s in ('low_band', 'low', '40', 'forty'):
             scope = 'low_band'
     return {'min_units_per_band': max(1, min_units), 'scope': scope}
 
@@ -236,7 +241,7 @@ def floor_spread_summary(
     assignments: List[Dict[str, Any]],
     thirds: Optional[List[Dict[str, Any]]],
     min_units_per_band: int = FLOOR_SPREAD_DEFAULT_MIN_UNITS,
-    scope: str = 'all',
+    scope: str = FLOOR_SPREAD_DEFAULT_SCOPE,
 ) -> Optional[Dict[str, Any]]:
     """Reviewer view for one finished scenario: units per band per third, plus
     whether the thirds rule holds. Computed post-hoc from the assignments'
@@ -470,7 +475,7 @@ def _solve_single_scenario(
         spread_thirds = floor_thirds(df_affordable)
         if spread_thirds:
             spread_min_units = int(spread_rule['min_units_per_band'])
-            spread_scope = str(spread_rule.get('scope') or 'all')
+            spread_scope = str(spread_rule.get('scope') or FLOOR_SPREAD_DEFAULT_SCOPE)
             for j in range(num_bands):
                 if spread_scope == 'low_band' and int(bands_to_test[j]) > 40:
                     continue

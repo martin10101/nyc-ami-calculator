@@ -1103,10 +1103,14 @@ def optimize_units():
             (config.get('optimization_rules', {}) or {}).pop('floor_spread', None)
             floor_spread_status['applied'] = False
             floor_spread_status['reason'] = "could not be satisfied for this building - options are shown without it"
+            if floor_spread_status.get('scope') == 'low_band':
+                _fs_why = ("no band mix can place the 40% apartments on the lower, middle and upper floors "
+                           "while meeting the 40% square-footage window")
+            else:
+                _fs_why = (f"no band mix can place every {floor_spread_status['min_units_per_band']}+ apartment band "
+                           "on the lower, middle and upper floors")
             floor_spread_notes = [
-                "Floor-spread rule could not be satisfied for this building (no band mix can place every "
-                f"{floor_spread_status['min_units_per_band']}+ apartment band on the lower, middle and upper floors); "
-                "options are shown without it."
+                f"Floor-spread rule could not be satisfied for this building ({_fs_why}); options are shown without it."
             ]
             solver_results = _primary_solve()
 
@@ -2680,7 +2684,7 @@ def optimize_units():
         # so legacy responses stay byte-identical.
         if floor_spread_status is not None and floor_spread_thirds:
             _fs_min_units = int(floor_spread_status.get('min_units_per_band') or 3)
-            _fs_scope = str(floor_spread_status.get('scope') or 'all')
+            _fs_scope = str(floor_spread_status.get('scope') or 'low_band')
             for _sk, _sv in list(scenarios.items()):
                 if not _sv or not _sv.get('assignments'):
                     continue

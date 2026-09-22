@@ -3,7 +3,7 @@
 > **Status 2026-09-22:** all five fixes are built and merged into `feature/excel-agent-foundation`.
 > Fix 4 shipped as a real ribbon menu (dynamicMenu "AMI Bands"), NOT the cell-based picker described below;
 > the deploy script now replaces the ribbon XML inside the .xlam. Fix 5 ships default ON for MIH (toggle
-> "Spread Across Floors"). See `docs/fixes/FIX_band-picker-ribbon.md` and `docs/fixes/FIX_floor-spread-rule.md`.
+> "Spread Across Floors"), scoped to the 40% band only (owner decision 2026-09-22; scope=all optional). See `docs/fixes/FIX_band-picker-ribbon.md` and `docs/fixes/FIX_floor-spread-rule.md`.
 > Not yet installed on any client PC: sandbox QA first (Rachel's PC is on the June 16 build).
 
 

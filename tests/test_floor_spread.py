@@ -64,13 +64,14 @@ def test_thirds_ignore_units_without_a_floor():
 def test_rule_normalization():
     assert floor_spread_rule_from(None) is None
     assert floor_spread_rule_from(False) is None
-    assert floor_spread_rule_from(True) == {'min_units_per_band': 3, 'scope': 'all'}
-    assert floor_spread_rule_from({'min_units_per_band': 2}) == {'min_units_per_band': 2, 'scope': 'all'}
-    assert floor_spread_rule_from({'min_units_per_band': 'x'}) == {'min_units_per_band': 3, 'scope': 'all'}
-    assert floor_spread_rule_from({'min_units_per_band': 0}) == {'min_units_per_band': 1, 'scope': 'all'}
-    assert floor_spread_rule_from({'scope': 'low_band'}) == {'min_units_per_band': 3, 'scope': 'low_band'}
+    # Default scope = the 40% band only (owner decision 2026-09-22).
+    assert floor_spread_rule_from(True) == {'min_units_per_band': 3, 'scope': 'low_band'}
+    assert floor_spread_rule_from({'min_units_per_band': 2}) == {'min_units_per_band': 2, 'scope': 'low_band'}
+    assert floor_spread_rule_from({'min_units_per_band': 'x'}) == {'min_units_per_band': 3, 'scope': 'low_band'}
+    assert floor_spread_rule_from({'min_units_per_band': 0}) == {'min_units_per_band': 1, 'scope': 'low_band'}
+    assert floor_spread_rule_from({'scope': 'all'}) == {'min_units_per_band': 3, 'scope': 'all'}
     assert floor_spread_rule_from({'scope': '40'})['scope'] == 'low_band'
-    assert floor_spread_rule_from({'scope': 'junk'})['scope'] == 'all'
+    assert floor_spread_rule_from({'scope': 'junk'})['scope'] == 'low_band'
 
 
 def test_low_band_scope_only_checks_the_forty_band():
@@ -160,26 +161,67 @@ def test_rule_off_sinks_forty_low_and_breaks_spread():
     assert r is not None
     floors40 = sorted(int(u['floor']) for u in r['assignments'] if u['assigned_ami'] <= 0.4)
     assert floors40 == [1, 2]  # legacy tie-break: 40% sinks to the lowest floors
-    s = floor_spread_summary(r['assignments'], floor_thirds(df))
+    s = floor_spread_summary(r['assignments'], floor_thirds(df), 3, 'all')
     assert s['satisfied'] is False  # 80% band (4 units) has nothing on floors 1-2
 
 
-def test_rule_on_spreads_without_losing_rent():
+def test_all_bands_scope_spreads_every_band_without_losing_rent():
     df = _six_identical_units()
     off = find_max_revenue_scenario(df, _config(), _rents(df), waami_floor=0.5, low_band_floor_tiebreak=True)
-    on = find_max_revenue_scenario(df, _config(True), _rents(df), waami_floor=0.5, low_band_floor_tiebreak=True)
+    on = find_max_revenue_scenario(df, _config({'scope': 'all'}), _rents(df), waami_floor=0.5, low_band_floor_tiebreak=True)
     assert on is not None
     assert on['rent_score'] == off['rent_score']  # floors are rent-neutral
-    s = floor_spread_summary(on['assignments'], floor_thirds(df))
+    s = floor_spread_summary(on['assignments'], floor_thirds(df), 3, 'all')
     assert s['satisfied'] is True, s['missing']
     # 40% units no longer bunched at the bottom: their average floor is near the pool average (3.5).
     floors40 = [int(u['floor']) for u in on['assignments'] if u['assigned_ami'] <= 0.4]
     assert abs(sum(floors40) / len(floors40) - 3.5) <= 1.0
 
 
+def _config_three_at_forty(rule=None):
+    # Share window pins exactly 3 of 6 identical units at 40% (>= 3 -> rule binds).
+    cfg = _config(rule)
+    cfg['optimization_rules']['share_thresholds'] = [
+        {'band_threshold': 40, 'min_share': 0.5, 'max_share': 0.5, 'denominator': 'affordable'},
+    ]
+    return cfg
+
+
+def test_default_scope_spreads_the_forty_band_only_at_the_same_rent():
+    df = _six_identical_units()
+    off = find_max_revenue_scenario(df, _config_three_at_forty(), _rents(df), waami_floor=0.5, low_band_floor_tiebreak=True)
+    on = find_max_revenue_scenario(df, _config_three_at_forty(True), _rents(df), waami_floor=0.5, low_band_floor_tiebreak=True)
+    assert off is not None and on is not None
+    # Legacy: the three 40% units sink to floors 1-3 -> nothing on the upper third.
+    assert sorted(int(u['floor']) for u in off['assignments'] if u['assigned_ami'] <= 0.4) == [1, 2, 3]
+    assert floor_spread_summary(off['assignments'], floor_thirds(df))['satisfied'] is False
+    # Default rule (40% band only): one 40% unit in each third, same rent.
+    assert on['rent_score'] == off['rent_score']
+    s = floor_spread_summary(on['assignments'], floor_thirds(df))
+    assert s['scope'] == 'low_band'
+    assert s['satisfied'] is True, s['missing']
+    floors40 = sorted(int(u['floor']) for u in on['assignments'] if u['assigned_ami'] <= 0.4)
+    assert floors40[0] <= 2 and 3 <= floors40[1] <= 4 and floors40[2] >= 5
+
+
+def test_default_scope_ignores_higher_bands():
+    # 80% band bunched is fine under the default scope: only 40% is checked.
+    thirds = floor_thirds(_df([1, 2, 3, 4, 5, 6]))
+    assignments = [
+        {'unit_id': 'a', 'assigned_ami': 0.4, 'floor': 1},
+        {'unit_id': 'b', 'assigned_ami': 0.4, 'floor': 4},
+        {'unit_id': 'c', 'assigned_ami': 0.4, 'floor': 6},
+        {'unit_id': 'd', 'assigned_ami': 0.8, 'floor': 4},
+        {'unit_id': 'e', 'assigned_ami': 0.8, 'floor': 5},
+        {'unit_id': 'f', 'assigned_ami': 0.8, 'floor': 6},
+    ]
+    assert floor_spread_summary(assignments, thirds)['satisfied'] is True
+    assert floor_spread_summary(assignments, thirds, 3, 'all')['satisfied'] is False
+
+
 def test_rule_infeasible_gives_no_scenario_for_that_combo():
-    # Only one unit on the top floor; with min_units_per_band=1 every band
-    # needs a unit there -> 2 bands can never both comply.
+    # Only one unit on the top floor; with min_units_per_band=1 and scope=all
+    # every band needs a unit there -> 2 bands can never both comply.
     df = pd.DataFrame({
         'unit_id': [f'U{i}' for i in range(7)],
         'bedrooms': [1] * 7,
@@ -189,7 +231,7 @@ def test_rule_infeasible_gives_no_scenario_for_that_combo():
         'client_ami': [1.0] * 7,
     })
     off = find_max_revenue_scenario(df, _config(), _rents(df), waami_floor=0.5)
-    on = find_max_revenue_scenario(df, _config({'min_units_per_band': 1}), _rents(df), waami_floor=0.5)
+    on = find_max_revenue_scenario(df, _config({'min_units_per_band': 1, 'scope': 'all'}), _rents(df), waami_floor=0.5)
     assert off is not None
     assert on is None
 
@@ -247,6 +289,7 @@ def test_api_rule_on_every_scenario_spreads_bands_across_thirds():
     fs = data['project_summary']['floor_spread']
     assert fs['requested'] is True
     assert fs['applied'] is True
+    assert fs['scope'] == 'low_band'
     assert [(t['min_floor'], t['max_floor']) for t in fs['thirds']] == [(3, 7), (8, 13), (14, 19)]
     scen = _optimized(data)
     assert scen
@@ -270,7 +313,7 @@ def test_api_falls_back_honestly_when_rule_cannot_be_met():
     floors = [1] * 5 + [2] * 5 + [3]
     for i, f in enumerate(floors):
         units.append({'unit_id': f'F-{i+1}', 'bedrooms': 1, 'net_sf': 400.0 + 5 * (i % 3), 'floor': f, 'client_ami': 0.6})
-    data = _post(units, {'floor_spread': {'min_units_per_band': 1}})
+    data = _post(units, {'floor_spread': {'min_units_per_band': 1, 'scope': 'all'}})
     assert data['success'] is True, data.get('error')
     fs = data['project_summary']['floor_spread']
     assert fs['requested'] is True

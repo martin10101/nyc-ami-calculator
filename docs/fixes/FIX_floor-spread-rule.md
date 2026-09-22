@@ -22,9 +22,17 @@ layouts. We encode the reviewer's own test.
   upper thirds by DISTINCT floor number (stacking charts are per story),
   remainder to the upper thirds: pool floors 3-19 -> 3-7 / 8-13 / 14-19,
   exactly the reviewer's split.
-- Every band with >= 3 units (`min_units_per_band`, default 3) must place at
-  least one unit in each third. 1-2 unit bands are exempt ("to the maximum
-  extent feasible"). Units without a floor value are never constrained.
+- Scope (owner decision 2026-09-22): **the 40% AMI band only** (`scope:
+  'low_band'`, the default). With >= 3 units at 40% (`min_units_per_band`,
+  default 3) at least one must sit in each third; 1-2 unit bands are exempt
+  ("to the maximum extent feasible"). `scope: 'all'` (every band with >= 3
+  units) remains available for a strict reading of the guideline. Units
+  without a floor value are never constrained.
+- Measured on the Building D shaped test pool (MIH Option 1): rule off
+  $52,202/mo recommended, 8 units at 40%; scope=all $51,712/mo (-$490) and
+  the 100% band option lost; scope=low_band $52,202/mo (+$0), same 8 units,
+  every option passes the thirds test. The reviewer only objected to the
+  40% placement, so the 40%-only scope fixes the objection at no cost.
 - Rent-neutral: regulated rent is band + bedrooms only. Cost can only come
   through the SF-share quotas, and the results show the rent either way.
 - Tie-break change while the rule is ON: among equal-rent optima the 40%
@@ -73,12 +81,12 @@ compares both.
 
 ## Verification
 
-- `tests/test_floor_spread.py` (14 tests): thirds split (Building D ->
+- `tests/test_floor_spread.py` (17 tests): thirds split (Building D ->
   3-7/8-13/14-19; even split; < 3 floors -> None; units without floors
   ignored); rule normalization; reviewer-view summary reproduces the
-  rejection of options 1-4 and exempts small bands; solver: rule OFF sinks
-  40% to floors 1-2 and breaks the spread, rule ON spreads at the SAME
-  rent; infeasible combo -> no scenario; API: absent field -> no metadata
+  rejection of options 1-4 and exempts small bands; solver: default scope spreads
+  the 40% band at the SAME rent and ignores higher bands; scope=all spreads
+  every band at the same rent; infeasible combo -> no scenario; API: absent field -> no metadata
   (identity), rule ON -> every scenario satisfied and 40% reaches the upper
   third, impossible rule -> honest fallback with note, no floor data ->
   skipped with reason.

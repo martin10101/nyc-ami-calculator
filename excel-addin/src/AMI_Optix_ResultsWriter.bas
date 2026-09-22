@@ -3110,7 +3110,14 @@ Private Function WriteFloorSpreadLine(ws As Worksheet, startRow As Long, resp As
                 Next i
             End If
         End If
-        txt = "ON - every band with " & minUnits & "+ apartments has one on the " & ranges & " floors"
+        Dim scopeTxt As String
+        scopeTxt = "low_band"
+        If fs.Exists("scope") Then scopeTxt = LCase$(Trim$(CStr(fs("scope"))))
+        If scopeTxt = "all" Then
+            txt = "ON - every band with " & minUnits & "+ apartments has one on the " & ranges & " floors"
+        Else
+            txt = "ON - the 40% AMI apartments include at least one on the " & ranges & " floors (HPD reviewer test)"
+        End If
     Else
         txt = "requested but not applied"
         If fs.Exists("reason") Then
