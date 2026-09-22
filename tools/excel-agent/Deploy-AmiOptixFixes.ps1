@@ -34,7 +34,7 @@
 $ErrorActionPreference = 'Stop'
 
 # --- Config ---------------------------------------------------------------
-$Commit  = '039bfc5660d0d81edf289fd0da12518fcf60b23f'
+$Commit  = '4648dd7a0abfcce7e5e053f286581d2abc84f894'
 $BaseUrl = "https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/$Commit"
 $Master  = 'Z:\AMI_Optix.xlam'
 $Local   = Join-Path $env:APPDATA 'Microsoft\AddIns\AMI_Optix.xlam'
