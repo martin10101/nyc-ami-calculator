@@ -91,7 +91,7 @@ and explaining why (a market-rate unit cannot become 40%).
 
 ## Verification
 
-- `tests/test_forty_rules.py` (18 tests): normalization; per-floor cap
+- `tests/test_forty_rules.py` (19 tests): normalization; per-floor cap
   binds and is rent-neutral, too-tight cap -> no scenario; API: absent
   field -> no metadata (identity); pins + exclusions obeyed in every
   scenario; 2 BR-only filter obeyed; max 1 per floor obeyed; rules stack

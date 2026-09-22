@@ -270,6 +270,27 @@ def test_api_rules_stack_with_floor_spread_and_band_picker():
         assert 60 not in {int(round(float(u['assigned_ami']) * 100)) for u in sc['assignments']}
 
 
+def test_api_pin_outside_preferred_floors_still_wins_and_preference_still_applies():
+    # Pin S-4 (floor 6) AND prefer floors 9-12. The pin is an order: S-4 is
+    # 40% everywhere. The wish still shapes the rest: no other 40% unit lands
+    # off floors 9-12 at the restrict level.
+    units = _pool_units()
+    data = _post(units, {'forty_rules': {'pin_units': ['S-4'], 'floors_allowed': [9, 10, 11, 12]}})
+    assert data['success'] is True, data.get('error')
+    floors = {u['unit_id']: u['floor'] for u in units}
+    fr = data['project_summary']['forty_rules']
+    assert fr['level'] in ('restrict', 'force'), fr
+    scen = _optimized(data)
+    assert scen
+    for key, sc in scen.items():
+        ids = _forty_ids(sc)
+        assert 'S-4' in ids, f'{key}: pinned S-4 not at 40%'
+        if fr['level'] == 'restrict':
+            others = {u for u in ids if u != 'S-4'}
+            assert all(floors[u] in (9, 10, 11, 12) for u in others), f'{key}: 40% off the preferred floors: {others}'
+    assert 'pinned at 40%: S-4' in fr['summary']
+
+
 def test_api_unknown_unit_is_a_clean_error():
     data = _post(_pool_units(), {'forty_rules': {'pin_units': ['NOPE-1']}})
     assert data['success'] is False
