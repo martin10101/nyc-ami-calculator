@@ -34,7 +34,7 @@ Remove-Item "$env:APPDATA\Microsoft\AddIns\AMI_Optix_Autofix.xlam.off" -Force
 4. Excel closed. PowerShell, paste, Enter (needs the Z: drive mapped):
 
 ```
-irm https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/46df0e3/tools/excel-agent/Deploy-AmiOptixFixes.ps1 | iex
+irm https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/f21c2ba/tools/excel-agent/Deploy-AmiOptixFixes.ps1 | iex
 ```
 
    It closes Excel, downloads the fixed modules and ribbon, patches a copy of
