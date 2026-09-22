@@ -13,37 +13,25 @@ June 16 build. This runbook restores it, updates it to the current build
 2. If "Excel has run into an error" appears at any point: STOP. Excel still
    needs the IT repair / Office update. Nothing below will help until then.
 
-## Part B - bring the program back (5 minutes)
+## Part B - bring the program file back (2 minutes)
 
-3. Double-click `ExcelSettings_backup.reg` on her Desktop -> Yes -> OK.
-   (Restores her Excel options, including the add-in registration.)
-4. Open PowerShell (Start, type PowerShell, Enter). Paste, Enter:
+Do NOT double-click `ExcelSettings_backup.reg` (owner decision 2026-09-22: her
+PC is fixed; restoring the old profile could bring the old errors back). The
+add-in registration that lived in that profile is redone by hand in Part D.
+
+3. Open PowerShell (Start, type PowerShell, Enter). Paste, Enter:
 
 ```
 ren "$env:APPDATA\Microsoft\AddIns\AMI_Optix.xlam.off" AMI_Optix.xlam
 Remove-Item "$env:APPDATA\Microsoft\AddIns\AMI_Optix_Autofix.xlam.off" -Force
-Set-ItemProperty "HKCU:\Software\Microsoft\Office\Excel\Addins\PDFMaker.OfficeAddin" -Name LoadBehavior -Value 2
-Remove-Item "HKCU:\Software\Microsoft\Office\Excel\Addins\RetSoft.Addin.Excel.2016" -Force
 ```
 
-   Optional, only if she misses them (leave off otherwise):
-
-```
-Set-ItemProperty "HKCU:\Software\Microsoft\Office\16.0\Common\Graphics" -Name DisableHardwareAcceleration -Value 0
-Set-ItemProperty "HKCU:\Software\Microsoft\Office\16.0\Excel\Options" -Name DisableBootToOfficeStart -Value 0
-```
-
-5. Open Excel. The AMI Optix tab should be back.
-   - Not there: File > Options > Add-ins > Manage: Excel Add-ins > Go > tick
-     AMI_Optix > OK. Not in the list: Browse to
-     `%APPDATA%\Microsoft\AddIns\AMI_Optix.xlam`.
-   - "File not found": skip to Part C, the update installs a fresh copy.
-6. Open one building file, Run MIH once. It should work exactly as before
-   (this is still her June build). Close Excel.
+   (If the first line says it cannot find the file, the .xlam was already
+   renamed back or deleted - carry on, Part C installs a fresh copy.)
 
 ## Part C - update to the current build (3 minutes)
 
-7. Excel closed. PowerShell, paste, Enter (needs the Z: drive mapped):
+4. Excel closed. PowerShell, paste, Enter (needs the Z: drive mapped):
 
 ```
 irm https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/46df0e3/tools/excel-agent/Deploy-AmiOptixFixes.ps1 | iex
@@ -52,15 +40,25 @@ irm https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/46df0e3/too
    It closes Excel, downloads the fixed modules and ribbon, patches a copy of
    `Z:\AMI_Optix.xlam`, verifies every piece, backs up the master to
    `Z:\AMI_Optix.xlam.bak`, then installs to Z: and to her PC.
-8. Last line must be `SUCCESS - modules + ribbon applied.` If it says FAILED,
+5. Last line must be `SUCCESS - modules + ribbon applied.` If it says FAILED,
    nothing was changed anywhere; copy the red line and send it.
 
-## Part D - test on her PC (10 minutes, on a COPY of a building file)
+## Part D - register the add-in, then test (12 minutes, on a COPY of a building file)
 
-9. Open Excel. The AMI Optix tab now has a "Bands & Floors" group with
+6. Register the add-in (its registration was in the deleted profile). Open
+   Excel, File > Options > Add-ins, bottom "Manage: Excel Add-ins" > Go >
+   Browse > paste `%APPDATA%\Microsoft\AddIns` in the address bar > pick
+   `AMI_Optix.xlam` > OK. If Excel asks to copy it to the AddIns folder,
+   answer No (it is already there). Make sure AMI_Optix is ticked > OK.
+   Close and reopen Excel.
+7. If the add-in asks for the API key (AMI Optix > API Settings), enter it.
+   The key normally survives (it lives outside the deleted profile). Then
+   Rent Roll Year: pick the year and click Refresh Rent Tables (Selected
+   Year) once.
+8. Open Excel. The AMI Optix tab now has a "Bands & Floors" group with
    AMI Bands, Spread Across Floors, 40% Rules. If the WHOLE AMI Optix tab is
    missing, go to Part E.
-10. Open a MIH building file, File > Save As `... - test copy.xlsb`, work in
+9. Open a MIH building file, File > Save As `... - test copy.xlsb`, work in
     the copy. Run MIH. Check:
     - the "HOW THESE OPTIONS ARE BUILT" paragraph is gone;
     - one group is labelled FOR REFERENCE ONLY;
@@ -68,18 +66,18 @@ irm https://raw.githubusercontent.com/martin10101/nyc-ami-calculator/46df0e3/too
       one on the lower .., middle .., upper .. floors";
     - each scenario has "Floor Spread (HPD reviewer view)" with
       "Rule satisfied: Yes" and a 40% count above zero on all three rows.
-11. Apply the best scenario, then Run MIH again. "YOUR ORIGINAL INPUT" still
+10. Apply the best scenario, then Run MIH again. "YOUR ORIGINAL INPUT" still
     shows the numbers she typed, not the applied ones.
-12. AMI Bands: 40% is greyed and ticked; untick 60%; Run MIH. Header shows
+11. AMI Bands: 40% is greyed and ticked; untick 60%; Run MIH. Header shows
     "AMI Bands Allowed: 40%, 70%, 80%, 90%, 100%"; no 60% anywhere. Then
     AMI Bands > Allow all bands.
-13. 40% Rules: click two unit rows on the MIH sheet, 40% Rules > Pin selected
+12. 40% Rules: click two unit rows on the MIH sheet, 40% Rules > Pin selected
     units at 40% (popup names them). Run MIH: those two are 40% in every
     option; header has "40% Rules: pinned at 40%: ...". Then 40% Rules >
     Clear all 40% rules, Run MIH: the line is gone.
-14. Untouchables: type in one AMI cell and press Ctrl+Z (it undoes); click
+13. Untouchables: type in one AMI cell and press Ctrl+Z (it undoes); click
     Manual Calculate once; change the Rent Roll Year once. All as before.
-15. Close the test copy without saving. Her real file was never touched.
+14. Close the test copy without saving. Her real file was never touched.
 
 ## Part E - rollback (only if something is wrong)
 
